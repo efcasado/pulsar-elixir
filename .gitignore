@@ -1,0 +1,13 @@
+/.fetch
+/_build/
+/archives/
+/cover/
+/deps/
+/doc/
+/tmp/
+/packages/
+cache.ets
+erl_crash.dump
+*.ez
+pulsar-*.tar
+*~
