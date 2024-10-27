@@ -123,20 +123,16 @@ defmodule Pulsar.Connection do
     handle_command(command, data)
   end
   def connected({:timeout, :ping}, _content, data) do
-    %__MODULE__{
-      socket_module: mod,
-      socket: socket
-    } = data
+    ping =
+      %Binary.CommandPing{}
+      |> Pulsar.Protocol.Framing.encode
 
-    command = Pulsar.Protocol.Framing.encode(%Binary.CommandPing{})
-    case apply(mod, :send, [socket, command]) do
+    case send_command(data, ping) do
       :ok ->
-        Logger.debug("Sent ping")
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
-        Logger.error("Failed to send ping: #{apply(mod, :format_error, [error])}.")
-        {:next_state, :disconnected, data}
+        {:next_state, :disconnected, data} 
     end
   end
   def connected(:internal, :handshake, data) do
