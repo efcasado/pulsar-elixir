@@ -5,6 +5,8 @@ defmodule Pulsar.Connection do
   @doc false
 
   require Logger
+
+  alias Pulsar.Config
   
   @behaviour :gen_statem
 
@@ -105,7 +107,7 @@ defmodule Pulsar.Connection do
   end
 
   def connected(:enter, _old_state, _data) do
-    actions = [{{:timeout, :ping}, Application.get_env(:pulsar, :ping_interval, 60_000), nil}]
+    actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
     {:keep_state_and_data, actions}
   end
   def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
@@ -129,7 +131,7 @@ defmodule Pulsar.Connection do
     case apply(mod, :send, [socket, command]) do
       :ok ->
         Logger.debug("Sent ping")
-        actions = [{{:timeout, :ping}, Application.get_env(:pulsar, :ping_interval, 60_000), nil}]
+        actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
         Logger.error("Failed to send ping: #{apply(mod, :format_error, [error])}.")
@@ -137,16 +139,13 @@ defmodule Pulsar.Connection do
     end
   end
   def connected(:internal, :handshake, data) do
-    client_version = Application.get_env(:pulsar, :client_version, "Pulsar Elixir Client #{Mix.Project.config[:version]}")
-    protocol_version = Application.get_env(:pulsar, :protocol_version, protocol_version())
-    
     command = Pulsar.Framing.encode(%Pulsar.Proto.CommandConnect{
-          client_version: client_version,
-          protocol_version: protocol_version
+          client_version: Config.client_version,
+          protocol_version: Config.protocol_version
     })
     case send_command(data, command) do
       :ok ->
-        actions = [{{:timeout, :ping}, Application.get_env(:pulsar, :ping_interval, 60_000), nil}]
+        actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
         {:next_state, :disconnected, data}
@@ -189,7 +188,7 @@ defmodule Pulsar.Connection do
   
   defp next_backoff(%__MODULE__{prev_backoff: prev}) do
     next = round(prev * 2)
-    next = min(next, Application.get_env(:pulsar, :max_backoff, 60_000))
+    next = min(next, Config.max_backoff)
     next + Enum.random(0..1000)
   end
 
