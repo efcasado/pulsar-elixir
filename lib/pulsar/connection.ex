@@ -143,7 +143,7 @@ defmodule Pulsar.Connection do
     } = data
 
     command = Pulsar.Framing.encode(%Pulsar.Proto.CommandConnect{
-          client_version: "Pulsar Elixir 0.0.1",
+          client_version: Application.get_env(:pulsar, :client_version, "Pulsar Elixir Client #{Mix.Project.config[:version]}"),
           protocol_version: 13
     })
     case apply(mod, :send, [socket, command]) do
