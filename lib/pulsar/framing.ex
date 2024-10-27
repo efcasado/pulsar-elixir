@@ -23,6 +23,7 @@ defmodule Pulsar.Framing do
 
   def decode(<<_total_size::32, size::32, encoded::binary>>) do
     # TO-DO: Implement buffering
+    # TO-DO: Handle multiple messages in one "batch"
     Proto.BaseCommand.decode(encoded)
     |> do_decode
   end

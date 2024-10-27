@@ -105,7 +105,7 @@ defmodule Pulsar.Connection do
   end
 
   def connected(:enter, _old_state, _data) do
-    actions = [{{:timeout, :ping}, 5_000, nil}]
+    actions = [{{:timeout, :ping}, Application.get_env(:pulsar, :ping_interval, 60_000), nil}]
     {:keep_state_and_data, actions}
   end
   def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
@@ -149,7 +149,7 @@ defmodule Pulsar.Connection do
     case apply(mod, :send, [socket, command]) do
       :ok ->
         Logger.debug("Sent ping")
-        actions = [{{:timeout, :ping}, 5_000, nil}]
+        actions = [{{:timeout, :ping}, Application.get_env(:pulsar, :ping_interval, 60_000), nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
         Logger.error("Failed to send ping: #{apply(mod, :format_error, [error])}.")
