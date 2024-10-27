@@ -3,6 +3,8 @@ defmodule Pulsar.Config do
   Helper module to simplify working with configuration values.
   """
 
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  
   @client_version "Pulsar Elixir Client"
   @max_backoff 60_000
   @ping_interval 60_000
@@ -21,14 +23,6 @@ defmodule Pulsar.Config do
   end
   
   def protocol_version() do
-    latest_version =
-      %Pulsar.Proto.ProtocolVersion{}
-      |> Map.keys
-      |> Enum.map(&(Atom.to_string(&1)))
-      |> Enum.reduce([], fn(<<"v", version::binary>>, acc) -> [String.to_integer(version)| acc]; (_, acc) -> acc end)
-      |> Enum.sort
-      |> Enum.at(-1)
-
-    Application.get_env(:pulsar, :protocol_version, latest_version)
+    Application.get_env(:pulsar, :protocol_version, Pulsar.Protocol.latest_version)
   end
 end

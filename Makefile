@@ -10,7 +10,7 @@ ERLANG_VERSION ?= $(shell source .erlang-version && echo $$ERLANG_VERSION)
 PBP_VERSION ?= v3.3.2
 PBP_URL     := https://raw.githubusercontent.com/apache/pulsar/refs/tags/$(PBP_VERSION)/pulsar-common/src/main/proto/PulsarApi.proto
 PBP_FILE    := pulsar.proto
-PBP_ELIXIR  := lib/pulsar/proto.ex
+PBP_ELIXIR  := lib/pulsar/protocol/binary.ex
 
 PBC_ELIXIR_PLUGIN := escripts/protoc-gen-elixir
 
@@ -32,7 +32,7 @@ $(PBC_ELIXIR_PLUGIN):
 	mix escript.install hex protobuf --force
 
 $(PBP_ELIXIR): $(PBC_ELIXIR_PLUGIN) protoc
-	protoc --plugin=$(PBC_ELIXIR_PLUGIN) pulsar.proto --elixir_out=./lib
+	protoc --plugin=$(PBC_ELIXIR_PLUGIN) pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary
 	mv lib/pulsar.pb.ex $(PBP_ELIXIR)
 
 deps:

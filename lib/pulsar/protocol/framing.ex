@@ -1,10 +1,10 @@
-defmodule Pulsar.Framing do
+defmodule Pulsar.Protocol.Framing do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
   @doc false
 
   require Logger
 
-  alias Pulsar.Proto
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   def encode(command) do
     type = command_to_type(command)
@@ -12,10 +12,10 @@ defmodule Pulsar.Framing do
     field_name = field_name_from_type(type)
     
     encoded =
-      %Proto.BaseCommand{}
+      %Binary.BaseCommand{}
       |> Map.put(:type, type)
       |> Map.put(field_name, command)
-      |> Proto.BaseCommand.encode()
+      |> Binary.BaseCommand.encode()
 
     size = byte_size(encoded)
     <<(size + 4)::32, size::32, encoded::binary>>
@@ -24,11 +24,11 @@ defmodule Pulsar.Framing do
   def decode(<<_total_size::32, size::32, encoded::binary>>) do
     # TO-DO: Implement buffering
     # TO-DO: Handle multiple messages in one "batch"
-    Proto.BaseCommand.decode(encoded)
+    Binary.BaseCommand.decode(encoded)
     |> do_decode
   end
 
-  defp do_decode(%Proto.BaseCommand{} = base_command) do
+  defp do_decode(%Binary.BaseCommand{} = base_command) do
     command_from_type(base_command)
   end
   defp do_decode(other) do
@@ -37,11 +37,11 @@ defmodule Pulsar.Framing do
   end
 
   # only required for client-sent commands
-  defp command_to_type(%Proto.CommandConnect{}), do: :CONNECT
-  defp command_to_type(%Proto.CommandPing{}), do: :PING
-  defp command_to_type(%Proto.CommandPong{}), do: :PONG
+  defp command_to_type(%Binary.CommandConnect{}), do: :CONNECT
+  defp command_to_type(%Binary.CommandPing{}), do: :PING
+  defp command_to_type(%Binary.CommandPong{}), do: :PONG
   
-  defp command_from_type(%Proto.BaseCommand{type: type} = base_command) do
+  defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     field_name = field_name_from_type(type)
     base_command
     |> Map.fetch!(field_name)
