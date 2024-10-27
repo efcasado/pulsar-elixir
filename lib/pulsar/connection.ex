@@ -144,7 +144,7 @@ defmodule Pulsar.Connection do
 
     command = Pulsar.Framing.encode(%Pulsar.Proto.CommandConnect{
           client_version: Application.get_env(:pulsar, :client_version, "Pulsar Elixir Client #{Mix.Project.config[:version]}"),
-          protocol_version: 13
+          protocol_version: Application.get_env(:pulsar, :protocol_version, protocol_version())
     })
     case apply(mod, :send, [socket, command]) do
       :ok ->
@@ -166,5 +166,14 @@ defmodule Pulsar.Connection do
     next = round(prev * 2)
     next = min(next, Application.get_env(:pulsar, :max_backoff, 60_000))
     next + Enum.random(0..1000)
+  end
+
+  def protocol_version() do
+    %Pulsar.Proto.ProtocolVersion{}
+    |> Map.keys
+    |> Enum.map(&(Atom.to_string(&1)))
+    |> Enum.reduce([], fn(<<"v", version::binary>>, acc) -> [String.to_integer(version)| acc]; (_, acc) -> acc end)
+    |> Enum.sort
+    |> Enum.at(-1)
   end
 end
