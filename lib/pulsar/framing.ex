@@ -6,27 +6,16 @@ defmodule Pulsar.Framing do
 
   alias Pulsar.Proto
 
-  def encode(%Proto.CommandConnect{} = connect) do
-    encoded =
-      %Proto.BaseCommand{type: :CONNECT, connect: connect}
-      |> Proto.BaseCommand.encode
+  def encode(command) do
+    type = command_to_type(command)
 
-    size = byte_size(encoded)
-    <<(size + 4)::32, size::32, encoded::binary>>
-
-  end
-  def encode(%Proto.CommandPing{} = ping) do
+    field_name = field_name_from_type(type)
+    
     encoded =
-      %Proto.BaseCommand{type: :PING, ping: ping}
-      |> Proto.BaseCommand.encode
-
-    size = byte_size(encoded)
-    <<(size + 4)::32, size::32, encoded::binary>>
-  end
-  def encode(%Proto.CommandPong{} = pong) do
-    encoded =
-      %Proto.BaseCommand{type: :PONG, ping: pong}
-      |> Proto.BaseCommand.encode
+      %Proto.BaseCommand{}
+      |> Map.put(:type, type)
+      |> Map.put(field_name, command)
+      |> Proto.BaseCommand.encode()
 
     size = byte_size(encoded)
     <<(size + 4)::32, size::32, encoded::binary>>
@@ -46,14 +35,21 @@ defmodule Pulsar.Framing do
     other
   end
 
+  # only required for client-sent commands
+  defp command_to_type(%Proto.CommandConnect{}), do: :CONNECT
+  defp command_to_type(%Proto.CommandPing{}), do: :PING
+  defp command_to_type(%Proto.CommandPong{}), do: :PONG
+  
   defp command_from_type(%Proto.BaseCommand{type: type} = base_command) do
-    command =
-      type
-      |> Atom.to_string
-      |> String.downcase
-      |> String.to_existing_atom
-
+    field_name = field_name_from_type(type)
     base_command
-    |> Map.fetch!(command)
+    |> Map.fetch!(field_name)
+  end
+
+  defp field_name_from_type(type) do
+    type
+    |> Atom.to_string
+    |> String.downcase
+    |> String.to_existing_atom
   end
 end
