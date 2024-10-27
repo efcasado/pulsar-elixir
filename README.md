@@ -12,6 +12,7 @@
 
 ```elixir
 config :pulsar,
+  client_version: "My Pulsar Client v1.0.0",
   connections: [
     foo: [
       host: "pulsar://localhost:6650"
