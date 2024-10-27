@@ -87,10 +87,11 @@ defmodule Pulsar.Connection do
     } = data
     host = String.to_charlist(host)
 
-    case apply(mod, :connect, [host, port, socket_opts, conn_timeout]) do
+    case apply(mod, :connect, [host, port, socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true], conn_timeout]) do
       {:ok, socket} ->
         Logger.debug("Connection succeeded")
-        {:next_state, :connected, %__MODULE__{data| socket: socket, prev_backoff: 0}}
+        actions = [{:next_event, :internal, :handshake}]
+        {:next_state, :connected, %__MODULE__{data| socket: socket, prev_backoff: 0}, actions}
       {:error, error} ->
         wait = next_backoff(data)
         Logger.error("Connection failed: #{apply(mod, :format_error, [error])}. Reconnecting in #{wait}ms.")
@@ -103,12 +104,57 @@ defmodule Pulsar.Connection do
     {:keep_state_and_data, actions}
   end
 
-  def connected(:enter, _old_state, _data), do: :keep_state_and_data
+  def connected(:enter, _old_state, _data) do
+    actions = [{{:timeout, :ping}, 5_000, nil}]
+    {:keep_state_and_data, actions}
+  end
   def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
     {:next_state, :disconnected, data}
   end
   def connected(:info, {:ssl_closed, socket}, %__MODULE__{socket: socket} = data) do
     {:next_state, :disconnected, data}
+  end
+  def connected(:info, {_, socket, message}, %__MODULE__{socket: socket}) do
+    command = Pulsar.Framing.decode(message)
+    Logger.debug "Received #{inspect command}"
+    :keep_state_and_data
+  end
+  def connected({:timeout, :ping}, _content, data) do
+    %__MODULE__{
+      socket_module: mod,
+      socket: socket
+    } = data
+
+    command = Pulsar.Framing.encode(%Pulsar.Proto.CommandPing{})
+    case apply(mod, :send, [socket, command]) do
+      :ok ->
+        Logger.debug("Sent ping")
+        actions = [{{:timeout, :ping}, 5_000, nil}]
+        {:keep_state_and_data, actions}
+      {:error, error} ->
+        Logger.error("Failed to send ping: #{apply(mod, :format_error, [error])}.")
+        {:next_state, :disconnected, data}
+    end
+  end
+  def connected(:internal, :handshake, data) do
+    %__MODULE__{
+      socket_module: mod,
+      socket: socket
+    } = data
+
+    command = Pulsar.Framing.encode(%Pulsar.Proto.CommandConnect{
+          client_version: "Pulsar Elixir 0.0.1",
+          protocol_version: 13
+    })
+    case apply(mod, :send, [socket, command]) do
+      :ok ->
+        Logger.debug("Sent ping")
+        actions = [{{:timeout, :ping}, 5_000, nil}]
+        {:keep_state_and_data, actions}
+      {:error, error} ->
+        Logger.error("Failed to send ping: #{apply(mod, :format_error, [error])}.")
+        {:next_state, :disconnected, data}
+    end
   end
   def connected({:call, from}, {:request, _request}, data) do
     Logger.debug("Handling request")
