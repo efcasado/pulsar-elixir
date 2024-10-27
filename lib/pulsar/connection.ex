@@ -55,7 +55,7 @@ defmodule Pulsar.Connection do
         "pulsar" -> :gen_tcp
       end
 
-    data = %__MODULE__{
+    conn = %__MODULE__{
       host: host,
       port: port,
       socket_module: socket_module,
@@ -64,103 +64,103 @@ defmodule Pulsar.Connection do
       auth: auth
     }
     actions = [{:next_event, :internal, :connect}]
-    {:ok, :disconnected, data, actions}
+    {:ok, :disconnected, conn, actions}
   end
 
-  def disconnected(:enter, :connected, data) do
-    wait = next_backoff(data)
+  def disconnected(:enter, :connected, conn) do
+    wait = next_backoff(conn)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
     actions = [{{:timeout, :reconnect}, wait, nil}]
-    {:keep_state, %__MODULE__{data | socket: nil, prev_backoff: wait}, actions}
+    {:keep_state, %__MODULE__{conn | socket: nil, prev_backoff: wait}, actions}
   end
-  def disconnected(:enter, :disconnected, _data) do
+  def disconnected(:enter, :disconnected, _conn) do
     :keep_state_and_data
   end
-  def disconnected({:timeout, :reconnect}, _content, data) do
+  def disconnected({:timeout, :reconnect}, _content, conn) do
     actions = [{:next_event, :internal, :connect}]
-    {:keep_state, data, actions}
+    {:keep_state, conn, actions}
   end
-  def disconnected(:internal, :connect, data) do
+  def disconnected(:internal, :connect, conn) do
     %__MODULE__{
       host: host,
       port: port,
       socket_module: mod,
       socket_opts: socket_opts,
       conn_timeout: conn_timeout
-    } = data
+    } = conn
     host = String.to_charlist(host)
 
     case apply(mod, :connect, [host, port, socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true], conn_timeout]) do
       {:ok, socket} ->
         Logger.debug("Connection succeeded")
         actions = [{:next_event, :internal, :handshake}]
-        {:next_state, :connected, %__MODULE__{data| socket: socket, prev_backoff: 0}, actions}
+        {:next_state, :connected, %__MODULE__{conn| socket: socket, prev_backoff: 0}, actions}
       {:error, error} ->
-        wait = next_backoff(data)
+        wait = next_backoff(conn)
         Logger.error("Connection failed: #{apply(mod, :format_error, [error])}. Reconnecting in #{wait}ms.")
         actions = [{{:timeout, :reconnect}, wait, nil}]
-        {:keep_state, %__MODULE__{data| prev_backoff: wait}, actions}
+        {:keep_state, %__MODULE__{conn| prev_backoff: wait}, actions}
     end
   end
-  def disconnected({:call, from}, {:request, _request}, _data) do
+  def disconnected({:call, from}, {:request, _request}, _conn) do
     actions = [{:reply, from, {:error, :disconnected}}]
     {:keep_state_and_data, actions}
   end
 
-  def connected(:enter, _old_state, _data) do
+  def connected(:enter, _old_state, _conn) do
     actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
     {:keep_state_and_data, actions}
   end
-  def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = data) do
-    {:next_state, :disconnected, data}
+  def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = conn) do
+    {:next_state, :disconnected, conn}
   end
-  def connected(:info, {:ssl_closed, socket}, %__MODULE__{socket: socket} = data) do
-    {:next_state, :disconnected, data}
+  def connected(:info, {:ssl_closed, socket}, %__MODULE__{socket: socket} = conn) do
+    {:next_state, :disconnected, conn}
   end
-  def connected(:info, {_, socket, message}, data) do
-    command = Pulsar.Protocol.Framing.decode(message)
+  def connected(:info, {_, socket, data}, conn) do
+    command = Pulsar.Protocol.Framing.decode(data)
     Logger.debug "Received #{inspect command}"
-    handle_command(command, data)
+    handle_command(command, conn)
   end
-  def connected({:timeout, :ping}, _content, data) do
+  def connected({:timeout, :ping}, _content, conn) do
     ping = %Binary.CommandPing{}
 
-    case send_command(data, ping) do
+    case send_command(conn, ping) do
       :ok ->
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
-        {:next_state, :disconnected, data} 
+        {:next_state, :disconnected, conn} 
     end
   end
-  def connected(:internal, :handshake, data) do
+  def connected(:internal, :handshake, conn) do
     connect = %Binary.CommandConnect{
           client_version: Config.client_version,
           protocol_version: Config.protocol_version
     }
-    case send_command(data, connect) do
+    case send_command(conn, connect) do
       :ok ->
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
       {:error, error} ->
-        {:next_state, :disconnected, data}
+        {:next_state, :disconnected, conn}
     end
   end
-  def connected({:call, from}, {:request, _request}, data) do
+  def connected({:call, from}, {:request, _request}, conn) do
     Logger.debug("Handling request")
     :gen_statem.reply(from, :ok)
-    {:keep_state, data}
+    {:keep_state, conn}
   end
 
-  defp handle_command(%Binary.CommandPing{}, data) do
+  defp handle_command(%Binary.CommandPing{}, conn) do
     pong = %Binary.CommandPong{}
 
     # ignore return
     # if pong isn't successfully sent, the connection will be closed
-    send_command(data, pong)
+    send_command(conn, pong)
     :keep_state_and_data
   end
-  defp handle_command(command, _data) do
+  defp handle_command(command, _conn) do
     Logger.warning("Unhandled command #{inspect command}")
     :keep_state_and_data
   end
