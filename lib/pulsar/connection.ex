@@ -123,9 +123,7 @@ defmodule Pulsar.Connection do
     handle_command(command, data)
   end
   def connected({:timeout, :ping}, _content, data) do
-    ping =
-      %Binary.CommandPing{}
-      |> Pulsar.Protocol.Framing.encode
+    ping = %Binary.CommandPing{}
 
     case send_command(data, ping) do
       :ok ->
@@ -136,11 +134,11 @@ defmodule Pulsar.Connection do
     end
   end
   def connected(:internal, :handshake, data) do
-    command = Pulsar.Protocol.Framing.encode(%Binary.CommandConnect{
+    connect = %Binary.CommandConnect{
           client_version: Config.client_version,
           protocol_version: Config.protocol_version
-    })
-    case send_command(data, command) do
+    }
+    case send_command(data, connect) do
       :ok ->
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
@@ -155,9 +153,8 @@ defmodule Pulsar.Connection do
   end
 
   defp handle_command(%Binary.CommandPing{}, data) do
-    pong =
-      %Binary.CommandPong{}
-      |> Pulsar.Protocol.Framing.encode
+    pong = %Binary.CommandPong{}
+
     # ignore return
     # if pong isn't successfully sent, the connection will be closed
     send_command(data, pong)
@@ -173,14 +170,25 @@ defmodule Pulsar.Connection do
       socket_module: mod,
       socket: socket
     } = conn
-    case apply(mod, :send, [socket, command]) do
+
+    encoded_command = Pulsar.Protocol.Framing.encode(command)
+
+    case apply(mod, :send, [socket, encoded_command]) do
       :ok ->
-        Logger.debug("Successfully sent message")
+        Logger.debug("Successfully sent #{command_name(command)}")
         :ok
       {:error, error} ->
-        Logger.error("Failed to send message: #{apply(mod, :format_error, [error])}.")
+        Logger.error("Failed to send #{command_name(command)}: #{apply(mod, :format_error, [error])}.")
         {:error, error}
     end
+  end
+
+  defp command_name(command) do
+    command
+    |> Map.get(:__struct__)
+    |> Atom.to_string
+    |> String.split(".")
+    |> Enum.at(-1)
   end
   
   defp next_backoff(%__MODULE__{prev_backoff: prev}) do
