@@ -7,6 +7,7 @@ defmodule Pulsar.Connection do
   require Logger
 
   alias Pulsar.Config
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   
   @behaviour :gen_statem
 
@@ -117,7 +118,7 @@ defmodule Pulsar.Connection do
     {:next_state, :disconnected, data}
   end
   def connected(:info, {_, socket, message}, data) do
-    command = Pulsar.Framing.decode(message)
+    command = Pulsar.Protocol.Framing.decode(message)
     Logger.debug "Received #{inspect command}"
     handle_command(command, data)
   end
@@ -127,7 +128,7 @@ defmodule Pulsar.Connection do
       socket: socket
     } = data
 
-    command = Pulsar.Framing.encode(%Pulsar.Proto.CommandPing{})
+    command = Pulsar.Protocol.Framing.encode(%Binary.CommandPing{})
     case apply(mod, :send, [socket, command]) do
       :ok ->
         Logger.debug("Sent ping")
@@ -139,7 +140,7 @@ defmodule Pulsar.Connection do
     end
   end
   def connected(:internal, :handshake, data) do
-    command = Pulsar.Framing.encode(%Pulsar.Proto.CommandConnect{
+    command = Pulsar.Protocol.Framing.encode(%Binary.CommandConnect{
           client_version: Config.client_version,
           protocol_version: Config.protocol_version
     })
@@ -157,10 +158,10 @@ defmodule Pulsar.Connection do
     {:keep_state, data}
   end
 
-  defp handle_command(%Pulsar.Proto.CommandPing{}, data) do
+  defp handle_command(%Binary.CommandPing{}, data) do
     pong =
-      %Pulsar.Proto.CommandPong{}
-      |> Pulsar.Framing.encode
+      %Binary.CommandPong{}
+      |> Pulsar.Protocol.Framing.encode
     # ignore return
     # if pong isn't successfully sent, the connection will be closed
     send_command(data, pong)
@@ -193,7 +194,7 @@ defmodule Pulsar.Connection do
   end
 
   def protocol_version() do
-    %Pulsar.Proto.ProtocolVersion{}
+    %Binary.ProtocolVersion{}
     |> Map.keys
     |> Enum.map(&(Atom.to_string(&1)))
     |> Enum.reduce([], fn(<<"v", version::binary>>, acc) -> [String.to_integer(version)| acc]; (_, acc) -> acc end)
