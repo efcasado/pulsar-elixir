@@ -21,9 +21,7 @@ defmodule Pulsar.Protocol.Framing do
     <<(size + 4)::32, size::32, encoded::binary>>
   end
 
-  def decode(<<_total_size::32, size::32, encoded::binary>>) do
-    # TO-DO: Implement buffering
-    # TO-DO: Handle multiple messages in one "batch"
+  def decode(<<_total_size::32, size::32, encoded::binary>> = data) do
     Binary.BaseCommand.decode(encoded)
     |> do_decode
   end
