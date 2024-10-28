@@ -33,7 +33,7 @@ defmodule Pulsar.Protocol do
     <<(size + 4)::32, size::32, encoded::binary>>
   end
 
-  def decode(<<_total_size::32, size::32, encoded::binary>> = data) do
+  def decode(<<_total_size::32, _size::32, encoded::binary>>) do
     Binary.BaseCommand.decode(encoded)
     |> do_decode
   end

@@ -3,8 +3,6 @@ defmodule Pulsar.Config do
   Helper module to simplify working with configuration values.
   """
 
-  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-  
   @client_version "Pulsar Elixir Client"
   @max_backoff 60_000
   @ping_interval 60_000
