@@ -121,7 +121,7 @@ defmodule Pulsar.Connection do
   def connected(:info, {:ssl_closed, socket}, %__MODULE__{socket: socket} = conn) do
     {:next_state, :disconnected, conn}
   end
-  def connected(:info, {_, socket, data}, conn) do
+  def connected(:info, {_, _socket, data}, conn) do
     {commands, conn} = handle_data(data, conn)
     actions = Enum.map(commands, &({:next_event, :internal, {:command, &1}}))
     {:keep_state, conn, actions}
@@ -133,7 +133,7 @@ defmodule Pulsar.Connection do
       :ok ->
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
-      {:error, error} ->
+      {:error, _error} ->
         {:next_state, :disconnected, conn} 
     end
   end
@@ -150,7 +150,7 @@ defmodule Pulsar.Connection do
       :ok ->
         actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
         {:keep_state_and_data, actions}
-      {:error, error} ->
+      {:error, _error} ->
         {:next_state, :disconnected, conn}
     end
   end
@@ -182,7 +182,7 @@ defmodule Pulsar.Connection do
     end
   end
   def handle_data(
-    <<total_size::32, size::32, command::bytes-size(size), rest::binary>> = data,
+    <<total_size::32, size::32, command::bytes-size(size), rest::binary>>,
     conn,
     commands
   ) do
@@ -190,7 +190,7 @@ defmodule Pulsar.Connection do
     handle_data(rest, conn, [command| commands])
   end
   def handle_data(
-    <<total_size::32, rest::binary>> = data,
+    <<total_size::32, _rest::binary>> = data,
     %__MODULE__{buffer: buffer} = conn,
     commands
   ) when (total_size + 4) > byte_size(data) do
