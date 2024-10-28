@@ -173,7 +173,7 @@ defmodule Pulsar.Connection do
   ) when pending_bytes > 0 do
     case data do
       <<missing_chunk::bytes-size(pending_bytes), rest::binary>> ->
-        command = Pulsar.Protocol.Framing.decode(buffer <> missing_chunk)
+        command = Pulsar.Protocol.decode(buffer <> missing_chunk)
         handle_data(rest, %__MODULE__{conn | buffer: <<>>, pending_bytes: 0}, [command| commands])
       missing_chunk ->
         buffer = buffer <> missing_chunk
@@ -186,7 +186,7 @@ defmodule Pulsar.Connection do
     conn,
     commands
   ) do
-    command = Pulsar.Protocol.Framing.decode(<<total_size :: 32, size :: 32, command :: bytes-size(size)>>)
+    command = Pulsar.Protocol.decode(<<total_size :: 32, size :: 32, command :: bytes-size(size)>>)
     handle_data(rest, conn, [command| commands])
   end
   def handle_data(
@@ -217,7 +217,7 @@ defmodule Pulsar.Connection do
       socket: socket
     } = conn
 
-    encoded_command = Pulsar.Protocol.Framing.encode(command)
+    encoded_command = Pulsar.Protocol.encode(command)
 
     case apply(mod, :send, [socket, encoded_command]) do
       :ok ->
