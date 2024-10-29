@@ -22,6 +22,7 @@ defmodule Pulsar.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:jason, "~> 1.4"},
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.13.0"}
       # {:dep_from_hexpm, "~> 0.3.0"},
