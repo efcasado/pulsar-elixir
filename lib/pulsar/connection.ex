@@ -18,7 +18,7 @@ defmodule Pulsar.Connection do
     prev_backoff: 0,
     socket_opts: [],
     conn_timeout: 5_000,
-    auth: [type: :none, opts: []],
+    auth: [type: Pulsar.Auth.None, opts: []],
     buffer: <<>>,
     pending_bytes: 0
 
@@ -38,7 +38,7 @@ defmodule Pulsar.Connection do
   def start_link(host, opts \\ []) do
     socket_opts = Keyword.get(opts, :socket_opts, [])
     conn_timeout = Keyword.get(opts, :conn_timeout, 5_000)
-    auth = Keyword.get(opts, :auth, :none)
+    auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
 
     :gen_statem.start_link(__MODULE__, [host, socket_opts, conn_timeout, auth], [])
   end
@@ -142,9 +142,15 @@ defmodule Pulsar.Connection do
     handle_command(command, conn)
   end
   def connected(:internal, :handshake, conn) do
+    %__MODULE__{auth: auth} = conn
+    auth_method_name = auth_method_name(auth)
+    auth_data = auth_data(auth)
+    
     connect = %Binary.CommandConnect{
           client_version: Config.client_version,
-          protocol_version: Config.protocol_version
+          protocol_version: Config.protocol_version,
+          auth_method_name: auth_method_name,
+          auth_data: auth_data
     }
     case send_command(conn, connect) do
       :ok ->
@@ -160,6 +166,14 @@ defmodule Pulsar.Connection do
     {:keep_state, conn}
   end
 
+  defp auth_method_name(type: type, opts: opts) do
+    apply(type, :auth_method_name, [opts])
+  end
+
+  defp auth_data(type: type, opts: opts) do
+    apply(type, :auth_data, [opts])
+  end
+  
   # TCP buffer
   # <<0, 0, 0, 9, 0, 0, 0, 5, 8, 19, 154, 1, 0, 0, 0, 0, 9, 0, 0, 0, 5, 8, 18, 146, 1, 0>>
   def handle_data(_data, _conn, _commands \\ [])
