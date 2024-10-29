@@ -242,13 +242,4 @@ defmodule Pulsar.Connection do
     next = min(next, Config.max_backoff)
     next + Enum.random(0..1000)
   end
-
-  def protocol_version() do
-    %Binary.ProtocolVersion{}
-    |> Map.keys
-    |> Enum.map(&(Atom.to_string(&1)))
-    |> Enum.reduce([], fn(<<"v", version::binary>>, acc) -> [String.to_integer(version)| acc]; (_, acc) -> acc end)
-    |> Enum.sort
-    |> Enum.at(-1)
-  end
 end
