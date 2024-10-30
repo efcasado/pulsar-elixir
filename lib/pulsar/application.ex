@@ -15,7 +15,7 @@ defmodule Pulsar.Application do
         conn_timeout = Keyword.get(opts, :conn_timeout, 5_000)
         auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
 
-        args = [host, [socket_opts: socket_opts, timeout: conn_timeout, auth: auth]]
+        args = [name, host, [socket_opts: socket_opts, timeout: conn_timeout, auth: auth]]
         %{id: name, start: {Pulsar.Connection, :start_link, args}}
       end)
 

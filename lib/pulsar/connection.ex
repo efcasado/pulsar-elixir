@@ -11,7 +11,8 @@ defmodule Pulsar.Connection do
   
   @behaviour :gen_statem
 
-  defstruct host: "",
+  defstruct name: "",
+    host: "",
     port: 6650,
     socket_module: :gen_tcp,
     socket: nil,
@@ -23,6 +24,7 @@ defmodule Pulsar.Connection do
     pending_bytes: 0
 
   @type t :: %__MODULE__{
+    name: String.t(),
     host: String.t(),
     port: integer(),
     socket_module: :gen_tcp | :ssl,
@@ -35,12 +37,12 @@ defmodule Pulsar.Connection do
     pending_bytes: integer()
   }
 
-  def start_link(host, opts \\ []) do
+  def start_link(name, host, opts \\ []) do
     socket_opts = Keyword.get(opts, :socket_opts, [])
     conn_timeout = Keyword.get(opts, :conn_timeout, 5_000)
     auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
 
-    :gen_statem.start_link(__MODULE__, [host, socket_opts, conn_timeout, auth], [])
+    :gen_statem.start_link({:local, name}, __MODULE__, [name, host, socket_opts, conn_timeout, auth], [])
   end
 
   ## State Machine
@@ -49,7 +51,7 @@ defmodule Pulsar.Connection do
   def callback_mode, do: [:state_functions, :state_enter]
 
   @impl true
-  def init([uri, socket_opts, conn_timeout, auth]) do
+  def init([name, uri, socket_opts, conn_timeout, auth]) do
     uri = URI.parse(uri)
     host = Map.get(uri, :host, "localhost")
     port = Map.get(uri, :port, 6650)
@@ -60,6 +62,7 @@ defmodule Pulsar.Connection do
       end
 
     conn = %__MODULE__{
+      name: name,
       host: host,
       port: port,
       socket_module: socket_module,
