@@ -1,12 +1,12 @@
 defmodule Pulsar.Connection do
+  # https://github.com/elixir-ecto/connection
   # https://andrealeopardi.com/posts/connection-managers-with-gen-statem/
   # https://www.erlang.org/doc/system/statem.html
   # https://www.erlang.org/doc/apps/stdlib/gen_statem.html
-  @doc false
-
-  # Generic connection used to serve service discovery requests, but also as the
-  # foundation to build consumers and producers.
-  
+  @doc """
+  Process responsible for managing a persistent TCP connection towards a Pulsar
+  broker.
+  """
   require Logger
 
   alias Pulsar.Config
@@ -40,14 +40,43 @@ defmodule Pulsar.Connection do
     pending_bytes: integer()
   }
 
-  def start_link(name, host, opts \\ []) do
-    socket_opts = Keyword.get(opts, :socket_opts, [])
-    conn_timeout = Keyword.get(opts, :conn_timeout, 5_000)
-    auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
+  @doc """
+  Starts a persistent connection towards the provided Pulsar broker.
 
-    :gen_statem.start_link({:local, name}, __MODULE__, [name, host, socket_opts, conn_timeout, auth], [])
+  The target Pulsar broker is expected to be specified in the form of: `<scheme>://<host>[:<port>]`,
+  where `scheme` can be either `pulsar` or `pulsar+ssl` and `port` is an optional field that
+  defaults to `6650` and `6651`, respectively.
+  
+  ## Options
+
+  - `:name` - used for name registration of the `:gen_statem` process
+  - `:connection_timeout` - ...
+  - `:auth` - ...
+  - `:socket_opts` - ...
+  """
+  @spec start_link(String.t(), list(), list()) :: {:ok, pid()} | :ignore | {:error, term()}
+  def start_link(host, opts \\ [], start_opts \\ []) do
+    # TO-DO: handle different types of name registration (eg. :local, :global, :via)
+    name = Keyword.get(opts, :name, nil)
+    
+    args = [
+      name,
+      host,
+      Keyword.get(opts, :socket_opts, []),
+      Keyword.get(opts, :conn_timeout, 5_000),
+      Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
+    ]
+    
+    case name do
+      nil ->
+        :gen_statem.start_link(__MODULE__, args, start_opts)
+      name ->
+        :gen_statem.start_link(name, __MODULE__, args, start_opts)
+    end
   end
 
+  # TO-DO: stop(conn)
+  
   def subscribe(conn, consumer_id, topic, subscription, type) do
     :gen_statem.call(conn, {:subscribe, consumer_id, topic, subscription, type})
   end
