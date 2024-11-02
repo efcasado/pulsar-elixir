@@ -50,13 +50,30 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandConnect{}), do: :CONNECT
   defp command_to_type(%Binary.CommandPing{}), do: :PING
   defp command_to_type(%Binary.CommandPong{}), do: :PONG
-  
+  defp command_to_type(%Binary.CommandSubscribe{}), do: :SUBSCRIBE
+  defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
+  defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
+  defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
+  # defp command_to_type(command) do
+  #   command
+  #   |> Map.get(:__struct__)
+  #   |> Atom.to_string
+  #   |> String.split(".")
+  #   |> Enum.at(-1)
+  # end
+
   defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     field_name = field_name_from_type(type)
     base_command
     |> Map.fetch!(field_name)
   end
 
+  defp field_name_from_type(:LOOKUP) do
+    :lookupTopic
+  end
+  defp field_name_from_type(:LOOKUP_RESPONSE) do
+    :lookupTopicResponse
+  end
   defp field_name_from_type(type) do
     type
     |> Atom.to_string
