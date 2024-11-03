@@ -7,6 +7,7 @@ defmodule Pulsar.Consumer do
   # API
 
   def start_link(conn, callback, topic, type, name) do
+    # TODO: support other subscription options
     args = [
       conn,
       callback,
