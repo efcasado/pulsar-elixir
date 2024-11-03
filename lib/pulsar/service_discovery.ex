@@ -57,8 +57,8 @@ defmodule Pulsar.ServiceDiscovery do
 
     :keep_state_and_data
   end
-  def handle_command(%Binary.CommandLookupTopicResponse{} = command, conn) do
-    %Binary.CommandLookupTopicResponse{request_id: request_id} = command
+  def handle_command(%Binary.CommandPartitionedTopicMetadataResponse{} = command, conn) do
+    %Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command
 
     # TO-DO: Simplify response
     reply = {:ok, command}
