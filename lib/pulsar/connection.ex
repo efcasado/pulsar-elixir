@@ -74,6 +74,17 @@ defmodule Pulsar.Connection do
     end
   end
 
+  def socket_opts(conn, timeout \\ 5_000) do
+    :gen_statem.call(conn, :socket_opts, timeout)
+  end
+
+  def conn_timeout(conn, timeout \\ 5_000) do
+    :gen_statem.call(conn, :conn_timeout, timeout)
+  end
+
+  def auth(conn, timeout \\ 5_000) do
+    :gen_statem.call(conn, :auth, timeout)
+  end
   # TO-DO: stop/1
   
   def send_command(conn, command) do
@@ -84,7 +95,8 @@ defmodule Pulsar.Connection do
 
     encoded_command = Pulsar.Protocol.encode(command)
 
-    apply(mod, :send, [socket, encoded_command])
+    resp = apply(mod, :send, [socket, encoded_command])
+    {resp, conn}
   end
 
   def reply(conn, request_id, reply) do
@@ -198,10 +210,10 @@ defmodule Pulsar.Connection do
         ping = %Binary.CommandPing{}
 
         case Pulsar.Connection.send_command(conn, ping) do
-          :ok ->
+          {:ok, conn} ->
             actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
             {:keep_state_and_data, actions}
-          {:error, _error} ->
+          {{:error, _error}, conn} ->
             {:next_state, :disconnected, conn} 
         end
       end
@@ -221,30 +233,22 @@ defmodule Pulsar.Connection do
           auth_data: auth_data
         }
         case Pulsar.Connection.send_command(conn, connect) do
-          :ok ->
+          {:ok, conn} ->
             actions = [{{:timeout, :ping}, Config.ping_interval, nil}| post_actions]
             {:keep_state_and_data, actions}
-          {:error, _error} ->
+          {{:error, _error}, conn} ->
             {:next_state, :disconnected, conn}
         end
       end
       def connected({:call, from}, request, conn) do
         Logger.debug("Handling request #{inspect request}")
-        %Pulsar.Connection{requests: requests} = conn
 
-        request_id = System.unique_integer([:positive, :monotonic])
-        conn = %Pulsar.Connection{conn| requests: Map.put(requests, request_id, from)}
-
-        case handle_call(request, request_id, conn) do
-          :ok ->
+        case handle_call(from, request, conn) do
+          {:ok, conn} ->
             {:keep_state, conn}
-          {:error, error} ->
-            # TO-DO: Potential memory leak if requests map isn't reset
-            {:next_state, :disconnected, conn}
+          {{:error, error}, conn} ->
+            {:next_state, :disconnected, %Pulsar.Connection{conn| requests: %{}}}
         end
-        # TO-DO: send proper reply
-        # :gen_statem.reply(from, :ok)
-        # {:keep_state, conn}
       end
 
       defp auth_method_name(type: type, opts: opts) do
@@ -255,42 +259,6 @@ defmodule Pulsar.Connection do
         apply(type, :auth_data, [opts])
       end
 
-      # def handle_call({:lookup_topic, topic, authoritative}, request_id, conn) do
-      #   # request_id = System.unique_integer([:positive, :monotonic])
-
-      #   command = %Binary.CommandLookupTopic{
-      #     topic: topic,
-      #     request_id: request_id,
-      #     authoritative: false
-      #   }
-
-      #   Pulsar.Connection.send_command(conn, command)
-      #   #:keep_state_and_data
-      # end
-      # def handle_call({:subscribe, consumer_id, topic, subscription_type, subscription_name}, request_id, conn) do
-      #   #request_id = System.unique_integer([:positive, :monotonic])
-
-      #   subscribe = %Binary.CommandSubscribe{
-      #     topic: topic,
-      #     subscription: subscription_name,
-      #     subType: subscription_type,
-      #     consumer_id: consumer_id,
-      #     request_id: request_id
-      #   }
-
-      #   Pulsar.Connection.send_command(conn, subscribe)
-      #   #:keep_state_and_data
-      # end
-      # def handle_call({:flow, consumer_id, messages}, _, conn) do
-      #   flow = %Binary.CommandFlow{
-      #     consumer_id: consumer_id,
-      #     messagePermits: messages
-      #   }
-
-      #   Pulsar.Connection.send_command(conn, flow)
-      #   #:keep_state_and_data
-      # end
-      
       # TCP buffer
       # <<0, 0, 0, 9, 0, 0, 0, 5, 8, 19, 154, 1, 0, 0, 0, 0, 9, 0, 0, 0, 5, 8, 18, 146, 1, 0>>
       def handle_data(_data, _conn, _commands \\ [])
@@ -329,6 +297,25 @@ defmodule Pulsar.Connection do
         {commands, %Pulsar.Connection{conn | buffer: buffer <> data, pending_bytes: (total_size + 4) - byte_size(data)}}
       end
 
+      def handle_call(from, :socket_opts, conn) do
+        %Pulsar.Connection{socket_opts: socket_opts} = conn
+        reply = {:ok, socket_opts}
+        :gen_statem.reply(from, reply)
+        {:ok, conn}
+      end
+      def handle_call(from, :conn_timeout, conn) do
+        %Pulsar.Connection{conn_timeout: conn_timeout} = conn
+        reply = {:ok, conn_timeout}
+        :gen_statem.reply(from, reply)
+        {:ok, conn}
+      end
+      def handle_call(from, :auth, conn) do
+        %Pulsar.Connection{auth: auth} = conn
+        reply = {:ok, auth}
+        :gen_statem.reply(from, reply)
+        {:ok, conn}
+      end
+      
       def handle_command(%Binary.CommandPing{}, conn) do
         pong = %Binary.CommandPong{}
 
