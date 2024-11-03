@@ -24,7 +24,8 @@ defmodule Pulsar.Connection do
     conn_timeout: 5_000,
     auth: [type: Pulsar.Auth.None, opts: []],
     buffer: <<>>,
-    pending_bytes: 0
+    pending_bytes: 0,
+    requests: Map.new()
 
   @type t :: %__MODULE__{
     name: String.t(),
@@ -37,7 +38,8 @@ defmodule Pulsar.Connection do
     conn_timeout: integer(),
     auth: list(),
     buffer: binary(),
-    pending_bytes: integer()
+    pending_bytes: integer(),
+    requests: Map.t()
   }
 
   @doc """
@@ -89,7 +91,7 @@ defmodule Pulsar.Connection do
     :gen_statem.call(conn, {:lookup_topic, topic, authoritative})
   end
   
-  ## State Machine
+  # :gen_statem callbacks
   
   @impl true
   def callback_mode, do: [:state_functions, :state_enter]
@@ -118,6 +120,8 @@ defmodule Pulsar.Connection do
     actions = [{:next_event, :internal, :connect}]
     {:ok, :disconnected, conn, actions}
   end
+
+  # connection state machine (:disconnected, :connected, :ready)
 
   def disconnected(:enter, :connected, conn) do
     wait = next_backoff(conn)
@@ -211,10 +215,15 @@ defmodule Pulsar.Connection do
     end
   end
   def connected({:call, from}, request, conn) do
-    Logger.debug("Handling request")
-    handle_call(request, conn)
+    Logger.debug("Handling request #{inspect request}")
+    %__MODULE__{requests: requests} = conn
+
+    request_id = System.unique_integer([:positive, :monotonic])
+    conn = %__MODULE__{conn| requests: Map.put(requests, request_id, from)}
+
+    handle_call(request, request_id, conn)
     # TO-DO: send proper reply
-    :gen_statem.reply(from, :ok)
+    #:gen_statem.reply(from, :ok)
     {:keep_state, conn}
   end
 
@@ -226,8 +235,8 @@ defmodule Pulsar.Connection do
     apply(type, :auth_data, [opts])
   end
 
-  def handle_call({:lookup_topic, topic, authoritative}, conn) do
-    request_id = System.unique_integer([:positive, :monotonic])
+  def handle_call({:lookup_topic, topic, authoritative}, request_id, conn) do
+    # request_id = System.unique_integer([:positive, :monotonic])
 
     command = %Binary.CommandLookupTopic{
       topic: topic,
@@ -239,8 +248,8 @@ defmodule Pulsar.Connection do
     send_command(conn, command)
     :keep_state_and_data
   end
-  def handle_call({:subscribe, consumer_id, topic, subscription_type, subscription_name}, conn) do
-    request_id = System.unique_integer([:positive, :monotonic])
+  def handle_call({:subscribe, consumer_id, topic, subscription_type, subscription_name}, request_id, conn) do
+    #request_id = System.unique_integer([:positive, :monotonic])
 
     subscribe = %Binary.CommandSubscribe{
       topic: topic,
@@ -254,7 +263,7 @@ defmodule Pulsar.Connection do
     send_command(conn, subscribe)
     :keep_state_and_data
   end
-  def handle_call({:flow, consumer_id, messages}, conn) do
+  def handle_call({:flow, consumer_id, messages}, _, conn) do
     flow = %Binary.CommandFlow{
       consumer_id: consumer_id,
       messagePermits: messages
@@ -311,8 +320,21 @@ defmodule Pulsar.Connection do
     send_command(conn, pong)
     :keep_state_and_data
   end
-  defp handle_command(command, _conn) do
+  defp handle_command(command, conn) do
+    # TO-DO: Use with
     Logger.warning("Unhandled command #{inspect command}")
+    %__MODULE__{requests: requests} = conn
+    case Map.get(command, :request_id) do
+      nil ->
+        :ok
+      request_id ->
+        case Map.get(requests, request_id) do
+          nil ->
+            Logger.warning("No requester found for #{inspect command}")
+          from ->
+            :gen_statem.reply(from, {:ok, command})
+        end
+    end
     :keep_state_and_data
   end
 
