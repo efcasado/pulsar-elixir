@@ -53,7 +53,6 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandSubscribe{}), do: :SUBSCRIBE
   defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
   defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
-  defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
   # defp command_to_type(command) do
   #   command
   #   |> Map.get(:__struct__)

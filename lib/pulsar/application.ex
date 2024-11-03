@@ -16,7 +16,7 @@ defmodule Pulsar.Application do
         auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
 
         args = [host, [name: {:local, name}, socket_opts: socket_opts, timeout: conn_timeout, auth: auth]]
-        %{id: name, start: {Pulsar.Connection, :start_link, args}}
+        %{id: name, start: {Pulsar.ServiceDiscovery, :start_link, args}}
       end)
 
     opts = [strategy: :one_for_one, name: Pulsar.Supervisor]

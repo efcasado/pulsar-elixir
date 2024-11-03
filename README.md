@@ -38,6 +38,15 @@ config :pulsar,
         ]
       ]
     ]
+  ],
+  consumers: [
+    my_consumer: [
+        conn: :foo,
+        module: MyApp.MyConsumer,
+        subscription_name: "my-app-my-consumer-subscription",
+        subscription_type: "Exclusive",
+        topic: "persistent://my-tenant/my-namespace/my-topic"
+    ]
   ]
 ```
 
