@@ -281,20 +281,20 @@ defmodule Pulsar.Connection do
         end
       end
       def handle_data(
-        <<total_size::32, size::32, command::bytes-size(size), rest::binary>>,
-        conn,
-        commands
-      ) do
-        command = Pulsar.Protocol.decode(<<total_size :: 32, size :: 32, command :: bytes-size(size)>>)
-        handle_data(rest, conn, [command| commands])
-      end
-      def handle_data(
         <<total_size::32, _rest::binary>> = data,
         %Pulsar.Connection{buffer: buffer} = conn,
         commands
       ) when (total_size + 4) > byte_size(data) do
         # 1 chunked message
         {commands, %Pulsar.Connection{conn | buffer: buffer <> data, pending_bytes: (total_size + 4) - byte_size(data)}}
+      end
+      def handle_data(
+        <<total_size::32, size::32, command::bytes-size(total_size - 4), rest::binary>> = data,
+        conn,
+        commands
+      ) do
+        command = Pulsar.Protocol.decode(<<total_size :: 32, size :: 32, command :: bytes-size(total_size - 4)>>)
+        handle_data(rest, conn, [command| commands])
       end
 
       def handle_call(from, :socket_opts, conn) do
