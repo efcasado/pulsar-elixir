@@ -33,8 +33,28 @@ defmodule Pulsar.Protocol do
     <<(size + 4)::32, size::32, encoded::binary>>
   end
 
-  def decode(<<_total_size::32, _size::32, encoded::binary>>) do
-    Binary.BaseCommand.decode(encoded)
+  # TO-DO: handle broker metadata
+  def decode(
+    <<
+    _total_size::32,
+    size::32,
+    command::bytes-size(size),
+    0x0e01::16,
+    checksum::32,
+    metadata_size::32,
+    metadata::bytes-size(metadata_size),
+    payload::binary
+    >>
+  ) do
+    # message command
+    metadata = Binary.MessageMetadata.decode(metadata)
+    command = Binary.BaseCommand.decode(command)
+    |> do_decode
+    {command, metadata, payload}
+  end
+  def decode(<<total_size::32, size::32, command::bytes-size(size)>>) do
+    # single command
+    Binary.BaseCommand.decode(command)
     |> do_decode
   end
 
@@ -50,13 +70,40 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandConnect{}), do: :CONNECT
   defp command_to_type(%Binary.CommandPing{}), do: :PING
   defp command_to_type(%Binary.CommandPong{}), do: :PONG
-  
+  defp command_to_type(%Binary.CommandSubscribe{}), do: :SUBSCRIBE
+  defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
+  defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
+  defp command_to_type(%Binary.CommandPartitionedTopicMetadata{}), do: :PARTITIONED_METADATA
+  defp command_to_type(%Binary.CommandAck{}), do: :ACK
+  # defp command_to_type(command) do
+  #   command
+  #   |> Map.get(:__struct__)
+  #   |> Atom.to_string
+  #   |> String.split(".")
+  #   |> Enum.at(-1)
+  # end
+
   defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     field_name = field_name_from_type(type)
     base_command
     |> Map.fetch!(field_name)
   end
 
+  defp field_name_from_type(:LOOKUP) do
+    :lookupTopic
+  end
+  defp field_name_from_type(:LOOKUP_RESPONSE) do
+    :lookupTopicResponse
+  end
+  defp field_name_from_type(:PARTITIONED_METADATA) do
+    :partitionMetadata
+  end
+  defp field_name_from_type(:PARTITIONED_METADATA_RESPONSE) do
+    :partitionMetadataResponse
+  end
+  defp field_name_from_type(:ACK_RESPONSE) do
+    :ackResponse
+  end
   defp field_name_from_type(type) do
     type
     |> Atom.to_string
