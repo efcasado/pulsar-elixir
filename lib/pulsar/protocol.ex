@@ -74,6 +74,7 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
   defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
   defp command_to_type(%Binary.CommandPartitionedTopicMetadata{}), do: :PARTITIONED_METADATA
+  defp command_to_type(%Binary.CommandAck{}), do: :ACK
   # defp command_to_type(command) do
   #   command
   #   |> Map.get(:__struct__)
@@ -99,6 +100,9 @@ defmodule Pulsar.Protocol do
   end
   defp field_name_from_type(:PARTITIONED_METADATA_RESPONSE) do
     :partitionMetadataResponse
+  end
+  defp field_name_from_type(:ACK_RESPONSE) do
+    :ackResponse
   end
   defp field_name_from_type(type) do
     type
