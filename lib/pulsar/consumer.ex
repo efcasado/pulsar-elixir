@@ -36,6 +36,10 @@ defmodule Pulsar.Consumer do
     )
   end
 
+  def ack(conn, message_id, timeout \\ 5_000) do
+    :gen_statem.call(conn, {:ack, message_id}, timeout)
+  end
+  
   # connection callback functions
 
   def connected(:internal, {:subscribe, topic, type, name}, conn) do
@@ -55,6 +59,25 @@ defmodule Pulsar.Consumer do
     end
   end
 
+  def handle_call(from, {:ack, {ledger_id, entry_id}}, conn) do
+    %Pulsar.Connection{requests: requests} = conn
+    request_id = System.unique_integer([:positive, :monotonic])
+    conn = %Pulsar.Connection{conn| requests: Map.put(requests, request_id, from)}
+
+    command = %Binary.CommandAck{
+      consumer_id: 1, # TO-DO: Read from state
+      ack_type: :Individual, #TO-DO: Add support for cummulative acknowledgements
+      request_id: request_id,
+      message_id: [
+        %Binary.MessageIdData{
+          ledgerId: ledger_id,
+          entryId: entry_id
+        }
+      ]
+    }
+    
+    Pulsar.Connection.send_command(conn, command)
+  end
   # TO-DO: Implement as default and overridable
   def handle_call(from, request, conn) do
     Logger.debug("Ignoring #{inspect request} from #{inspect from}")
@@ -65,7 +88,7 @@ defmodule Pulsar.Consumer do
     Logger.debug("Successfully subscribed!")
     # subscription successfully created
     flow = %Binary.CommandFlow{
-      consumer_id: 1,
+      consumer_id: 1, # TO-DO: Read from state
       messagePermits: 1
     }
 
