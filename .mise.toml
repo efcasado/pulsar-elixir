@@ -1,0 +1,35 @@
+[tools]
+elixir = "1.18.4"
+erlang = "28.1"
+protoc = "25.1"
+
+[env]
+PULSAR_PROTOCOL = "v3.3.2"
+
+# Core development tasks
+[tasks.deps]
+description = "Get Elixir dependencies"
+run = "mix deps.get"
+file = "mix.lock"
+
+# Protobuf tasks
+[tasks."proto:download"]
+description = "Download Pulsar protobuf definitions"
+run = "curl -o pulsar.proto https://raw.githubusercontent.com/apache/pulsar/refs/tags/{{env.PULSAR_PROTOCOL}}/pulsar-common/src/main/proto/PulsarApi.proto"
+
+[tasks."proto:install-plugin"]
+description = "Install protobuf Elixir plugin"
+run = "mix escript.install hex protobuf 0.13.0 --force"
+
+[tasks."proto:generate"]
+description = "Generate Elixir code from protobuf"
+run = [
+    "protoc --plugin=${HOME}/.mix/escripts/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
+    "mv lib/pulsar.pb.ex lib/pulsar/protocol/binary.ex"
+]
+depends = ["proto:download", "proto:install-plugin"]
+
+[tasks.setup]
+description = "Setup development environment"
+run = []
+depends = ["proto:download", "proto:generate"]
