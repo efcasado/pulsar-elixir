@@ -91,13 +91,6 @@ defmodule Pulsar.Consumer do
     GenServer.start_link(__MODULE__, consumer_config, opts)
   end
 
-  @doc """
-  Acknowledges a message.
-  """
-  def ack(consumer, message_id, timeout \\ 5_000) do
-    GenServer.call(consumer, {:ack, message_id}, timeout)
-  end
-
   ## GenServer Callbacks
 
   @impl true
@@ -147,23 +140,6 @@ defmodule Pulsar.Consumer do
       {:error, reason} ->
         Logger.error("Consumer initialization failed: #{inspect(reason)}")
         {:stop, {:initialization_failed, reason}}
-    end
-  end
-
-  @impl true
-  def handle_call({:ack, message_id}, _from, state) do
-    ack_command = %Binary.CommandAck{
-      consumer_id: state.consumer_id,
-      ack_type: :Individual,
-      message_id: [message_id]
-    }
-
-    case Pulsar.Broker.send_command(state.broker_pid, ack_command) do
-      :ok ->
-        {:reply, :ok, state}
-
-      error ->
-        {:reply, error, state}
     end
   end
 
