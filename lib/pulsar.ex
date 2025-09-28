@@ -27,6 +27,7 @@ defmodule Pulsar do
 
   @registry_name Pulsar.BrokerRegistry
   @supervisor_name Pulsar.BrokerSupervisor
+  @consumer_supervisor_name Pulsar.ConsumerSupervisor
 
   ## Broker Management
 
@@ -153,7 +154,10 @@ defmodule Pulsar do
   ## Consumer Management
 
   @doc """
-  Starts a consumer with explicit parameters.
+  Starts a consumer with explicit parameters (supervised for automatic restart).
+
+  The consumer will be added to a DynamicSupervisor and will automatically
+  restart if it crashes (e.g., when linked broker crashes).
 
   ## Examples
 
@@ -168,7 +172,28 @@ defmodule Pulsar do
   @spec start_consumer(String.t(), String.t(), atom(), module(), keyword()) ::
           {:ok, pid()} | {:error, term()}
   def start_consumer(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
-    Pulsar.Consumer.start_link(topic, subscription_name, subscription_type, callback_module, opts)
+    consumer_id = "#{topic}-#{subscription_name}-#{System.unique_integer([:positive])}"
+
+    child_spec = %{
+      id: consumer_id,
+      start:
+        {Pulsar.Consumer, :start_link,
+         [topic, subscription_name, subscription_type, callback_module, opts]},
+      restart: :permanent
+    }
+
+    case DynamicSupervisor.start_child(@consumer_supervisor_name, child_spec) do
+      {:ok, consumer_pid} ->
+        Logger.info(
+          "Started supervised consumer #{consumer_id} with PID #{inspect(consumer_pid)}"
+        )
+
+        {:ok, consumer_pid}
+
+      {:error, reason} ->
+        Logger.error("Failed to start consumer #{consumer_id}: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 
   ## Private Functions
@@ -191,7 +216,7 @@ defmodule Pulsar do
     child_spec = %{
       id: broker_key,
       start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
-      restart: :temporary
+      restart: :permanent
     }
 
     case DynamicSupervisor.start_child(@supervisor_name, child_spec) do

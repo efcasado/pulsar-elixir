@@ -160,6 +160,40 @@ defmodule Pulsar.Broker do
     :gen_statem.call(broker, {:partitioned_topic_metadata, topic}, timeout)
   end
 
+  @doc """
+  Gets the list of registered consumers.
+
+  Accepts either a broker PID or a broker URL string.
+  """
+  @spec get_consumers(GenServer.server() | String.t()) :: %{integer() => pid()}
+  def get_consumers(broker) when is_pid(broker) do
+    :gen_statem.call(broker, :get_consumers)
+  end
+
+  def get_consumers(broker_url) when is_binary(broker_url) do
+    case Pulsar.lookup_broker(broker_url) do
+      {:ok, broker_pid} -> get_consumers(broker_pid)
+      {:error, :not_found} -> %{}
+    end
+  end
+
+  @doc """
+  Gets the list of registered producers.
+
+  Accepts either a broker PID or a broker URL string.
+  """
+  @spec get_producers(GenServer.server() | String.t()) :: %{integer() => pid()}
+  def get_producers(broker) when is_pid(broker) do
+    :gen_statem.call(broker, :get_producers)
+  end
+
+  def get_producers(broker_url) when is_binary(broker_url) do
+    case Pulsar.lookup_broker(broker_url) do
+      {:ok, broker_pid} -> get_producers(broker_pid)
+      {:error, :not_found} -> %{}
+    end
+  end
+
   ## gen_statem Callbacks
 
   @impl true
@@ -205,8 +239,21 @@ defmodule Pulsar.Broker do
     wait = next_backoff(broker)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
+    # Restart all consumers and producers by exiting their processes
+    # The supervision trees will automatically restart them
+    restart_consumers_and_producers(broker)
+
     actions = [{{:timeout, :reconnect}, wait, nil}]
-    {:keep_state, %__MODULE__{broker | socket: nil, prev_backoff: wait}, actions}
+    # Clear consumers and producers since we've restarted them
+    cleared_broker = %__MODULE__{
+      broker
+      | socket: nil,
+        prev_backoff: wait,
+        consumers: %{},
+        producers: %{}
+    }
+
+    {:keep_state, cleared_broker, actions}
   end
 
   def disconnected(:enter, :disconnected, _broker) do
@@ -477,6 +524,16 @@ defmodule Pulsar.Broker do
     end
   end
 
+  def connected({:call, from}, :get_consumers, broker) do
+    actions = [{:reply, from, broker.consumers}]
+    {:keep_state, broker, actions}
+  end
+
+  def connected({:call, from}, :get_producers, broker) do
+    actions = [{:reply, from, broker.producers}]
+    {:keep_state, broker, actions}
+  end
+
   def connected({:call, from}, request, broker) do
     Logger.debug("Handling request #{inspect(request)}")
     actions = [{:reply, from, {:ok, :handled}}]
@@ -567,6 +624,28 @@ defmodule Pulsar.Broker do
   end
 
   ## Private Functions
+
+  defp restart_consumers_and_producers(broker) do
+    # Exit all consumer processes - supervision trees will restart them
+    Enum.each(broker.consumers, fn {consumer_id, consumer_pid} ->
+      if Process.alive?(consumer_pid) do
+        Logger.debug("Restarting consumer #{consumer_id}")
+        Process.exit(consumer_pid, :broker_disconnected)
+      end
+    end)
+
+    # Exit all producer processes - supervision trees will restart them  
+    Enum.each(broker.producers, fn {producer_id, producer_pid} ->
+      if Process.alive?(producer_pid) do
+        Logger.debug("Restarting producer #{producer_id}")
+        Process.exit(producer_pid, :broker_disconnected)
+      end
+    end)
+
+    Logger.info(
+      "Restarted #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers due to broker disconnect"
+    )
+  end
 
   defp send_command_internal(command, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
