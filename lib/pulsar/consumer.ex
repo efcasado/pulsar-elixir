@@ -43,15 +43,6 @@ defmodule Pulsar.Consumer do
     # Use default callback if none provided
     callback = callback || DefaultConsumer
 
-    # TODO: support other subscription options
-    args = [
-      conn,
-      callback,
-      topic,
-      type,
-      name
-    ]
-
     # TO-DO: handle redirects
     # TO-DO: handle errors
     {:ok,
@@ -228,7 +219,7 @@ defmodule Pulsar.Consumer do
     :keep_state_and_data
   end
 
-  def handle_command(command, conn) do
+  def handle_command(command, _conn) do
     # TO-DO: Handle commands
     Logger.warning("Unhandled command #{inspect(command)}")
     :keep_state_and_data

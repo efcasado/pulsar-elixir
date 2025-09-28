@@ -41,7 +41,7 @@ defmodule Pulsar.Protocol do
         size::32,
         command::bytes-size(size),
         0x0E01::16,
-        checksum::32,
+        _checksum::32,
         metadata_size::32,
         metadata::bytes-size(metadata_size),
         payload::binary
@@ -56,7 +56,7 @@ defmodule Pulsar.Protocol do
     {command, metadata, payload}
   end
 
-  def decode(<<total_size::32, size::32, command::bytes-size(size)>>) do
+  def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
     # single command
     Binary.BaseCommand.decode(command)
     |> do_decode
