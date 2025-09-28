@@ -4,45 +4,46 @@ defmodule Pulsar.Consumer do
 
   This consumer uses service discovery to find the appropriate broker
   for the topic and then communicates with that broker process.
+
+  ## Callback Module
+
+  The consumer requires a callback module that implements the `handle_message/1` function.
+  The callback should return `:ok` for successful processing (which triggers automatic
+  acknowledgment) or `{:error, reason}` to indicate processing failure.
+
+  ### Example Callback Module
+
+      defmodule MyApp.MessageHandler do
+        require Logger
+        
+        alias Pulsar.Protocol.Binary.Pulsar.Proto
+
+        @type message :: %{
+          id: {integer(), integer()},
+          metadata: Proto.MessageMetadata.t(),
+          payload: binary(),
+          partition_key: String.t() | nil,
+          producer_name: String.t(),
+          publish_time: integer()
+        }
+
+        @spec handle_message(message()) :: :ok | {:error, term()}
+        def handle_message(message) do
+          Logger.info("Received message from: \#{message.producer_name}")
+          Logger.info("Payload: \#{message.payload}")
+          
+          # Process your message here
+          # Return :ok to acknowledge, {:error, reason} to not acknowledge
+          :ok
+        end
+      end
+
   """
 
   use GenServer
   require Logger
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-
-  defmodule DefaultConsumer do
-    require Logger
-
-    def handle_message(message) do
-      Logger.info("[DefaultConsumer] Message from: #{message.producer_name}")
-      Logger.info("[DefaultConsumer] Key: #{message.partition_key}")
-      Logger.info("[DefaultConsumer] Payload size: #{byte_size(message.payload)} bytes")
-      Logger.info("[DefaultConsumer] Publish time: #{message.publish_time}")
-
-      preview = binary_preview(message.payload)
-
-      Logger.info("[DefaultConsumer] Payload preview: #{preview}")
-
-      :ok
-    end
-
-    defp binary_preview(payload) when byte_size(payload) == 0, do: "<empty>"
-
-    defp binary_preview(payload) do
-      preview_size = min(100, byte_size(payload))
-      preview_bytes = binary_part(payload, 0, preview_size)
-
-      case String.valid?(preview_bytes) do
-        true ->
-          truncated = if byte_size(payload) > 100, do: "...", else: ""
-          "\"#{preview_bytes}#{truncated}\""
-
-        false ->
-          "<binary data #{byte_size(payload)} bytes>"
-      end
-    end
-  end
 
   defstruct [
     :topic,
