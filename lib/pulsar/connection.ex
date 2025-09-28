@@ -9,66 +9,68 @@ defmodule Pulsar.Connection do
   """
 
   defstruct name: "",
-    host: "",
-    port: 6650,
-    socket_module: :gen_tcp,
-    socket: nil,
-    prev_backoff: 0,
-    socket_opts: [],
-    conn_timeout: 5_000,
-    auth: [type: Pulsar.Auth.None, opts: []],
-    buffer: <<>>,
-    pending_bytes: 0,
-    requests: Map.new(),
-    actions: []
+            host: "",
+            port: 6650,
+            socket_module: :gen_tcp,
+            socket: nil,
+            prev_backoff: 0,
+            socket_opts: [],
+            conn_timeout: 5_000,
+            auth: [type: Pulsar.Auth.None, opts: []],
+            buffer: <<>>,
+            pending_bytes: 0,
+            requests: Map.new(),
+            actions: []
 
   @type t :: %__MODULE__{
-    name: String.t(),
-    host: String.t(),
-    port: integer(),
-    socket_module: :gen_tcp | :ssl,
-    socket: :gen_tcp.socket() | :ssl.sslsocket(),
-    prev_backoff: 0,
-    socket_opts: list(),
-    conn_timeout: integer(),
-    auth: list(),
-    buffer: binary(),
-    pending_bytes: integer(),
-    requests: Map.t(),
-    actions: list()
-  }
-  
+          name: String.t(),
+          host: String.t(),
+          port: integer(),
+          socket_module: :gen_tcp | :ssl,
+          socket: :gen_tcp.socket() | :ssl.sslsocket(),
+          prev_backoff: 0,
+          socket_opts: list(),
+          conn_timeout: integer(),
+          auth: list(),
+          buffer: binary(),
+          pending_bytes: integer(),
+          requests: Map.t(),
+          actions: list()
+        }
+
   @doc """
   Starts a persistent connection towards the provided Pulsar broker.
-  
+
   The target Pulsar broker is expected to be specified in the form of: `<scheme>://<host>[:<port>]`,
   where `scheme` can be either `pulsar` or `pulsar+ssl` and `port` is an optional field that
   defaults to `6650` and `6651`, respectively.
-  
+
   ## Options
-  
+
   - `:name` - used for name registration of the `:gen_statem` process
   - `:connection_timeout` - ...
   - `:auth` - ...
   - `:socket_opts` - ...
   """
-  @spec start_link(atom(), String.t(), list(), list()) :: {:ok, pid()} | :ignore | {:error, term()}
+  @spec start_link(atom(), String.t(), list(), list()) ::
+          {:ok, pid()} | :ignore | {:error, term()}
   def start_link(module, host, opts \\ [], start_opts \\ []) do
     # TO-DO: handle different types of name registration (eg. :local, :global, :via)
     name = Keyword.get(opts, :name, nil)
-    
+
     args = [
       name,
       host,
       Keyword.get(opts, :socket_opts, []),
       Keyword.get(opts, :conn_timeout, 5_000),
-      Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []]),
+      Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: []),
       Keyword.get(opts, :actions, [])
     ]
-        
+
     case name do
       nil ->
         :gen_statem.start_link(module, args, start_opts)
+
       name ->
         :gen_statem.start_link(name, module, args, start_opts)
     end
@@ -85,8 +87,9 @@ defmodule Pulsar.Connection do
   def auth(conn, timeout \\ 5_000) do
     :gen_statem.call(conn, :auth, timeout)
   end
+
   # TO-DO: stop/1
-  
+
   def send_command(conn, command) do
     %Pulsar.Connection{
       socket_module: mod,
@@ -105,14 +108,14 @@ defmodule Pulsar.Connection do
     |> Map.get(request_id)
     |> :gen_statem.reply(reply)
   end
-  
+
   defmacro __using__(_opts) do
-    quote do  
+    quote do
       require Logger
 
       alias Pulsar.Config
       alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-      
+
       @behaviour :gen_statem
 
       @impl true
@@ -123,6 +126,7 @@ defmodule Pulsar.Connection do
         uri = URI.parse(uri)
         host = Map.get(uri, :host, "localhost")
         port = Map.get(uri, :port, 6650)
+
         socket_module =
           case Map.get(uri, :scheme, "pulsar") do
             "pulsar+ssl" -> :ssl
@@ -139,6 +143,7 @@ defmodule Pulsar.Connection do
           auth: auth,
           actions: post_actions
         }
+
         actions = [{:next_event, :internal, :connect}]
         {:ok, :disconnected, conn, actions}
       end
@@ -151,13 +156,16 @@ defmodule Pulsar.Connection do
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %Pulsar.Connection{conn | socket: nil, prev_backoff: wait}, actions}
       end
+
       def disconnected(:enter, :disconnected, _conn) do
         :keep_state_and_data
       end
+
       def disconnected({:timeout, :reconnect}, _content, conn) do
         actions = [{:next_event, :internal, :connect}]
         {:keep_state, conn, actions}
       end
+
       def disconnected(:internal, :connect, conn) do
         %Pulsar.Connection{
           host: host,
@@ -166,88 +174,114 @@ defmodule Pulsar.Connection do
           socket_opts: socket_opts,
           conn_timeout: conn_timeout
         } = conn
+
         host = String.to_charlist(host)
 
-        case apply(mod, :connect, [host, port, socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true], conn_timeout]) do
+        case apply(mod, :connect, [
+               host,
+               port,
+               socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true],
+               conn_timeout
+             ]) do
           {:ok, socket} ->
             Logger.debug("Connection succeeded")
             actions = [{:next_event, :internal, :handshake}]
-            {:next_state, :connected, %Pulsar.Connection{conn| socket: socket, prev_backoff: 0}, actions}
+
+            {:next_state, :connected, %Pulsar.Connection{conn | socket: socket, prev_backoff: 0},
+             actions}
+
           {:error, error} ->
             wait = next_backoff(conn)
-            Logger.error("Connection failed: #{apply(mod, :format_error, [error])}. Reconnecting in #{wait}ms.")
+
+            Logger.error(
+              "Connection failed: #{apply(mod, :format_error, [error])}. Reconnecting in #{wait}ms."
+            )
+
             actions = [{{:timeout, :reconnect}, wait, nil}]
-            {:keep_state, %Pulsar.Connection{conn| prev_backoff: wait}, actions}
+            {:keep_state, %Pulsar.Connection{conn | prev_backoff: wait}, actions}
         end
       end
+
       def disconnected({:call, from}, {:request, _request}, _conn) do
         actions = [{:reply, from, {:error, :disconnected}}]
         {:keep_state_and_data, actions}
       end
+
       def disconnected(event_type, event_data, _conn) do
-        Logger.warning("Discarding #{inspect event_type} #{inspect event_data}")
+        Logger.warning("Discarding #{inspect(event_type)} #{inspect(event_data)}")
         :keep_state_and_data
       end
 
       def connected(:enter, _old_state, _conn) do
-        actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
+        actions = [{{:timeout, :ping}, Config.ping_interval(), nil}]
         {:keep_state_and_data, actions}
       end
+
       def connected(:info, {:tcp_closed, socket}, %Pulsar.Connection{socket: socket} = conn) do
         Logger.debug("Socket closed")
         {:next_state, :disconnected, conn}
       end
+
       def connected(:info, {:ssl_closed, socket}, %Pulsar.Connection{socket: socket} = conn) do
         Logger.debug("Socket closed")
         {:next_state, :disconnected, conn}
       end
+
       def connected(:info, {_, _socket, data}, conn) do
         {commands, conn} = handle_data(data, conn)
-        actions = Enum.map(commands, &({:next_event, :internal, {:command, &1}}))
+        actions = Enum.map(commands, &{:next_event, :internal, {:command, &1}})
         {:keep_state, conn, actions}
       end
+
       def connected({:timeout, :ping}, _content, conn) do
         ping = %Binary.CommandPing{}
 
         case Pulsar.Connection.send_command(conn, ping) do
           {:ok, conn} ->
-            actions = [{{:timeout, :ping}, Config.ping_interval, nil}]
+            actions = [{{:timeout, :ping}, Config.ping_interval(), nil}]
             {:keep_state_and_data, actions}
-          {{:error, _error}, conn} ->
-            {:next_state, :disconnected, conn} 
-        end
-      end
-      def connected(:internal, {:command, command}, conn) do
-        Logger.debug "Received #{inspect command}"
-        handle_command(command, conn)
-      end
-      def connected(:internal, :handshake, conn) do
-        %Pulsar.Connection{auth: auth, actions: post_actions} = conn
-        auth_method_name = auth_method_name(auth)
-        auth_data = auth_data(auth)
-        
-        connect = %Binary.CommandConnect{
-          client_version: Config.client_version,
-          protocol_version: Config.protocol_version,
-          auth_method_name: auth_method_name,
-          auth_data: auth_data
-        }
-        case Pulsar.Connection.send_command(conn, connect) do
-          {:ok, conn} ->
-            actions = [{{:timeout, :ping}, Config.ping_interval, nil}| post_actions]
-            {:keep_state_and_data, actions}
+
           {{:error, _error}, conn} ->
             {:next_state, :disconnected, conn}
         end
       end
+
+      def connected(:internal, {:command, command}, conn) do
+        Logger.debug("Received #{inspect(command)}")
+        handle_command(command, conn)
+      end
+
+      def connected(:internal, :handshake, conn) do
+        %Pulsar.Connection{auth: auth, actions: post_actions} = conn
+        auth_method_name = auth_method_name(auth)
+        auth_data = auth_data(auth)
+
+        connect = %Binary.CommandConnect{
+          client_version: Config.client_version(),
+          protocol_version: Config.protocol_version(),
+          auth_method_name: auth_method_name,
+          auth_data: auth_data
+        }
+
+        case Pulsar.Connection.send_command(conn, connect) do
+          {:ok, conn} ->
+            actions = [{{:timeout, :ping}, Config.ping_interval(), nil} | post_actions]
+            {:keep_state_and_data, actions}
+
+          {{:error, _error}, conn} ->
+            {:next_state, :disconnected, conn}
+        end
+      end
+
       def connected({:call, from}, request, conn) do
-        Logger.debug("Handling request #{inspect request}")
+        Logger.debug("Handling request #{inspect(request)}")
 
         case handle_call(from, request, conn) do
           {:ok, conn} ->
             {:keep_state, conn}
+
           {{:error, error}, conn} ->
-            {:next_state, :disconnected, %Pulsar.Connection{conn| requests: %{}}}
+            {:next_state, :disconnected, %Pulsar.Connection{conn | requests: %{}}}
         end
       end
 
@@ -262,39 +296,64 @@ defmodule Pulsar.Connection do
       # TCP buffer
       # <<0, 0, 0, 9, 0, 0, 0, 5, 8, 19, 154, 1, 0, 0, 0, 0, 9, 0, 0, 0, 5, 8, 18, 146, 1, 0>>
       def handle_data(_data, _conn, _commands \\ [])
+
       def handle_data(<<>>, conn, commands) do
         {Enum.reverse(commands), conn}
       end
+
       def handle_data(
-        data,
-        %Pulsar.Connection{buffer: buffer, pending_bytes: pending_bytes} = conn,
-        commands
-      ) when pending_bytes > 0 do
+            data,
+            %Pulsar.Connection{buffer: buffer, pending_bytes: pending_bytes} = conn,
+            commands
+          )
+          when pending_bytes > 0 do
         case data do
           <<missing_chunk::bytes-size(pending_bytes), rest::binary>> ->
             command = Pulsar.Protocol.decode(buffer <> missing_chunk)
-            handle_data(rest, %Pulsar.Connection{conn | buffer: <<>>, pending_bytes: 0}, [command| commands])
+
+            handle_data(rest, %Pulsar.Connection{conn | buffer: <<>>, pending_bytes: 0}, [
+              command | commands
+            ])
+
           missing_chunk ->
             buffer = buffer <> missing_chunk
             pending_bytes = pending_bytes - byte_size(missing_chunk)
-            handle_data(<<>>, %Pulsar.Connection{conn | buffer: buffer, pending_bytes: pending_bytes}, commands)
+
+            handle_data(
+              <<>>,
+              %Pulsar.Connection{conn | buffer: buffer, pending_bytes: pending_bytes},
+              commands
+            )
         end
       end
+
       def handle_data(
-        <<total_size::32, _rest::binary>> = data,
-        %Pulsar.Connection{buffer: buffer} = conn,
-        commands
-      ) when (total_size + 4) > byte_size(data) do
+            <<total_size::32, _rest::binary>> = data,
+            %Pulsar.Connection{buffer: buffer} = conn,
+            commands
+          )
+          when total_size + 4 > byte_size(data) do
         # 1 chunked message
-        {commands, %Pulsar.Connection{conn | buffer: buffer <> data, pending_bytes: (total_size + 4) - byte_size(data)}}
+        {commands,
+         %Pulsar.Connection{
+           conn
+           | buffer: buffer <> data,
+             pending_bytes: total_size + 4 - byte_size(data)
+         }}
       end
+
       def handle_data(
-        <<total_size::32, size::32, command::bytes-size(total_size - 4), rest::binary>> = data,
-        conn,
-        commands
-      ) do
-        command = Pulsar.Protocol.decode(<<total_size :: 32, size :: 32, command :: bytes-size(total_size - 4)>>)
-        handle_data(rest, conn, [command| commands])
+            <<total_size::32, size::32, command::bytes-size(total_size - 4), rest::binary>> =
+              data,
+            conn,
+            commands
+          ) do
+        command =
+          Pulsar.Protocol.decode(
+            <<total_size::32, size::32, command::bytes-size(total_size - 4)>>
+          )
+
+        handle_data(rest, conn, [command | commands])
       end
 
       def handle_call(from, :socket_opts, conn) do
@@ -303,19 +362,21 @@ defmodule Pulsar.Connection do
         :gen_statem.reply(from, reply)
         {:ok, conn}
       end
+
       def handle_call(from, :conn_timeout, conn) do
         %Pulsar.Connection{conn_timeout: conn_timeout} = conn
         reply = {:ok, conn_timeout}
         :gen_statem.reply(from, reply)
         {:ok, conn}
       end
+
       def handle_call(from, :auth, conn) do
         %Pulsar.Connection{auth: auth} = conn
         reply = {:ok, auth}
         :gen_statem.reply(from, reply)
         {:ok, conn}
       end
-      
+
       def handle_command(%Binary.CommandPing{}, conn) do
         pong = %Binary.CommandPong{}
 
@@ -324,12 +385,15 @@ defmodule Pulsar.Connection do
         Pulsar.Connection.send_command(conn, pong)
         :keep_state_and_data
       end
+
       def handle_command(%Binary.CommandPong{}, _conn) do
         :keep_state_and_data
       end
+
       def handle_command(%Binary.CommandConnected{}, _conn) do
         :keep_state_and_data
       end
+
       # def handle_command(command, conn) do
       #   # TO-DO: Use with
       #   Logger.warning("Unhandled command #{inspect command}")
@@ -351,14 +415,14 @@ defmodule Pulsar.Connection do
       defp command_name(command) do
         command
         |> Map.get(:__struct__)
-        |> Atom.to_string
+        |> Atom.to_string()
         |> String.split(".")
         |> Enum.at(-1)
       end
-      
+
       defp next_backoff(%Pulsar.Connection{prev_backoff: prev}) do
         next = round(prev * 2)
-        next = min(next, Config.max_backoff)
+        next = min(next, Config.max_backoff())
         next + Enum.random(0..1000)
       end
     end

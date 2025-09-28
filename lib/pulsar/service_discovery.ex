@@ -6,7 +6,7 @@ defmodule Pulsar.ServiceDiscovery do
   use Pulsar.Connection
 
   # API
-  
+
   def start_link(host, opts, start_opts \\ []) do
     Pulsar.Connection.start_link(__MODULE__, host, opts, start_opts)
   end
@@ -14,7 +14,7 @@ defmodule Pulsar.ServiceDiscovery do
   def lookup_topic(conn, topic, authoritative \\ false, timeout \\ 5_000) do
     :gen_statem.call(conn, {:lookup_topic, topic, authoritative}, timeout)
   end
-  
+
   def partitioned_topic_metadata(conn, topic, timeout \\ 5_000) do
     :gen_statem.call(conn, {:partitioned_topic_metadata, topic}, timeout)
   end
@@ -24,20 +24,21 @@ defmodule Pulsar.ServiceDiscovery do
   def handle_call(from, {:lookup_topic, topic, authoritative}, conn) do
     %Pulsar.Connection{requests: requests} = conn
     request_id = System.unique_integer([:positive, :monotonic])
-    conn = %Pulsar.Connection{conn| requests: Map.put(requests, request_id, from)}
+    conn = %Pulsar.Connection{conn | requests: Map.put(requests, request_id, from)}
 
     command = %Binary.CommandLookupTopic{
       topic: topic,
       request_id: request_id,
       authoritative: authoritative
     }
-    
+
     Pulsar.Connection.send_command(conn, command)
   end
+
   def handle_call(from, {:partitioned_topic_metadata, topic}, conn) do
     %Pulsar.Connection{requests: requests} = conn
     request_id = System.unique_integer([:positive, :monotonic])
-    conn = %Pulsar.Connection{conn| requests: Map.put(requests, request_id, from)}
+    conn = %Pulsar.Connection{conn | requests: Map.put(requests, request_id, from)}
 
     command = %Binary.CommandPartitionedTopicMetadata{
       topic: topic,
@@ -57,6 +58,7 @@ defmodule Pulsar.ServiceDiscovery do
 
     :keep_state_and_data
   end
+
   def handle_command(%Binary.CommandPartitionedTopicMetadataResponse{} = command, conn) do
     %Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command
 
@@ -65,5 +67,5 @@ defmodule Pulsar.ServiceDiscovery do
     Pulsar.Connection.reply(conn, request_id, reply)
 
     :keep_state_and_data
-  end  
+  end
 end
