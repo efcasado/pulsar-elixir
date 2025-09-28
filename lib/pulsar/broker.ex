@@ -55,7 +55,7 @@ defmodule Pulsar.Broker do
           auth: list(),
           buffer: binary(),
           pending_bytes: integer(),
-          requests: %{integer() => GenServer.from()},
+          requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => pid()},
           producers: %{integer() => pid()}
@@ -310,7 +310,11 @@ defmodule Pulsar.Broker do
 
   # Connected state
   def connected(:enter, _old_state, _broker) do
-    actions = [{{:timeout, :ping}, Config.ping_interval(), nil}]
+    actions = [
+      {{:timeout, :ping}, Config.ping_interval(), nil},
+      {{:timeout, :cleanup_stale_requests}, Config.cleanup_interval(), nil}
+    ]
+
     {:keep_state_and_data, actions}
   end
 
@@ -351,6 +355,12 @@ defmodule Pulsar.Broker do
       {{:error, _error}, new_broker} ->
         {:next_state, :disconnected, new_broker}
     end
+  end
+
+  def connected({:timeout, :cleanup_stale_requests}, _content, broker) do
+    cleaned_broker = cleanup_stale_requests(broker)
+    actions = [{{:timeout, :cleanup_stale_requests}, Config.cleanup_interval(), nil}]
+    {:keep_state, cleaned_broker, actions}
   end
 
   def connected(:internal, {:command, command}, broker) do
@@ -460,9 +470,10 @@ defmodule Pulsar.Broker do
   def connected({:call, from}, {:send_request, command}, broker) do
     request_id = System.unique_integer([:positive, :monotonic])
     command_with_id = Map.put(command, :request_id, request_id)
+    timestamp = System.monotonic_time(:millisecond)
 
-    # Store the request for correlation
-    new_requests = Map.put(broker.requests, request_id, from)
+    # Store the request with timestamp for correlation and cleanup
+    new_requests = Map.put(broker.requests, request_id, {from, timestamp})
     updated_broker = %{broker | requests: new_requests}
 
     case send_command_internal(command_with_id, updated_broker) do
@@ -481,7 +492,8 @@ defmodule Pulsar.Broker do
   # Service Discovery
   def connected({:call, from}, {:lookup_topic, topic, authoritative}, broker) do
     request_id = System.unique_integer([:positive, :monotonic])
-    new_requests = Map.put(broker.requests, request_id, from)
+    timestamp = System.monotonic_time(:millisecond)
+    new_requests = Map.put(broker.requests, request_id, {from, timestamp})
     updated_broker = %{broker | requests: new_requests}
 
     command = %Binary.CommandLookupTopic{
@@ -504,7 +516,8 @@ defmodule Pulsar.Broker do
 
   def connected({:call, from}, {:partitioned_topic_metadata, topic}, broker) do
     request_id = System.unique_integer([:positive, :monotonic])
-    new_requests = Map.put(broker.requests, request_id, from)
+    timestamp = System.monotonic_time(:millisecond)
+    new_requests = Map.put(broker.requests, request_id, {from, timestamp})
     updated_broker = %{broker | requests: new_requests}
 
     command = %Binary.CommandPartitionedTopicMetadata{
@@ -564,8 +577,8 @@ defmodule Pulsar.Broker do
          broker
        ) do
     reply = {:ok, command}
-    reply_to_request(broker, request_id, reply)
-    :keep_state_and_data
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
   end
 
   defp handle_command(
@@ -573,8 +586,8 @@ defmodule Pulsar.Broker do
          broker
        ) do
     reply = {:ok, command}
-    reply_to_request(broker, request_id, reply)
-    :keep_state_and_data
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
   end
 
   defp handle_command(%Binary.CommandMessage{consumer_id: consumer_id} = command, broker) do
@@ -613,8 +626,8 @@ defmodule Pulsar.Broker do
 
       request_id ->
         reply = {:ok, command}
-        reply_to_request(broker, request_id, reply)
-        :keep_state_and_data
+        new_broker = reply_to_request(broker, request_id, reply)
+        {:keep_state, new_broker}
     end
   end
 
@@ -647,6 +660,29 @@ defmodule Pulsar.Broker do
     )
   end
 
+  defp cleanup_stale_requests(broker) do
+    current_time = System.monotonic_time(:millisecond)
+    timeout_threshold = Config.request_timeout()
+
+    {stale_requests, active_requests} =
+      Enum.split_with(broker.requests, fn {_request_id, {_from, timestamp}} ->
+        current_time - timestamp > timeout_threshold
+      end)
+
+    # Reply with timeout errors to stale requests
+    Enum.each(stale_requests, fn {request_id, {from, _timestamp}} ->
+      Logger.warning("Request #{request_id} timed out after #{timeout_threshold}ms")
+      :gen_statem.reply(from, {:error, :timeout})
+    end)
+
+    if length(stale_requests) > 0 do
+      Logger.info("Cleaned up #{length(stale_requests)} stale requests")
+    end
+
+    # Keep only active requests
+    %{broker | requests: Map.new(active_requests)}
+  end
+
   defp send_command_internal(command, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
@@ -666,9 +702,19 @@ defmodule Pulsar.Broker do
     case Map.get(broker.requests, request_id) do
       nil ->
         Logger.warning("No requester found for request #{request_id}")
+        broker
 
-      from ->
+      {from, _timestamp} ->
         :gen_statem.reply(from, reply)
+        # Remove the request after replying
+        new_requests = Map.delete(broker.requests, request_id)
+        %{broker | requests: new_requests}
+
+      # Handle legacy format during transition
+      from when not is_tuple(from) ->
+        :gen_statem.reply(from, reply)
+        new_requests = Map.delete(broker.requests, request_id)
+        %{broker | requests: new_requests}
     end
   end
 
