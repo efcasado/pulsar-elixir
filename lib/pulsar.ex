@@ -139,7 +139,6 @@ defmodule Pulsar do
   ## Examples
 
       iex> Pulsar.start_consumer(
-      ...>   "pulsar://localhost:6650",
       ...>   "persistent://public/default/my-topic",
       ...>   "my-subscription",
       ...>   :Exclusive,
@@ -147,24 +146,10 @@ defmodule Pulsar do
       ...> )
       {:ok, #PID<0.456.0>}
   """
-  @spec start_consumer(String.t(), String.t(), String.t(), atom(), module(), keyword()) ::
+  @spec start_consumer(String.t(), String.t(), atom(), module(), keyword()) ::
           {:ok, pid()} | {:error, term()}
-  def start_consumer(
-        bootstrap_broker_url,
-        topic,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        opts \\ []
-      ) do
-    Pulsar.Consumer.start_link(
-      bootstrap_broker_url,
-      topic,
-      subscription_name,
-      subscription_type,
-      callback_module,
-      opts
-    )
+  def start_consumer(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
+    Pulsar.Consumer.start_link(topic, subscription_name, subscription_type, callback_module, opts)
   end
 
   ## Private Functions

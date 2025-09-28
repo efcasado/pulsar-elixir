@@ -66,10 +66,9 @@ defmodule Pulsar.Integration.ConsumerTest do
       # Start a broker using the idempotent Pulsar API
       {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
 
-      # Start consumer using the Pulsar API
+      # Start consumer using the Pulsar API (no bootstrap broker needed)
       {:ok, consumer_pid} =
         Pulsar.start_consumer(
-          @pulsar_url,
           @test_topic,
           @test_subscription <> "-e2e",
           :Shared,
