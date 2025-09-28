@@ -50,8 +50,6 @@ defmodule Pulsar.Application do
   defp consumer_supervisor_spec([]), do: nil
 
   defp consumer_supervisor_spec(consumers) do
-    bootstrap_host = Application.get_env(:pulsar, :host)
-
     consumer_children =
       consumers
       |> Enum.map(fn {consumer_name, consumer_opts} ->
@@ -65,7 +63,6 @@ defmodule Pulsar.Application do
           start:
             {Pulsar.Consumer, :start_link,
              [
-               bootstrap_host,
                topic,
                subscription_name,
                subscription_type,

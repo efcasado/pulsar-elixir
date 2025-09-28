@@ -73,23 +73,16 @@ defmodule Pulsar.Consumer do
 
   ## Parameters
 
-  - `bootstrap_broker_url` - URL of the bootstrap broker for service discovery
   - `topic` - The topic to subscribe to
   - `subscription_name` - Name of the subscription
   - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
   - `callback_module` - Module that implements handle_message/1
   - `opts` - Additional GenServer options
+
+  The consumer will automatically use any available broker for service discovery.
   """
-  def start_link(
-        bootstrap_broker_url,
-        topic,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        opts \\ []
-      ) do
+  def start_link(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
     consumer_config = %{
-      bootstrap_broker_url: bootstrap_broker_url,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -118,7 +111,6 @@ defmodule Pulsar.Consumer do
   @impl true
   def init(consumer_config) do
     %{
-      bootstrap_broker_url: bootstrap_broker_url,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -137,9 +129,6 @@ defmodule Pulsar.Consumer do
       broker_url: nil,
       state: :discovering
     }
-
-    # Store bootstrap broker URL in process dictionary
-    Process.put(:bootstrap_broker_url, bootstrap_broker_url)
 
     Logger.info("Starting consumer for topic #{topic}")
 
@@ -179,34 +168,26 @@ defmodule Pulsar.Consumer do
 
   @impl true
   def handle_info(:discover_broker, state) do
-    # Get bootstrap broker from process dictionary
-    bootstrap_broker = Process.get(:bootstrap_broker_url)
+    # Use any available broker for service discovery
+    case get_random_broker() do
+      {:ok, broker_pid} ->
+        # Perform service discovery
+        case Pulsar.Broker.lookup_topic(broker_pid, state.topic) do
+          {:ok, %{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}} ->
+            broker_url = service_url_tls || service_url
+            send(self(), {:connect_to_broker, broker_url})
+            {:noreply, %{state | state: :connecting}}
 
-    if is_nil(bootstrap_broker) do
-      Logger.error("No bootstrap broker configured")
-      {:stop, :no_bootstrap_broker, state}
-    else
-      # Get or start bootstrap broker
-      case Pulsar.start_broker(bootstrap_broker, get_broker_opts()) do
-        {:ok, bootstrap_pid} ->
-          # Perform service discovery
-          case Pulsar.Broker.lookup_topic(bootstrap_pid, state.topic) do
-            {:ok, %{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}} ->
-              broker_url = service_url_tls || service_url
-              send(self(), {:connect_to_broker, broker_url})
-              {:noreply, %{state | state: :connecting}}
+          {:error, reason} ->
+            Logger.error("Topic lookup failed: #{inspect(reason)}")
+            schedule_retry(:discover_broker, 5000)
+            {:noreply, state}
+        end
 
-            {:error, reason} ->
-              Logger.error("Topic lookup failed: #{inspect(reason)}")
-              schedule_retry(:discover_broker, 5000)
-              {:noreply, state}
-          end
-
-        {:error, reason} ->
-          Logger.error("Failed to start bootstrap broker: #{inspect(reason)}")
-          schedule_retry(:discover_broker, 5000)
-          {:noreply, state}
-      end
+      {:error, :no_brokers_available} ->
+        Logger.error("No brokers available for service discovery")
+        schedule_retry(:discover_broker, 5000)
+        {:noreply, state}
     end
   end
 
@@ -330,5 +311,16 @@ defmodule Pulsar.Consumer do
 
   defp schedule_retry(message, delay) do
     Process.send_after(self(), message, delay)
+  end
+
+  defp get_random_broker do
+    case Pulsar.list_brokers() do
+      [] ->
+        {:error, :no_brokers_available}
+
+      brokers ->
+        {_broker_key, broker_pid} = Enum.random(brokers)
+        {:ok, broker_pid}
+    end
   end
 end
