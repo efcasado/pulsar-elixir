@@ -9,13 +9,17 @@ defmodule Pulsar.Application do
 
     children =
       connections
-      |> Enum.map(fn({name, opts}) ->
+      |> Enum.map(fn {name, opts} ->
         host = Keyword.fetch!(opts, :host)
         socket_opts = Keyword.get(opts, :socket_opts, [])
         conn_timeout = Keyword.get(opts, :conn_timeout, 5_000)
-        auth = Keyword.get(opts, :auth, [type: Pulsar.Auth.None, opts: []])
+        auth = Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: [])
 
-        args = [host, [name: {:local, name}, socket_opts: socket_opts, timeout: conn_timeout, auth: auth]]
+        args = [
+          host,
+          [name: {:local, name}, socket_opts: socket_opts, timeout: conn_timeout, auth: auth]
+        ]
+
         %{id: name, start: {Pulsar.ServiceDiscovery, :start_link, args}}
       end)
 
