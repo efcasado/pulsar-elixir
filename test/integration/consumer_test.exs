@@ -63,20 +63,21 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
-      {:ok, discovery_pid} = Pulsar.ServiceDiscovery.start_link(@pulsar_url, [])
+      # Start a broker directly for service discovery
+      {:ok, broker_pid} = Pulsar.Broker.start_link(@pulsar_url, [])
 
-      # Start consumer
+      # Start consumer with explicit parameters
       {:ok, consumer_pid} =
         Pulsar.Consumer.start_link(
-          discovery_pid,
+          @pulsar_url,
           @test_topic,
-          :Shared,
           @test_subscription <> "-e2e",
+          :Shared,
           TestCallback
         )
 
       # Give consumer time to subscribe
-      Process.sleep(2000)
+      Process.sleep(3000)
 
       # Produce test messages using pulsar-client in Docker container
       test_messages = [
@@ -142,7 +143,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       # Cleanup
       Process.exit(consumer_pid, :normal)
-      Process.exit(discovery_pid, :normal)
+      Process.exit(broker_pid, :normal)
     end
   end
 
