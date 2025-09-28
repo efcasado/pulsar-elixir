@@ -4,24 +4,19 @@ defmodule Pulsar.Consumer do
   """
   use Pulsar.Connection
 
-  # Built-in default callback for testing/debugging
-  defmodule DefaultCallback do
+  defmodule DefaultConsumer do
     require Logger
 
     def handle_message(message) do
-      Logger.info("[DefaultCallback] Message from: #{message.producer_name}")
-      Logger.info("[DefaultCallback] Key: #{message.partition_key}")
-      Logger.info("[DefaultCallback] Payload size: #{byte_size(message.payload)} bytes")
-      Logger.info("[DefaultCallback] Publish time: #{message.publish_time}")
+      Logger.info("[DefaultConsumer] Message from: #{message.producer_name}")
+      Logger.info("[DefaultConsumer] Key: #{message.partition_key}")
+      Logger.info("[DefaultConsumer] Payload size: #{byte_size(message.payload)} bytes")
+      Logger.info("[DefaultConsumer] Publish time: #{message.publish_time}")
 
-      # Pretty print first 100 bytes of payload if it's text-like
       preview = binary_preview(message.payload)
 
-      if preview do
-        Logger.info("[DefaultCallback] Payload preview: #{preview}")
-      end
+      Logger.info("[DefaultConsumer] Payload preview: #{preview}")
 
-      # Always acknowledge
       :ok
     end
 
@@ -46,7 +41,7 @@ defmodule Pulsar.Consumer do
 
   def start_link(conn, topic, type, name, callback \\ nil) do
     # Use default callback if none provided
-    callback = callback || DefaultCallback
+    callback = callback || DefaultConsumer
 
     # TODO: support other subscription options
     args = [
