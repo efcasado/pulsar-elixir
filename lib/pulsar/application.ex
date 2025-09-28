@@ -56,7 +56,7 @@ defmodule Pulsar.Application do
         topic = Keyword.fetch!(consumer_opts, :topic)
         subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
         subscription_type = Keyword.fetch!(consumer_opts, :subscription_type)
-        callback_module = Keyword.get(consumer_opts, :callback, Pulsar.Consumer.DefaultConsumer)
+        callback_module = Keyword.fetch!(consumer_opts, :callback)
 
         %{
           id: {:consumer, consumer_name},
