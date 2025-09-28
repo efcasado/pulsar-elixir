@@ -52,8 +52,7 @@ defmodule Pulsar.Consumer do
     :consumer_id,
     :callback_module,
     :broker_pid,
-    :broker_url,
-    :state
+    :broker_url
   ]
 
   @type t :: %__MODULE__{
@@ -62,9 +61,8 @@ defmodule Pulsar.Consumer do
           subscription_type: String.t(),
           consumer_id: integer(),
           callback_module: module(),
-          broker_pid: pid() | nil,
-          broker_url: String.t() | nil,
-          state: :discovering | :connecting | :subscribed
+          broker_pid: pid(),
+          broker_url: String.t()
         }
 
   ## Public API
@@ -100,13 +98,6 @@ defmodule Pulsar.Consumer do
     GenServer.call(consumer, {:ack, message_id}, timeout)
   end
 
-  @doc """
-  Gets the current state of the consumer.
-  """
-  def get_state(consumer) do
-    GenServer.call(consumer, :get_state)
-  end
-
   ## GenServer Callbacks
 
   @impl true
@@ -119,125 +110,60 @@ defmodule Pulsar.Consumer do
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
-
-    state = %__MODULE__{
-      topic: topic,
-      subscription_name: subscription_name,
-      subscription_type: subscription_type,
-      consumer_id: consumer_id,
-      callback_module: callback_module,
-      broker_pid: nil,
-      broker_url: nil,
-      state: :discovering
-    }
-
     Logger.info("Starting consumer for topic #{topic}")
 
-    # Start service discovery
-    send(self(), :discover_broker)
+    with {:ok, discovery_broker_pid} <- get_random_broker(),
+         {:ok, lookup_result} <- Pulsar.Broker.lookup_topic(discovery_broker_pid, topic),
+         broker_url <- get_broker_url(lookup_result),
+         {:ok, broker_pid} <- Pulsar.start_broker(broker_url, get_broker_opts()),
+         :ok <- Pulsar.Broker.register_consumer(broker_pid, consumer_id, self()),
+         {:ok, _response} <-
+           subscribe_to_topic(
+             broker_pid,
+             topic,
+             subscription_name,
+             subscription_type,
+             consumer_id
+           ),
+         :ok <- send_initial_flow(broker_pid, consumer_id) do
+      Logger.info("Successfully subscribed to #{topic}")
 
-    {:ok, state}
+      state = %__MODULE__{
+        topic: topic,
+        subscription_name: subscription_name,
+        subscription_type: subscription_type,
+        consumer_id: consumer_id,
+        callback_module: callback_module,
+        broker_pid: broker_pid,
+        broker_url: broker_url
+      }
+
+      {:ok, state}
+    else
+      {:error, :no_brokers_available} ->
+        Logger.error("No brokers available for service discovery")
+        {:stop, :no_brokers_available}
+
+      {:error, reason} ->
+        Logger.error("Consumer initialization failed: #{inspect(reason)}")
+        {:stop, {:initialization_failed, reason}}
+    end
   end
 
   @impl true
   def handle_call({:ack, message_id}, _from, state) do
-    case state.broker_pid do
-      nil ->
-        {:reply, {:error, :no_broker}, state}
+    ack_command = %Binary.CommandAck{
+      consumer_id: state.consumer_id,
+      ack_type: :Individual,
+      message_id: [message_id]
+    }
 
-      broker_pid ->
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: [message_id]
-        }
+    case Pulsar.Broker.send_command(state.broker_pid, ack_command) do
+      :ok ->
+        {:reply, :ok, state}
 
-        case Pulsar.Broker.send_command(broker_pid, ack_command) do
-          :ok ->
-            {:reply, :ok, state}
-
-          error ->
-            {:reply, error, state}
-        end
-    end
-  end
-
-  @impl true
-  def handle_call(:get_state, _from, state) do
-    {:reply, state.state, state}
-  end
-
-  @impl true
-  def handle_info(:discover_broker, state) do
-    # Use any available broker for service discovery
-    case get_random_broker() do
-      {:ok, broker_pid} ->
-        # Perform service discovery
-        case Pulsar.Broker.lookup_topic(broker_pid, state.topic) do
-          {:ok, %{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}} ->
-            broker_url = service_url_tls || service_url
-            send(self(), {:connect_to_broker, broker_url})
-            {:noreply, %{state | state: :connecting}}
-
-          {:error, reason} ->
-            Logger.error("Topic lookup failed: #{inspect(reason)}")
-            schedule_retry(:discover_broker, 5000)
-            {:noreply, state}
-        end
-
-      {:error, :no_brokers_available} ->
-        Logger.error("No brokers available for service discovery")
-        schedule_retry(:discover_broker, 5000)
-        {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:connect_to_broker, broker_url}, state) do
-    case Pulsar.start_broker(broker_url, get_broker_opts()) do
-      {:ok, broker_pid} ->
-        # Register with the broker
-        :ok = Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self())
-
-        # Subscribe to the topic
-        subscribe_command = %Binary.CommandSubscribe{
-          topic: state.topic,
-          subscription: state.subscription_name,
-          subType: state.subscription_type,
-          consumer_id: state.consumer_id
-        }
-
-        case Pulsar.Broker.send_request(broker_pid, subscribe_command) do
-          {:ok, _response} ->
-            Logger.info("Successfully subscribed to #{state.topic}")
-
-            # Send initial flow command
-            flow_command = %Binary.CommandFlow{
-              consumer_id: state.consumer_id,
-              messagePermits: 100
-            }
-
-            Pulsar.Broker.send_command(broker_pid, flow_command)
-
-            new_state = %{
-              state
-              | broker_pid: broker_pid,
-                broker_url: broker_url,
-                state: :subscribed
-            }
-
-            {:noreply, new_state}
-
-          {:error, reason} ->
-            Logger.error("Subscription failed: #{inspect(reason)}")
-            schedule_retry({:connect_to_broker, broker_url}, 5000)
-            {:noreply, state}
-        end
-
-      {:error, reason} ->
-        Logger.error("Failed to connect to broker #{broker_url}: #{inspect(reason)}")
-        schedule_retry({:connect_to_broker, broker_url}, 5000)
-        {:noreply, state}
+      error ->
+        {:reply, error, state}
     end
   end
 
@@ -276,9 +202,7 @@ defmodule Pulsar.Consumer do
           message_id: [message_id]
         }
 
-        if state.broker_pid do
-          Pulsar.Broker.send_command(state.broker_pid, ack_command)
-        end
+        Pulsar.Broker.send_command(state.broker_pid, ack_command)
 
         # Request more messages
         flow_command = %Binary.CommandFlow{
@@ -286,9 +210,7 @@ defmodule Pulsar.Consumer do
           messagePermits: 1
         }
 
-        if state.broker_pid do
-          Pulsar.Broker.send_command(state.broker_pid, flow_command)
-        end
+        Pulsar.Broker.send_command(state.broker_pid, flow_command)
 
       {:error, reason} ->
         Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
@@ -310,8 +232,28 @@ defmodule Pulsar.Consumer do
     ]
   end
 
-  defp schedule_retry(message, delay) do
-    Process.send_after(self(), message, delay)
+  defp get_broker_url(%{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}) do
+    service_url_tls || service_url
+  end
+
+  defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id) do
+    subscribe_command = %Binary.CommandSubscribe{
+      topic: topic,
+      subscription: subscription_name,
+      subType: subscription_type,
+      consumer_id: consumer_id
+    }
+
+    Pulsar.Broker.send_request(broker_pid, subscribe_command)
+  end
+
+  defp send_initial_flow(broker_pid, consumer_id) do
+    flow_command = %Binary.CommandFlow{
+      consumer_id: consumer_id,
+      messagePermits: 100
+    }
+
+    Pulsar.Broker.send_command(broker_pid, flow_command)
   end
 
   defp get_random_broker do
