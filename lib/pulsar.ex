@@ -31,8 +31,9 @@ defmodule Pulsar do
   ## Broker Management
 
   @doc """
-  Starts a broker connection (idempotent).
+  Starts a broker connection with default options (idempotent).
 
+  Uses sensible defaults for socket options, connection timeout, and authentication.
   If a broker for the given URL already exists, returns the existing broker.
   Otherwise, starts a new broker connection.
 
@@ -46,12 +47,30 @@ defmodule Pulsar do
       # Safe to call again - returns existing broker
       iex> Pulsar.start_broker("pulsar://localhost:6650")
       {:ok, #PID<0.123.0>}
-      
+  """
+  @spec start_broker(String.t()) :: {:ok, pid()} | {:error, term()}
+  def start_broker(broker_url) do
+    start_broker(broker_url, default_broker_opts())
+  end
+
+  @doc """
+  Starts a broker connection with custom options (idempotent).
+
+  If a broker for the given URL already exists, returns the existing broker.
+  Otherwise, starts a new broker connection with the provided options.
+
+  Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
+
+  ## Examples
+
       iex> Pulsar.start_broker("pulsar://localhost:6650", socket_opts: [verify: :none])
+      {:ok, #PID<0.123.0>}
+      
+      iex> Pulsar.start_broker("pulsar://localhost:6650", conn_timeout: 10_000)
       {:ok, #PID<0.123.0>}
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def start_broker(broker_url, opts \\ []) do
+  def start_broker(broker_url, opts) do
     case lookup_broker(broker_url) do
       {:ok, broker_pid} ->
         {:ok, broker_pid}
@@ -153,6 +172,14 @@ defmodule Pulsar do
   end
 
   ## Private Functions
+
+  defp default_broker_opts do
+    [
+      socket_opts: [],
+      conn_timeout: 5_000,
+      auth: []
+    ]
+  end
 
   defp do_start_broker(broker_url, opts) do
     broker_key = broker_key(broker_url)

@@ -115,7 +115,7 @@ defmodule Pulsar.Consumer do
     with {:ok, discovery_broker_pid} <- get_random_broker(),
          {:ok, lookup_result} <- Pulsar.Broker.lookup_topic(discovery_broker_pid, topic),
          broker_url <- get_broker_url(lookup_result),
-         {:ok, broker_pid} <- Pulsar.start_broker(broker_url, get_broker_opts()),
+         {:ok, broker_pid} <- Pulsar.start_broker(broker_url),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, consumer_id, self()),
          {:ok, _response} <-
            subscribe_to_topic(
@@ -223,14 +223,6 @@ defmodule Pulsar.Consumer do
   end
 
   ## Private Functions
-
-  defp get_broker_opts do
-    [
-      socket_opts: [],
-      conn_timeout: 5_000,
-      auth: []
-    ]
-  end
 
   defp get_broker_url(%{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}) do
     service_url_tls || service_url
