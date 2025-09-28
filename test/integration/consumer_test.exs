@@ -63,12 +63,12 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
-      # Start a broker directly for service discovery
-      {:ok, broker_pid} = Pulsar.Broker.start_link(@pulsar_url, [])
+      # Start a broker using the idempotent Pulsar API
+      {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
 
-      # Start consumer with explicit parameters
+      # Start consumer using the Pulsar API
       {:ok, consumer_pid} =
-        Pulsar.Consumer.start_link(
+        Pulsar.start_consumer(
           @pulsar_url,
           @test_topic,
           @test_subscription <> "-e2e",
@@ -143,6 +143,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       # Cleanup
       Process.exit(consumer_pid, :normal)
+      # Could also use: Pulsar.stop_broker(@pulsar_url)
       Process.exit(broker_pid, :normal)
     end
   end
