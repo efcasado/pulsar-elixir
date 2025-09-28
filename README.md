@@ -26,7 +26,7 @@ config :pulsar,
         issuer_url: "<YOUR-OAUTH2-ISSUER-URL>",
         audience: "<YOUR-OAUTH2-AUDIENCE>"
     ]
-  ]
+  ],
   consumers: [
     my_consumer: [
         conn: :foo,
