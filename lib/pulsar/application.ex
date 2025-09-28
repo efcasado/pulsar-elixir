@@ -16,6 +16,9 @@ defmodule Pulsar.Application do
         # DynamicSupervisor for broker processes
         {DynamicSupervisor, strategy: :one_for_one, name: Pulsar.BrokerSupervisor},
 
+        # DynamicSupervisor for consumer processes (started via API)
+        {DynamicSupervisor, strategy: :one_for_one, name: Pulsar.ConsumerSupervisor},
+
         # Bootstrap broker (if configured)
         bootstrap_broker_spec(bootstrap_host),
 
