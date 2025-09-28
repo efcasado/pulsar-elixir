@@ -15,34 +15,22 @@ config :pulsar,
   client_version: "My Pulsar Client v1.0.0",
   protocol_version: 21,
   ping_interval: 60_000,
-  connections: [
-    foo: [
-      host: "pulsar://localhost:6650"
-    ],
-    bar: [
-      host: "pulsar+ssl://localhost:6651",
-      socket_opts: [verify: :none],
-      conn_timeout: 5_000
-    ],
-    baz: [
-      host: "pulsar+ssl://localhost:6651",
-      socket_opts: [verify: :verify_none],
-      conn_timeout: 5_000,
-      auth: [
-        type: :oauth2,
-        settings: [
-          client_id: "<YOUR-OAUTH2-CLIENT-ID>",
-          client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
-          issuer_url: "<YOUR-OAUTH2-ISSUER-URL>",
-          audience: "<YOUR-OAUTH2-AUDIENCE>"
-        ]
-      ]
+  host: "pulsar://localhost:6650",
+  socket_opts: [verify: :none],
+  conn_timeout: 5_000,
+  auth: [
+    type: :oauth2,
+    settings: [
+        client_id: "<YOUR-OAUTH2-CLIENT-ID>",
+        client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
+        issuer_url: "<YOUR-OAUTH2-ISSUER-URL>",
+        audience: "<YOUR-OAUTH2-AUDIENCE>"
     ]
-  ],
+  ]
   consumers: [
     my_consumer: [
         conn: :foo,
-        module: MyApp.MyConsumer,
+        callback: MyApp.MyConsumer,
         subscription_name: "my-app-my-consumer-subscription",
         subscription_type: "Exclusive",
         topic: "persistent://my-tenant/my-namespace/my-topic"
