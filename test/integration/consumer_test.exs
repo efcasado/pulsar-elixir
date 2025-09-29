@@ -9,7 +9,7 @@ defmodule Pulsar.Integration.ConsumerTest do
   @test_subscription "integration-test-subscription"
 
   # Test callback to collect received messages
-  defmodule TestCallback do
+  defmodule DummyConsumer do
     def start_link do
       Agent.start_link(fn -> [] end, name: __MODULE__)
     end
@@ -40,7 +40,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     TestHelper.start_pulsar()
 
     # Start test callback agent
-    {:ok, _pid} = TestCallback.start_link()
+    {:ok, _pid} = DummyConsumer.start_link()
 
     # Cleanup function
     on_exit(fn ->
@@ -52,7 +52,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   setup do
     # Clear messages before each test
-    TestCallback.clear_messages()
+    DummyConsumer.clear_messages()
 
     # Trap exit signals to handle process crashes in tests
     original_trap_exit = Process.flag(:trap_exit, true)
@@ -76,7 +76,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           @test_topic,
           @test_subscription <> "-e2e",
           :Shared,
-          TestCallback
+          DummyConsumer
         )
 
       # Give consumer time to subscribe
@@ -90,8 +90,8 @@ defmodule Pulsar.Integration.ConsumerTest do
       Process.sleep(3000)
 
       # Verify messages were received
-      received_messages = TestCallback.get_messages()
-      message_count = TestCallback.count_messages()
+      received_messages = DummyConsumer.get_messages()
+      message_count = DummyConsumer.count_messages()
 
       Logger.info("Received #{message_count} messages")
 
@@ -125,7 +125,7 @@ defmodule Pulsar.Integration.ConsumerTest do
       {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
 
       {:ok, consumer_pid} =
-        Pulsar.start_consumer(@test_topic, @test_subscription <> "-crash", :Shared, TestCallback)
+        Pulsar.start_consumer(@test_topic, @test_subscription <> "-crash", :Shared, DummyConsumer)
 
       # Wait for consumer to connect and check it's registered
       Process.sleep(2000)
