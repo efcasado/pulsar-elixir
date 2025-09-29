@@ -1,6 +1,7 @@
 defmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
   require Logger
+  alias Pulsar.TestHelper
 
   @moduletag :integration
   @pulsar_url "pulsar://localhost:6650"
@@ -35,21 +36,15 @@ defmodule Pulsar.Integration.ConsumerTest do
   end
 
   setup_all do
-    # Start Docker Compose for Pulsar
-    Logger.info("Starting Pulsar with Docker Compose...")
-    {_, 0} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)
-
-    # Wait for Pulsar to be ready
-    Logger.info("Waiting for Pulsar to be ready...")
-    wait_for_pulsar()
+    # Start Pulsar using test helper
+    TestHelper.start_pulsar()
 
     # Start test callback agent
     {:ok, _pid} = TestCallback.start_link()
 
     # Cleanup function
     on_exit(fn ->
-      Logger.info("Stopping Pulsar...")
-      System.cmd("docker", ["compose", "down"], stderr_to_stdout: true)
+      TestHelper.stop_pulsar()
     end)
 
     :ok
@@ -87,39 +82,9 @@ defmodule Pulsar.Integration.ConsumerTest do
       # Give consumer time to subscribe
       Process.sleep(3000)
 
-      # Produce test messages using pulsar-client in Docker container
-      test_messages = [
-        "Test message 1: #{:os.system_time(:millisecond)}",
-        "Test message 2: #{:os.system_time(:millisecond) + 1}",
-        "Test message 3: #{:os.system_time(:millisecond) + 2}"
-      ]
-
-      # Send each message
-      Enum.each(test_messages, fn message ->
-        {output, exit_code} =
-          System.cmd(
-            "docker",
-            [
-              "exec",
-              "pulsar",
-              "bin/pulsar-client",
-              "produce",
-              @test_topic,
-              "-m",
-              message
-            ],
-            stderr_to_stdout: true
-          )
-
-        Logger.info("Produced message: #{message}")
-
-        if exit_code != 0 do
-          Logger.error("Failed to produce message: #{output}")
-        end
-
-        # Small delay between messages
-        Process.sleep(100)
-      end)
+      # Generate and produce test messages using test helper
+      test_messages = TestHelper.generate_test_messages(3)
+      TestHelper.produce_messages(@test_topic, test_messages)
 
       # Give consumer time to process messages
       Process.sleep(3000)
@@ -193,65 +158,5 @@ defmodule Pulsar.Integration.ConsumerTest do
       assert map_size(consumers_after) >= 1,
              "Expected at least 1 consumer to be re-registered after crash"
     end
-  end
-
-  # Helper functions
-  defp wait_for_pulsar(retries \\ 30) do
-    case System.cmd("curl", ["-f", "http://localhost:8080/admin/v2/brokers/health"],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} ->
-        Logger.info("Pulsar is ready!")
-        setup_pulsar_resources()
-        :ok
-
-      {_, _} when retries > 0 ->
-        Logger.info("Pulsar not ready yet, waiting... (#{retries} retries left)")
-        Process.sleep(2000)
-        wait_for_pulsar(retries - 1)
-
-      {output, _} ->
-        raise "Pulsar failed to start after 60 seconds. Output: #{output}"
-    end
-  end
-
-  defp setup_pulsar_resources do
-    Logger.info("Setting up Pulsar namespace and topic...")
-
-    # Create namespace (if it doesn't exist)
-    case System.cmd(
-           "curl",
-           [
-             "-X",
-             "PUT",
-             "-H",
-             "Content-Type: application/json",
-             "http://localhost:8080/admin/v2/namespaces/public/default",
-             "-d",
-             "{}"
-           ],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} -> Logger.info("Namespace created/verified")
-      {_, _} -> Logger.info("Namespace might already exist or creation failed")
-    end
-
-    # Create topic (topics are created automatically on first use in Pulsar,
-    # but we can pre-create it to ensure it exists)
-    case System.cmd(
-           "curl",
-           [
-             "-X",
-             "PUT",
-             "http://localhost:8080/admin/v2/persistent/public/default/integration-test-topic"
-           ],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} -> Logger.info("Topic created/verified")
-      {_, _} -> Logger.info("Topic might already exist or creation failed")
-    end
-
-    # Give a moment for the changes to propagate
-    Process.sleep(1000)
   end
 end
