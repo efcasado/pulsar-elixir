@@ -286,9 +286,7 @@ defmodule Pulsar.Broker do
       {:error, error} ->
         wait = next_backoff(broker)
 
-        Logger.error(
-          "Connection failed: #{apply(mod, :format_error, [error])}. Reconnecting in #{wait}ms."
-        )
+        Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
 
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %__MODULE__{broker | prev_backoff: wait}, actions}
