@@ -159,6 +159,16 @@ defmodule Pulsar do
   The consumer will be added to a DynamicSupervisor and will automatically
   restart if it crashes (e.g., when linked broker crashes).
 
+  ## Parameters
+
+  - `topic` - The topic to subscribe to
+  - `subscription_name` - Name of the subscription
+  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
+  - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
+  - `opts` - Additional options:
+    - `:init_args` - Arguments passed to callback module's init/1 function
+    - Other GenServer options
+
   ## Examples
 
       iex> Pulsar.start_consumer(
@@ -166,6 +176,16 @@ defmodule Pulsar do
       ...>   "my-subscription",
       ...>   :Exclusive,
       ...>   MyApp.MessageHandler
+      ...> )
+      {:ok, #PID<0.456.0>}
+
+      # With initialization arguments
+      iex> Pulsar.start_consumer(
+      ...>   "persistent://public/default/my-topic",
+      ...>   "my-subscription",
+      ...>   :Exclusive,
+      ...>   MyApp.MessageCounter,
+      ...>   init_args: [max_messages: 100]
       ...> )
       {:ok, #PID<0.456.0>}
   """
