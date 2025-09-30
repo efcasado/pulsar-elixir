@@ -8,51 +8,6 @@ defmodule Pulsar.Integration.ConnectionTest do
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
 
-  # Simple dummy consumer for connection tests
-  defmodule DummyConsumer do
-    @behaviour Pulsar.Consumer.Callback
-
-    def init(_opts) do
-      {:ok, %{messages: [], count: 0}}
-    end
-
-    def handle_message(message, state) do
-      new_state = %{
-        state
-        | messages: [message | state.messages],
-          count: state.count + 1
-      }
-
-      {:ok, new_state}
-    end
-
-    # Custom GenServer calls for testing
-    def handle_call(:get_messages, _from, state) do
-      {:reply, Enum.reverse(state.messages), state}
-    end
-
-    def handle_call(:count_messages, _from, state) do
-      {:reply, state.count, state}
-    end
-
-    def handle_cast(:clear_messages, _state) do
-      {:noreply, %{messages: [], count: 0}}
-    end
-
-    # Helper functions for testing (delegate to GenServer calls)
-    def get_messages(consumer_pid) do
-      GenServer.call(consumer_pid, :get_messages)
-    end
-
-    def clear_messages(consumer_pid) do
-      GenServer.cast(consumer_pid, :clear_messages)
-    end
-
-    def count_messages(consumer_pid) do
-      GenServer.call(consumer_pid, :count_messages)
-    end
-  end
-
   setup_all do
     # Start Pulsar using test helper
     TestHelper.start_pulsar()
@@ -83,7 +38,12 @@ defmodule Pulsar.Integration.ConnectionTest do
       {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
 
       {:ok, consumer_pid} =
-        Pulsar.start_consumer(@test_topic, @test_subscription <> "-crash", :Shared, DummyConsumer)
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-crash",
+          :Shared,
+          Pulsar.DummyConsumer
+        )
 
       # Wait for consumer to connect and check it's registered
       Process.sleep(2000)
