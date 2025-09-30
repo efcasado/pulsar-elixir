@@ -163,9 +163,10 @@ defmodule Pulsar do
 
   - `topic` - The topic to subscribe to
   - `subscription_name` - Name of the subscription
-  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
+  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared)
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
   - `opts` - Additional options:
+    - `:consumer_count` - Number of consumer processes to start (default: 1)
     - `:init_args` - Arguments passed to callback module's init/1 function
     - Other GenServer options
 
@@ -188,31 +189,39 @@ defmodule Pulsar do
       ...>   init_args: [max_messages: 100]
       ...> )
       {:ok, #PID<0.456.0>}
+
+      # With multiple consumers for shared processing
+      iex> Pulsar.start_consumer(
+      ...>   "persistent://public/default/my-topic",
+      ...>   "my-subscription",
+      ...>   :Key_Shared,
+      ...>   MyApp.MessageHandler,
+      ...>   consumer_count: 3
+      ...> )
+      {:ok, [#PID<0.456.0>, #PID<0.457.0>, #PID<0.458.0>]}
   """
   @spec start_consumer(String.t(), String.t(), atom(), module(), keyword()) ::
-          {:ok, pid()} | {:error, term()}
+          {:ok, pid()} | {:ok, [pid()]} | {:error, term()}
   def start_consumer(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
-    consumer_id = "#{topic}-#{subscription_name}-#{System.unique_integer([:positive])}"
+    {consumer_count, consumer_opts} = Keyword.pop(opts, :consumer_count, 1)
 
-    child_spec = %{
-      id: consumer_id,
-      start:
-        {Pulsar.Consumer, :start_link,
-         [topic, subscription_name, subscription_type, callback_module, opts]},
-      restart: :permanent
-    }
-
-    case DynamicSupervisor.start_child(@consumer_supervisor_name, child_spec) do
-      {:ok, consumer_pid} ->
-        Logger.info(
-          "Started supervised consumer #{consumer_id} with PID #{inspect(consumer_pid)}"
-        )
-
-        {:ok, consumer_pid}
-
-      {:error, reason} ->
-        Logger.error("Failed to start consumer #{consumer_id}: #{inspect(reason)}")
-        {:error, reason}
+    if consumer_count == 1 do
+      start_single_consumer(
+        topic,
+        subscription_name,
+        subscription_type,
+        callback_module,
+        consumer_opts
+      )
+    else
+      start_multiple_consumers(
+        topic,
+        subscription_name,
+        subscription_type,
+        callback_module,
+        consumer_count,
+        consumer_opts
+      )
     end
   end
 
@@ -257,5 +266,67 @@ defmodule Pulsar do
   defp broker_key(broker_url) do
     %URI{host: host, port: port} = URI.parse(broker_url)
     "#{host}:#{port}"
+  end
+
+  defp start_single_consumer(topic, subscription_name, subscription_type, callback_module, opts) do
+    consumer_id = "#{topic}-#{subscription_name}-#{System.unique_integer([:positive])}"
+
+    child_spec = %{
+      id: consumer_id,
+      start:
+        {Pulsar.Consumer, :start_link,
+         [topic, subscription_name, subscription_type, callback_module, opts]},
+      restart: :permanent
+    }
+
+    case DynamicSupervisor.start_child(@consumer_supervisor_name, child_spec) do
+      {:ok, consumer_pid} ->
+        Logger.info(
+          "Started supervised consumer #{consumer_id} with PID #{inspect(consumer_pid)}"
+        )
+
+        {:ok, consumer_pid}
+
+      {:error, reason} ->
+        Logger.error("Failed to start consumer #{consumer_id}: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp start_multiple_consumers(
+         topic,
+         subscription_name,
+         subscription_type,
+         callback_module,
+         count,
+         opts
+       ) do
+    Logger.info("Starting #{count} consumers for #{subscription_name}")
+
+    {pids, error} =
+      Enum.reduce_while(1..count, {[], nil}, fn _i, {acc_pids, _acc_error} ->
+        case start_single_consumer(
+               topic,
+               subscription_name,
+               subscription_type,
+               callback_module,
+               opts
+             ) do
+          {:ok, pid} ->
+            {:cont, {acc_pids ++ [pid], nil}}
+
+          {:error, reason} ->
+            Logger.error("Failed to start consumer for #{subscription_name}: #{inspect(reason)}")
+            {:halt, {acc_pids, reason}}
+        end
+      end)
+
+    if error do
+      Logger.error("Failed to start all #{count} consumers for #{subscription_name}")
+      {:error, :failed_to_start_consumers}
+    else
+      Logger.info("Successfully started #{count} consumers for #{subscription_name}")
+      {:ok, pids}
+    end
   end
 end

@@ -7,12 +7,18 @@ defmodule Pulsar.Integration.ConsumerTest do
   @pulsar_url "pulsar://localhost:6650"
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
+  @messages [
+    {"key1", "Message 1 for key1 - #{:os.system_time(:millisecond)}"},
+    {"key2", "Message 1 for key2 - #{:os.system_time(:millisecond)}"},
+    {"key1", "Message 2 for key1 - #{:os.system_time(:millisecond)}"},
+    {"key2", "Message 2 for key2 - #{:os.system_time(:millisecond)}"},
+    {"key3", "Message 1 for key3 - #{:os.system_time(:millisecond)}"},
+    {"key4", "Message 1 for key4 - #{:os.system_time(:millisecond)}"}
+  ]
 
   setup_all do
-    # Start Pulsar using test helper
     TestHelper.start_pulsar()
 
-    # Cleanup function
     on_exit(fn ->
       TestHelper.stop_pulsar()
     end)
@@ -21,12 +27,10 @@ defmodule Pulsar.Integration.ConsumerTest do
   end
 
   setup do
-    # Trap exit signals to handle process crashes in tests
-    original_trap_exit = Process.flag(:trap_exit, true)
+    {:ok, _broker_pid} = Pulsar.start_broker(@pulsar_url)
 
-    # Reset trap_exit flag after test
     on_exit(fn ->
-      Process.flag(:trap_exit, original_trap_exit)
+      Pulsar.stop_broker(@pulsar_url)
     end)
 
     :ok
@@ -34,10 +38,6 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
-      # Start a broker using the idempotent Pulsar API
-      {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
-
-      # Start consumer using the Pulsar API (no bootstrap broker needed)
       {:ok, consumer_pid} =
         Pulsar.start_consumer(
           @test_topic,
@@ -46,45 +46,141 @@ defmodule Pulsar.Integration.ConsumerTest do
           Pulsar.DummyConsumer
         )
 
-      # Give consumer time to subscribe
+      Process.sleep(3000)
+      TestHelper.produce_messages(@test_topic, @messages)
       Process.sleep(3000)
 
-      # Generate and produce test messages using test helper
-      test_messages = TestHelper.generate_test_messages(3)
-      TestHelper.produce_messages(@test_topic, test_messages)
-
-      # Give consumer time to process messages
-      Process.sleep(3000)
-
-      # Verify messages were received using the new API
-      received_messages = Pulsar.DummyConsumer.get_messages(consumer_pid)
       message_count = Pulsar.DummyConsumer.count_messages(consumer_pid)
 
-      Logger.info("Received #{message_count} messages")
+      assert message_count == Enum.count(@messages),
+             "Expected to receive as many messages as were produced"
+    end
 
-      # Assert we received at least some messages (may not be all due to timing)
-      assert message_count > 0, "Expected to receive at least 1 message, got #{message_count}"
+    test "Key_Shared subscription with multiple consumers" do
+      {:ok, consumer_pids} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-key-shared",
+          :Key_Shared,
+          Pulsar.DummyConsumer,
+          consumer_count: 2
+        )
 
-      # Check that we received some of our test messages
-      received_payloads =
-        Enum.map(received_messages, fn msg ->
-          Map.get(msg, :payload, "") |> to_string()
-        end)
+      assert length(consumer_pids) == 2
+      [consumer1_pid, consumer2_pid] = consumer_pids
 
-      # At least one of our test messages should be received
-      assert Enum.any?(test_messages, fn test_msg ->
-               Enum.any?(received_payloads, fn payload ->
-                 String.contains?(payload, String.slice(test_msg, 0, 10))
-               end)
-             end),
-             "Expected to find at least one test message in received messages"
+      Process.sleep(3000)
+      TestHelper.produce_messages(@test_topic, @messages)
+      Process.sleep(3000)
 
-      Logger.info("Successfully produced and consumed messages!")
+      # Get messages from each consumer
+      consumer1_messages = Pulsar.DummyConsumer.get_messages(consumer1_pid)
+      consumer2_messages = Pulsar.DummyConsumer.get_messages(consumer2_pid)
 
-      # Cleanup
-      Process.exit(consumer_pid, :normal)
+      consumer1_count = length(consumer1_messages)
+      consumer2_count = length(consumer2_messages)
+      total_messages = consumer1_count + consumer2_count
 
-      Process.exit(broker_pid, :normal)
+      Logger.info("Consumer 1 received #{consumer1_count} messages")
+      Logger.info("Consumer 2 received #{consumer2_count} messages")
+      Logger.info("Total messages received: #{total_messages}")
+
+      # Extract partition keys from consumed messages
+      extract_keys = fn messages ->
+        messages
+        |> Enum.map(& &1.partition_key)
+        |> Enum.filter(&(&1 != nil))
+        |> MapSet.new()
+      end
+
+      consumer1_keys = extract_keys.(consumer1_messages)
+      consumer2_keys = extract_keys.(consumer2_messages)
+
+      Logger.info("Consumer 1 keys: #{inspect(MapSet.to_list(consumer1_keys))}")
+      Logger.info("Consumer 2 keys: #{inspect(MapSet.to_list(consumer2_keys))}")
+
+      # With 4 different keys and Key_Shared mode, both consumers should receive messages
+      # Key_Shared distributes messages based on key hashing, so different keys should
+      # go to different consumers
+      assert consumer1_count > 0, "Consumer 1 should receive at least one message"
+      assert consumer2_count > 0, "Consumer 2 should receive at least one message"
+
+      # Verify key partitioning - no key should be consumed by both consumers
+      key_overlap = MapSet.intersection(consumer1_keys, consumer2_keys)
+
+      assert MapSet.size(key_overlap) == 0,
+             "Keys should be partitioned between consumers, but found overlap: #{inspect(MapSet.to_list(key_overlap))}"
+    end
+
+    test "Shared subscription with multiple consumers (round-robin)" do
+      {:ok, consumer_pids} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-shared",
+          :Shared,
+          Pulsar.DummyConsumer,
+          consumer_count: 2
+        )
+
+      assert length(consumer_pids) == 2
+      [consumer1_pid, consumer2_pid] = consumer_pids
+
+      Process.sleep(3000)
+      TestHelper.produce_messages(@test_topic, @messages)
+      Process.sleep(5000)
+
+      # Check message distribution across consumers
+      consumer1_count = Pulsar.DummyConsumer.count_messages(consumer1_pid)
+      consumer2_count = Pulsar.DummyConsumer.count_messages(consumer2_pid)
+      total_messages = consumer1_count + consumer2_count
+
+      Logger.info("Consumer 1 received #{consumer1_count} messages")
+      Logger.info("Consumer 2 received #{consumer2_count} messages")
+      Logger.info("Total messages received: #{total_messages}")
+
+      # In Shared mode with round-robin distribution, both consumers should receive messages
+      # This is more predictable than Key_Shared since it's not based on key hashing
+      assert consumer1_count > 0, "Consumer 1 should receive at least one message"
+      assert consumer2_count > 0, "Consumer 2 should receive at least one message"
+    end
+
+    test "Failover subscription with multiple consumers" do
+      {:ok, consumer_pids} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-failover",
+          :Failover,
+          Pulsar.DummyConsumer,
+          consumer_count: 2
+        )
+
+      assert length(consumer_pids) == 2
+      [consumer1_pid, consumer2_pid] = consumer_pids
+
+      Process.sleep(3000)
+      TestHelper.produce_messages(@test_topic, @messages)
+      Process.sleep(3000)
+
+      # Get messages from each consumer
+      consumer1_messages = Pulsar.DummyConsumer.get_messages(consumer1_pid)
+      consumer2_messages = Pulsar.DummyConsumer.get_messages(consumer2_pid)
+
+      consumer1_count = length(consumer1_messages)
+      consumer2_count = length(consumer2_messages)
+      total_messages = consumer1_count + consumer2_count
+
+      Logger.info("Consumer 1 received #{consumer1_count} messages")
+      Logger.info("Consumer 2 received #{consumer2_count} messages")
+      Logger.info("Total messages received: #{total_messages}")
+
+      # In Failover mode, only one consumer (the active one) should receive all messages
+      # The other consumer should be in standby mode and receive no messages
+      assert total_messages == Enum.count(@messages), "All messages should be consumed"
+
+      # One consumer should receive all messages, the other should receive none
+      assert (consumer1_count == Enum.count(@messages) and consumer2_count == 0) or
+               (consumer1_count == 0 and consumer2_count == Enum.count(@messages)),
+             "In Failover mode, only one consumer should be active and receive all messages. Got consumer1: #{consumer1_count}, consumer2: #{consumer2_count}"
     end
   end
 end

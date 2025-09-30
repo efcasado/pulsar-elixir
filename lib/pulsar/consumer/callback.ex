@@ -84,6 +84,26 @@ defmodule Pulsar.Consumer.Callback do
       # Reset state
       GenServer.cast(consumer_pid, :reset)
 
+  ## Multiple Consumers
+
+  For shared or key-shared subscriptions, you can start multiple consumer processes
+  to increase throughput:
+
+      # Start 3 consumers for shared processing
+      {:ok, consumer_pids} = Pulsar.start_consumer(
+        topic,
+        subscription,
+        :Key_Shared,
+        MyCallback,
+        consumer_count: 3
+      )
+      
+      # Each consumer maintains its own independent state
+      Enum.each(consumer_pids, fn consumer_pid ->
+        count = GenServer.call(consumer_pid, :get_count)
+        IO.puts("Consumer \#{inspect(consumer_pid)} processed \#{count} messages")
+      end)
+
   ## Return Values
 
   ### `init/1`
