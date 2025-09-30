@@ -32,49 +32,51 @@ defmodule Pulsar.TestHelper do
   @doc """
   Produces a message to a topic using the pulsar-client in the Docker container.
   """
-  def produce_message(topic, message) do
-    {output, exit_code} =
-      System.cmd(
-        "docker",
-        [
-          "exec",
-          "pulsar",
-          "bin/pulsar-client",
-          "produce",
-          topic,
-          "-m",
-          message
-        ],
-        stderr_to_stdout: true
-      )
+  def produce_message(topic, message, key \\ nil) do
+    base_args = [
+      "exec",
+      "pulsar",
+      "bin/pulsar-client",
+      "produce",
+      topic,
+      "-m",
+      message
+    ]
+
+    args =
+      if key do
+        base_args ++ ["-k", key]
+      else
+        base_args
+      end
+
+    {output, exit_code} = System.cmd("docker", args, stderr_to_stdout: true)
 
     if exit_code != 0 do
       Logger.error("Failed to produce message: #{output}")
       {:error, output}
     else
-      Logger.debug("Produced message: #{message}")
+      Logger.debug("Produced message: #{message}#{if key, do: " (key: #{key})", else: ""}")
       :ok
     end
   end
 
   @doc """
   Produces multiple messages to a topic with optional delay between messages.
+
+  Messages can be:
+  - Simple strings: ["message1", "message2"]
+  - Tuples with keys: [{"key1", "message1"}, {"key2", "message2"}]
   """
   def produce_messages(topic, messages, delay_ms \\ 100) do
-    Enum.each(messages, fn message ->
-      produce_message(topic, message)
-      if delay_ms > 0, do: Process.sleep(delay_ms)
-    end)
-  end
+    Enum.each(messages, fn
+      {key, message} ->
+        produce_message(topic, message, key)
+        if delay_ms > 0, do: Process.sleep(delay_ms)
 
-  @doc """
-  Generates test messages with timestamps for uniqueness.
-  """
-  def generate_test_messages(count \\ 3, prefix \\ "Test message") do
-    base_time = :os.system_time(:millisecond)
-
-    Enum.map(1..count, fn i ->
-      "#{prefix} #{i}: #{base_time + i - 1}"
+      message when is_binary(message) ->
+        produce_message(topic, message)
+        if delay_ms > 0, do: Process.sleep(delay_ms)
     end)
   end
 

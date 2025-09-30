@@ -21,22 +21,24 @@ defmodule Pulsar.Integration.ConnectionTest do
   end
 
   setup do
+    # Start a broker for each test
+    {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
+
     # Trap exit signals to handle process crashes in tests
     original_trap_exit = Process.flag(:trap_exit, true)
 
-    # Reset trap_exit flag after test
+    # Cleanup after test
     on_exit(fn ->
+      # Stop broker using Pulsar API - this will also stop linked consumers
+      Pulsar.stop_broker(@pulsar_url)
       Process.flag(:trap_exit, original_trap_exit)
     end)
 
-    :ok
+    {:ok, broker_pid: broker_pid}
   end
 
   describe "Connection Reliability" do
-    test "broker crash recovery" do
-      # Start broker and consumer
-      {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
-
+    test "broker crash recovery", %{broker_pid: broker_pid} do
       {:ok, consumer_pid} =
         Pulsar.start_consumer(
           @test_topic,
