@@ -8,51 +8,6 @@ defmodule Pulsar.Integration.ConsumerTest do
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
 
-  # Test callback module with extensible API
-  defmodule DummyConsumer do
-    @behaviour Pulsar.Consumer.Callback
-
-    def init(_opts) do
-      {:ok, %{messages: [], count: 0}}
-    end
-
-    def handle_message(message, state) do
-      new_state = %{
-        state
-        | messages: [message | state.messages],
-          count: state.count + 1
-      }
-
-      {:ok, new_state}
-    end
-
-    # Custom GenServer calls for testing
-    def handle_call(:get_messages, _from, state) do
-      {:reply, Enum.reverse(state.messages), state}
-    end
-
-    def handle_call(:count_messages, _from, state) do
-      {:reply, state.count, state}
-    end
-
-    def handle_cast(:clear_messages, _state) do
-      {:noreply, %{messages: [], count: 0}}
-    end
-
-    # Helper functions for testing (delegate to GenServer calls)
-    def get_messages(consumer_pid) do
-      GenServer.call(consumer_pid, :get_messages)
-    end
-
-    def clear_messages(consumer_pid) do
-      GenServer.cast(consumer_pid, :clear_messages)
-    end
-
-    def count_messages(consumer_pid) do
-      GenServer.call(consumer_pid, :count_messages)
-    end
-  end
-
   setup_all do
     # Start Pulsar using test helper
     TestHelper.start_pulsar()
@@ -88,7 +43,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           @test_topic,
           @test_subscription <> "-e2e",
           :Shared,
-          DummyConsumer
+          Pulsar.DummyConsumer
         )
 
       # Give consumer time to subscribe
@@ -102,8 +57,8 @@ defmodule Pulsar.Integration.ConsumerTest do
       Process.sleep(3000)
 
       # Verify messages were received using the new API
-      received_messages = DummyConsumer.get_messages(consumer_pid)
-      message_count = DummyConsumer.count_messages(consumer_pid)
+      received_messages = Pulsar.DummyConsumer.get_messages(consumer_pid)
+      message_count = Pulsar.DummyConsumer.count_messages(consumer_pid)
 
       Logger.info("Received #{message_count} messages")
 
