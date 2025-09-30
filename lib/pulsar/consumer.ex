@@ -7,37 +7,10 @@ defmodule Pulsar.Consumer do
 
   ## Callback Module
 
-  The consumer requires a callback module that implements the `handle_message/1` function.
-  The callback should return `:ok` for successful processing (which triggers automatic
-  acknowledgment) or `{:error, reason}` to indicate processing failure.
+  The consumer requires a callback module that implements the `Pulsar.Consumer.Callback`
+  behaviour, providing stateful message processing capabilities.
 
-  ### Example Callback Module
-
-      defmodule MyApp.MessageHandler do
-        require Logger
-        
-        alias Pulsar.Protocol.Binary.Pulsar.Proto
-
-        @type message :: %{
-          id: {integer(), integer()},
-          metadata: Proto.MessageMetadata.t(),
-          payload: binary(),
-          partition_key: String.t() | nil,
-          producer_name: String.t(),
-          publish_time: integer()
-        }
-
-        @spec handle_message(message()) :: :ok | {:error, term()}
-        def handle_message(message) do
-          Logger.info("Received message from: \#{message.producer_name}")
-          Logger.info("Payload: \#{message.payload}")
-          
-          # Process your message here
-          # Return :ok to acknowledge, {:error, reason} to not acknowledge
-          :ok
-        end
-      end
-
+  See `Pulsar.Consumer.Callback` for detailed documentation and examples.
   """
 
   use GenServer
@@ -51,6 +24,7 @@ defmodule Pulsar.Consumer do
     :subscription_type,
     :consumer_id,
     :callback_module,
+    :callback_state,
     :broker_pid,
     :broker_url
   ]
@@ -61,6 +35,7 @@ defmodule Pulsar.Consumer do
           subscription_type: String.t(),
           consumer_id: integer(),
           callback_module: module(),
+          callback_state: term(),
           broker_pid: pid(),
           broker_url: String.t()
         }
@@ -75,20 +50,25 @@ defmodule Pulsar.Consumer do
   - `topic` - The topic to subscribe to
   - `subscription_name` - Name of the subscription
   - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
-  - `callback_module` - Module that implements handle_message/1
-  - `opts` - Additional GenServer options
+  - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
+  - `opts` - Additional options:
+    - `:init_args` - Arguments passed to callback module's init/1 function
+    - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
   """
   def start_link(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
+    {init_args, genserver_opts} = Keyword.pop(opts, :init_args, [])
+
     consumer_config = %{
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
-      callback_module: callback_module
+      callback_module: callback_module,
+      init_args: init_args
     }
 
-    GenServer.start_link(__MODULE__, consumer_config, opts)
+    GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
   end
 
   ## GenServer Callbacks
@@ -99,11 +79,23 @@ defmodule Pulsar.Consumer do
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
-      callback_module: callback_module
+      callback_module: callback_module,
+      init_args: init_args
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
     Logger.info("Starting consumer for topic #{topic}")
+
+    # Initialize callback module state
+    callback_state =
+      case apply(callback_module, :init, [init_args]) do
+        {:ok, state} ->
+          state
+
+        {:error, reason} ->
+          Logger.error("Callback initialization failed: #{inspect(reason)}")
+          raise "Callback initialization failed: #{inspect(reason)}"
+      end
 
     with {:ok, discovery_broker_pid} <- get_random_broker(),
          {:ok, lookup_result} <- Pulsar.Broker.lookup_topic(discovery_broker_pid, topic),
@@ -127,6 +119,7 @@ defmodule Pulsar.Consumer do
         subscription_type: subscription_type,
         consumer_id: consumer_id,
         callback_module: callback_module,
+        callback_state: callback_state,
         broker_pid: broker_pid,
         broker_url: broker_url
       }
@@ -158,19 +151,19 @@ defmodule Pulsar.Consumer do
       publish_time: metadata.publish_time
     }
 
-    # Call the user-provided callback
+    # Call the user-provided callback with current state
     result =
       try do
-        apply(state.callback_module, :handle_message, [message])
+        apply(state.callback_module, :handle_message, [message, state.callback_state])
       rescue
         error ->
           Logger.error("Error in callback: #{inspect(error)}")
-          {:error, error}
+          {:error, error, state.callback_state}
       end
 
-    # Handle acknowledgment based on callback result
+    # Handle acknowledgment and state updates based on callback result
     case result do
-      :ok ->
+      {:ok, new_callback_state} ->
         # Auto-acknowledge successful messages  
         ack_command = %Binary.CommandAck{
           consumer_id: state.consumer_id,
@@ -188,14 +181,134 @@ defmodule Pulsar.Consumer do
 
         Pulsar.Broker.send_command(state.broker_pid, flow_command)
 
-      {:error, reason} ->
-        Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
+        # Update state and continue
+        new_state = %{state | callback_state: new_callback_state}
+        {:noreply, new_state}
 
-      _ ->
-        Logger.warning("Unexpected callback result: #{inspect(result)}, not acknowledging")
+      {:error, reason, new_callback_state} ->
+        Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
+        # Update state but don't acknowledge
+        new_state = %{state | callback_state: new_callback_state}
+        {:noreply, new_state}
+
+      {:stop, new_callback_state} ->
+        # Acknowledge the message before stopping
+        ack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: :Individual,
+          message_id: [message_id]
+        }
+
+        Pulsar.Broker.send_command(state.broker_pid, ack_command)
+
+        # Update state and stop
+        new_state = %{state | callback_state: new_callback_state}
+        {:stop, :normal, new_state}
+
+      unexpected_result ->
+        Logger.warning(
+          "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  # Handle other info messages by delegating to callback module
+  @impl true
+  def handle_info(message, state) do
+    # Delegate to callback module if it implements handle_info
+    if function_exported?(state.callback_module, :handle_info, 2) do
+      case apply(state.callback_module, :handle_info, [message, state.callback_state]) do
+        {:noreply, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state}
+
+        {:noreply, new_callback_state, timeout_or_hibernate} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state, timeout_or_hibernate}
+
+        {:stop, reason, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:stop, reason, new_state}
+      end
+    else
+      # Default behavior - ignore unhandled info messages
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    # Call callback module's terminate function if it exists
+    if function_exported?(state.callback_module, :terminate, 2) do
+      try do
+        apply(state.callback_module, :terminate, [reason, state.callback_state])
+      rescue
+        error ->
+          Logger.warning("Error in callback terminate function: #{inspect(error)}")
+      end
     end
 
-    {:noreply, state}
+    :ok
+  end
+
+  @impl true
+  def handle_call(request, from, state) do
+    # Delegate to callback module if it implements handle_call
+    if function_exported?(state.callback_module, :handle_call, 3) do
+      case apply(state.callback_module, :handle_call, [request, from, state.callback_state]) do
+        {:reply, reply, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:reply, reply, new_state}
+
+        {:reply, reply, new_callback_state, timeout_or_hibernate} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:reply, reply, new_state, timeout_or_hibernate}
+
+        {:noreply, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state}
+
+        {:noreply, new_callback_state, timeout_or_hibernate} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state, timeout_or_hibernate}
+
+        {:stop, reason, reply, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:stop, reason, reply, new_state}
+
+        {:stop, reason, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:stop, reason, new_state}
+      end
+    else
+      # Default behavior - return error for unhandled calls
+      {:reply, {:error, :not_implemented}, state}
+    end
+  end
+
+  @impl true
+  def handle_cast(request, state) do
+    # Delegate to callback module if it implements handle_cast
+    if function_exported?(state.callback_module, :handle_cast, 2) do
+      case apply(state.callback_module, :handle_cast, [request, state.callback_state]) do
+        {:noreply, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state}
+
+        {:noreply, new_callback_state, timeout_or_hibernate} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:noreply, new_state, timeout_or_hibernate}
+
+        {:stop, reason, new_callback_state} ->
+          new_state = %{state | callback_state: new_callback_state}
+          {:stop, reason, new_state}
+      end
+    else
+      # Default behavior - ignore unhandled casts
+      {:noreply, state}
+    end
   end
 
   ## Private Functions

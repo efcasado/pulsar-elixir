@@ -8,39 +8,54 @@ defmodule Pulsar.Integration.ConsumerTest do
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
 
-  # Test callback to collect received messages
+  # Test callback module with extensible API
   defmodule DummyConsumer do
-    def start_link do
-      Agent.start_link(fn -> [] end, name: __MODULE__)
+    @behaviour Pulsar.Consumer.Callback
+
+    def init(_opts) do
+      {:ok, %{messages: [], count: 0}}
     end
 
-    def handle_message(message) do
-      Agent.update(__MODULE__, fn messages ->
-        [message | messages]
-      end)
+    def handle_message(message, state) do
+      new_state = %{
+        state
+        | messages: [message | state.messages],
+          count: state.count + 1
+      }
 
-      :ok
+      {:ok, new_state}
     end
 
-    def get_messages do
-      Agent.get(__MODULE__, &Enum.reverse/1)
+    # Custom GenServer calls for testing
+    def handle_call(:get_messages, _from, state) do
+      {:reply, Enum.reverse(state.messages), state}
     end
 
-    def clear_messages do
-      Agent.update(__MODULE__, fn _ -> [] end)
+    def handle_call(:count_messages, _from, state) do
+      {:reply, state.count, state}
     end
 
-    def count_messages do
-      Agent.get(__MODULE__, &length/1)
+    def handle_cast(:clear_messages, _state) do
+      {:noreply, %{messages: [], count: 0}}
+    end
+
+    # Helper functions for testing (delegate to GenServer calls)
+    def get_messages(consumer_pid) do
+      GenServer.call(consumer_pid, :get_messages)
+    end
+
+    def clear_messages(consumer_pid) do
+      GenServer.cast(consumer_pid, :clear_messages)
+    end
+
+    def count_messages(consumer_pid) do
+      GenServer.call(consumer_pid, :count_messages)
     end
   end
 
   setup_all do
     # Start Pulsar using test helper
     TestHelper.start_pulsar()
-
-    # Start test callback agent
-    {:ok, _pid} = DummyConsumer.start_link()
 
     # Cleanup function
     on_exit(fn ->
@@ -51,9 +66,6 @@ defmodule Pulsar.Integration.ConsumerTest do
   end
 
   setup do
-    # Clear messages before each test
-    DummyConsumer.clear_messages()
-
     # Trap exit signals to handle process crashes in tests
     original_trap_exit = Process.flag(:trap_exit, true)
 
@@ -89,9 +101,9 @@ defmodule Pulsar.Integration.ConsumerTest do
       # Give consumer time to process messages
       Process.sleep(3000)
 
-      # Verify messages were received
-      received_messages = DummyConsumer.get_messages()
-      message_count = DummyConsumer.count_messages()
+      # Verify messages were received using the new API
+      received_messages = DummyConsumer.get_messages(consumer_pid)
+      message_count = DummyConsumer.count_messages(consumer_pid)
 
       Logger.info("Received #{message_count} messages")
 
