@@ -191,20 +191,35 @@ defmodule Pulsar.Integration.ConsumerTest do
 
     test "Exclusive subscription with multiple consumers" do
       # In Exclusive mode, only one consumer should be allowed to subscribe
-      # The second consumer should fail to start because exclusive subscription
-      # only allows one consumer at a time
-      {:ok, group_pid} =
+      # When we try to start multiple consumers, the consumer group should fail
+      # because exclusive subscriptions only allow one consumer at a time
+      result =
         Pulsar.start_consumer(
           @test_topic,
-          @test_subscription <> "-exclusive",
+          @test_subscription <> "-exclusive-multi",
           :Exclusive,
           Pulsar.DummyConsumer,
           consumer_count: 2
         )
 
+      # This should fail because exclusive subscriptions don't allow multiple consumers
+      assert {:error, _reason} = result
+    end
+
+    test "Exclusive subscription with single consumer" do
+      # Test that exclusive subscription works correctly with a single consumer
+      {:ok, group_pid} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-exclusive-single",
+          :Exclusive,
+          Pulsar.DummyConsumer,
+          consumer_count: 1
+        )
+
       consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
-      assert length(consumer_pids) == 2
-      [consumer1_pid, _consumer2_pid] = consumer_pids
+      assert length(consumer_pids) == 1
+      [consumer1_pid] = consumer_pids
 
       Process.sleep(3000)
       TestHelper.produce_messages(@test_topic, @messages)
