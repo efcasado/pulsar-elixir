@@ -38,13 +38,16 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
-      {:ok, consumer_pid} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-e2e",
           :Shared,
           Pulsar.DummyConsumer
         )
+
+      # Get the individual consumer PID from the group
+      [consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       Process.sleep(3000)
       TestHelper.produce_messages(@test_topic, @messages)
@@ -57,7 +60,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Key_Shared subscription with multiple consumers" do
-      {:ok, consumer_pids} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-key-shared",
@@ -66,6 +69,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
+      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
       assert length(consumer_pids) == 2
       [consumer1_pid, consumer2_pid] = consumer_pids
 
@@ -113,7 +117,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Shared subscription with multiple consumers (round-robin)" do
-      {:ok, consumer_pids} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-shared",
@@ -122,6 +126,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
+      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
       assert length(consumer_pids) == 2
       [consumer1_pid, consumer2_pid] = consumer_pids
 
@@ -145,7 +150,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Failover subscription with multiple consumers" do
-      {:ok, consumer_pids} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-failover",
@@ -154,6 +159,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
+      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
       assert length(consumer_pids) == 2
       [consumer1_pid, consumer2_pid] = consumer_pids
 
@@ -187,7 +193,7 @@ defmodule Pulsar.Integration.ConsumerTest do
       # In Exclusive mode, only one consumer should be allowed to subscribe
       # The second consumer should fail to start because exclusive subscription
       # only allows one consumer at a time
-      {:ok, consumer_pids} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-exclusive",
@@ -196,6 +202,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
+      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
       assert length(consumer_pids) == 2
       [consumer1_pid, _consumer2_pid] = consumer_pids
 

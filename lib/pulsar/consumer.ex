@@ -128,11 +128,11 @@ defmodule Pulsar.Consumer do
     else
       {:error, :no_brokers_available} ->
         Logger.error("No brokers available for service discovery")
-        {:stop, :no_brokers_available}
+        {:error, :no_brokers_available}
 
       {:error, reason} ->
         Logger.error("Consumer initialization failed: #{inspect(reason)}")
-        {:stop, {:initialization_failed, reason}}
+        {:error, {:initialization_failed, reason}}
     end
   end
 
