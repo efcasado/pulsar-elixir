@@ -182,5 +182,32 @@ defmodule Pulsar.Integration.ConsumerTest do
                (consumer1_count == 0 and consumer2_count == Enum.count(@messages)),
              "In Failover mode, only one consumer should be active and receive all messages. Got consumer1: #{consumer1_count}, consumer2: #{consumer2_count}"
     end
+
+    test "Exclusive subscription with multiple consumers" do
+      # In Exclusive mode, only one consumer should be allowed to subscribe
+      # The second consumer should fail to start because exclusive subscription
+      # only allows one consumer at a time
+      {:ok, consumer_pids} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-exclusive",
+          :Exclusive,
+          Pulsar.DummyConsumer,
+          consumer_count: 2
+        )
+
+      assert length(consumer_pids) == 2
+      [consumer1_pid, _consumer2_pid] = consumer_pids
+
+      Process.sleep(3000)
+      TestHelper.produce_messages(@test_topic, @messages)
+      Process.sleep(3000)
+
+      consumer1_messages = Pulsar.DummyConsumer.get_messages(consumer1_pid)
+      consumer1_count = length(consumer1_messages)
+
+      assert consumer1_count == Enum.count(@messages),
+             "Exclusive consumer should receive all messages. Expected: #{Enum.count(@messages)}, Got: #{consumer1_count}"
+    end
   end
 end
