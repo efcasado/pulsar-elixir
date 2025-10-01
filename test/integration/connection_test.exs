@@ -39,13 +39,17 @@ defmodule Pulsar.Integration.ConnectionTest do
 
   describe "Connection Reliability" do
     test "broker crash recovery", %{broker_pid: broker_pid} do
-      {:ok, consumer_pid} =
+      # Start a consumer group (this returns the group supervisor PID)
+      {:ok, group_pid} =
         Pulsar.start_consumer(
           @test_topic,
           @test_subscription <> "-crash",
           :Shared,
           Pulsar.DummyConsumer
         )
+
+      # Get the individual consumer PID from the group
+      [individual_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       # Wait for consumer to connect and check it's registered
       Process.sleep(2000)
@@ -57,18 +61,33 @@ defmodule Pulsar.Integration.ConnectionTest do
       Process.exit(broker_pid, :kill)
       Process.sleep(3000)
 
-      # Verify original processes crashed
-      assert not Process.alive?(broker_pid)
-      assert not Process.alive?(consumer_pid)
+      # Verify original processes behavior:
+      assert not Process.alive?(broker_pid), "Broker should have crashed"
+
+      assert not Process.alive?(individual_consumer_pid),
+             "Individual consumer should have crashed due to broker link"
+
+      assert Process.alive?(group_pid), "Consumer group supervisor should still be alive"
 
       # Verify broker restarted automatically
       {:ok, new_broker_pid} = Pulsar.lookup_broker(@pulsar_url)
       assert Process.alive?(new_broker_pid)
       assert new_broker_pid != broker_pid
 
-      # Verify consumer restarted and re-registered with new broker
+      # Verify individual consumer restarted (group supervisor restarts it)
       # Give some time for the consumer to restart and reconnect
       Process.sleep(5000)
+
+      # Get the new individual consumer PID
+      [new_individual_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+
+      assert Process.alive?(new_individual_consumer_pid),
+             "New individual consumer should be alive"
+
+      assert new_individual_consumer_pid != individual_consumer_pid,
+             "Should be a new consumer process"
+
+      # Verify consumer re-registered with new broker
       consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
 
       # Debug: show what consumers we actually have

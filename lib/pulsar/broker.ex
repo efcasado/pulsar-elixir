@@ -588,6 +588,18 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker}
   end
 
+  defp handle_command(%Binary.CommandError{request_id: request_id} = error, broker) do
+    reply = {:error, {error.error, error.message}}
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
+  end
+
+  defp handle_command(%Binary.CommandSuccess{request_id: request_id} = success, broker) do
+    reply = {:ok, success}
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
+  end
+
   defp handle_command(%Binary.CommandMessage{consumer_id: consumer_id} = command, broker) do
     case Map.get(broker.consumers, consumer_id) do
       nil ->
