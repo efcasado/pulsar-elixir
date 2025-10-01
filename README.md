@@ -29,7 +29,6 @@ config :pulsar,
   ],
   consumers: [
     my_consumer: [
-        conn: :foo,
         callback: MyApp.MyConsumer,
         subscription_name: "my-app-my-consumer-subscription",
         subscription_type: "Exclusive",
