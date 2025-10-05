@@ -13,8 +13,8 @@ defmodule Pulsar.Broker do
   - :disconnected - Not connected to broker
   - :connected - Connected and authenticated, ready for operations
 
-  Consumer and producer processes are linked to this broker process
-  for automatic cleanup on broker failure.
+  Consumer and producer processes are monitored by this broker process
+  for automatic cleanup when they exit.
   """
 
   @behaviour :gen_statem
@@ -57,8 +57,8 @@ defmodule Pulsar.Broker do
           pending_bytes: integer(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
-          consumers: %{integer() => pid()},
-          producers: %{integer() => pid()}
+          consumers: %{integer() => {pid(), reference()}},
+          producers: %{integer() => {pid(), reference()}}
         }
 
   ## Public API
@@ -95,7 +95,7 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Registers a consumer with this broker and establishes a process link.
+  Registers a consumer with this broker and monitors the process.
   """
   @spec register_consumer(GenServer.server(), integer(), pid()) :: :ok
   def register_consumer(broker, consumer_id, consumer_pid) do
@@ -103,27 +103,11 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Unregisters a consumer from this broker.
-  """
-  @spec unregister_consumer(GenServer.server(), integer()) :: :ok
-  def unregister_consumer(broker, consumer_id) do
-    :gen_statem.call(broker, {:unregister_consumer, consumer_id})
-  end
-
-  @doc """
-  Registers a producer with this broker and establishes a process link.
+  Registers a producer with this broker and monitors the process.
   """
   @spec register_producer(GenServer.server(), integer(), pid()) :: :ok
   def register_producer(broker, producer_id, producer_pid) do
     :gen_statem.call(broker, {:register_producer, producer_id, producer_pid})
-  end
-
-  @doc """
-  Unregisters a producer from this broker.
-  """
-  @spec unregister_producer(GenServer.server(), integer()) :: :ok
-  def unregister_producer(broker, producer_id) do
-    :gen_statem.call(broker, {:unregister_producer, producer_id})
   end
 
   @doc """
@@ -389,67 +373,47 @@ defmodule Pulsar.Broker do
     end
   end
 
-  # Consumer/Producer registration with linking
+  # Consumer/Producer registration with monitoring
   def connected({:call, from}, {:register_consumer, consumer_id, consumer_pid}, broker) do
-    # Link to the consumer process
-    Process.link(consumer_pid)
+    # Monitor the consumer process
+    monitor_ref = Process.monitor(consumer_pid)
 
-    new_consumers = Map.put(broker.consumers, consumer_id, consumer_pid)
+    new_consumers = Map.put(broker.consumers, consumer_id, {consumer_pid, monitor_ref})
     new_broker = %{broker | consumers: new_consumers}
 
-    Logger.debug("Registered consumer #{consumer_id} and linked process")
+    Logger.debug("Registered consumer #{consumer_id} and monitoring process")
     actions = [{:reply, from, :ok}]
     {:keep_state, new_broker, actions}
   end
 
-  def connected({:call, from}, {:unregister_consumer, consumer_id}, broker) do
-    case Map.get(broker.consumers, consumer_id) do
-      nil ->
-        actions = [{:reply, from, :ok}]
-        {:keep_state, broker, actions}
+  # Automatic cleanup when monitored processes exit
+  def connected(:info, {:DOWN, monitor_ref, :process, pid, reason}, broker) do
+    # Find and remove the consumer/producer that died
+    {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
+    {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
 
-      consumer_pid ->
-        # Unlink from the consumer process
-        Process.unlink(consumer_pid)
-
-        new_consumers = Map.delete(broker.consumers, consumer_id)
-        new_broker = %{broker | consumers: new_consumers}
-
-        Logger.debug("Unregistered consumer #{consumer_id} and unlinked process")
-        actions = [{:reply, from, :ok}]
-        {:keep_state, new_broker, actions}
+    if consumer_id do
+      Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}")
     end
+
+    if producer_id do
+      Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
+    end
+
+    new_broker = %{broker | consumers: new_consumers, producers: new_producers}
+    {:keep_state, new_broker}
   end
 
   def connected({:call, from}, {:register_producer, producer_id, producer_pid}, broker) do
-    # Link to the producer process
-    Process.link(producer_pid)
+    # Monitor the producer process
+    monitor_ref = Process.monitor(producer_pid)
 
-    new_producers = Map.put(broker.producers, producer_id, producer_pid)
+    new_producers = Map.put(broker.producers, producer_id, {producer_pid, monitor_ref})
     new_broker = %{broker | producers: new_producers}
 
-    Logger.debug("Registered producer #{producer_id} and linked process")
+    Logger.debug("Registered producer #{producer_id} and monitoring process")
     actions = [{:reply, from, :ok}]
     {:keep_state, new_broker, actions}
-  end
-
-  def connected({:call, from}, {:unregister_producer, producer_id}, broker) do
-    case Map.get(broker.producers, producer_id) do
-      nil ->
-        actions = [{:reply, from, :ok}]
-        {:keep_state, broker, actions}
-
-      producer_pid ->
-        # Unlink from the producer process
-        Process.unlink(producer_pid)
-
-        new_producers = Map.delete(broker.producers, producer_id)
-        new_broker = %{broker | producers: new_producers}
-
-        Logger.debug("Unregistered producer #{producer_id} and unlinked process")
-        actions = [{:reply, from, :ok}]
-        {:keep_state, new_broker, actions}
-    end
   end
 
   # Command sending
@@ -536,12 +500,16 @@ defmodule Pulsar.Broker do
   end
 
   def connected({:call, from}, :get_consumers, broker) do
-    actions = [{:reply, from, broker.consumers}]
+    # Return map with consumer_id -> pid (strip monitor refs)
+    consumers = Map.new(broker.consumers, fn {id, {pid, _ref}} -> {id, pid} end)
+    actions = [{:reply, from, consumers}]
     {:keep_state, broker, actions}
   end
 
   def connected({:call, from}, :get_producers, broker) do
-    actions = [{:reply, from, broker.producers}]
+    # Return map with producer_id -> pid (strip monitor refs)
+    producers = Map.new(broker.producers, fn {id, {pid, _ref}} -> {id, pid} end)
+    actions = [{:reply, from, producers}]
     {:keep_state, broker, actions}
   end
 
@@ -606,7 +574,7 @@ defmodule Pulsar.Broker do
         Logger.warning("Received message for unknown consumer #{consumer_id}")
         :keep_state_and_data
 
-      consumer_pid ->
+      {consumer_pid, _monitor_ref} ->
         send(consumer_pid, {:broker_message, command})
         :keep_state_and_data
     end
@@ -621,8 +589,41 @@ defmodule Pulsar.Broker do
         Logger.warning("Received message for unknown consumer #{consumer_id}")
         :keep_state_and_data
 
-      consumer_pid ->
+      {consumer_pid, _monitor_ref} ->
         send(consumer_pid, {:broker_message, {command, metadata, payload}})
+        :keep_state_and_data
+    end
+  end
+
+  # Handle broker-initiated closures - crash the consumer/producer and let supervisor restart
+  defp handle_command(%Binary.CommandCloseConsumer{consumer_id: consumer_id}, broker) do
+    case Map.get(broker.consumers, consumer_id) do
+      nil ->
+        Logger.warning("Received close command for unknown consumer #{consumer_id}")
+        :keep_state_and_data
+
+      {consumer_pid, _monitor_ref} ->
+        Logger.info(
+          "Broker requested consumer #{consumer_id} closure, will restart with fresh lookup"
+        )
+
+        Process.exit(consumer_pid, :broker_close_requested)
+        :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id}, broker) do
+    case Map.get(broker.producers, producer_id) do
+      nil ->
+        Logger.warning("Received close command for unknown producer #{producer_id}")
+        :keep_state_and_data
+
+      {producer_pid, _monitor_ref} ->
+        Logger.info(
+          "Broker requested producer #{producer_id} closure, will restart with fresh lookup"
+        )
+
+        Process.exit(producer_pid, :broker_close_requested)
         :keep_state_and_data
     end
   end
@@ -650,7 +651,7 @@ defmodule Pulsar.Broker do
 
   defp restart_consumers_and_producers(broker) do
     # Exit all consumer processes - supervision trees will restart them
-    Enum.each(broker.consumers, fn {consumer_id, consumer_pid} ->
+    Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
       if Process.alive?(consumer_pid) do
         Logger.debug("Restarting consumer #{consumer_id}")
         Process.exit(consumer_pid, :broker_disconnected)
@@ -658,7 +659,7 @@ defmodule Pulsar.Broker do
     end)
 
     # Exit all producer processes - supervision trees will restart them  
-    Enum.each(broker.producers, fn {producer_id, producer_pid} ->
+    Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Restarting producer #{producer_id}")
         Process.exit(producer_pid, :broker_disconnected)
@@ -799,5 +800,18 @@ defmodule Pulsar.Broker do
   defp broker_key(broker_url) do
     %URI{host: host, port: port} = URI.parse(broker_url)
     "#{host}:#{port}"
+  end
+
+  # Helper to find and remove entries by monitor reference
+  defp remove_by_monitor_ref(map, target_monitor_ref, target_pid) do
+    Enum.reduce(map, {nil, map}, fn
+      {id, {pid, monitor_ref}}, {found_id, acc_map} ->
+        if monitor_ref == target_monitor_ref and pid == target_pid do
+          # Found the matching entry, remove it
+          {id, Map.delete(acc_map, id)}
+        else
+          {found_id, acc_map}
+        end
+    end)
   end
 end

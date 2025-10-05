@@ -97,5 +97,64 @@ defmodule Pulsar.Integration.ConnectionTest do
       assert map_size(consumers_after) >= 1,
              "Expected at least 1 consumer to be re-registered after crash"
     end
+
+    test "broker-initiated topic unload recovery" do
+      # Start a consumer group
+      {:ok, group_pid} =
+        Pulsar.start_consumer(
+          @test_topic,
+          @test_subscription <> "-unload",
+          :Shared,
+          Pulsar.DummyConsumer
+        )
+
+      # Get the individual consumer PID from the group
+      [initial_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+
+      # Wait for consumer to connect and verify it's registered
+      Process.sleep(2000)
+      consumers_before = Pulsar.Broker.get_consumers(@pulsar_url)
+      assert map_size(consumers_before) == 1
+      [{consumer_id, registered_pid}] = Map.to_list(consumers_before)
+      assert registered_pid == initial_consumer_pid
+
+      Logger.info("Consumer #{consumer_id} registered with broker before unload")
+
+      # Unload the topic using pulsar-admin - this should trigger CommandCloseConsumer
+      assert :ok = TestHelper.unload_topic(@test_topic)
+
+      # Wait for the consumer to be closed and restarted
+      Process.sleep(3000)
+
+      # Verify the original consumer was closed (should have exited)
+      assert not Process.alive?(initial_consumer_pid),
+             "Original consumer should have exited due to topic unload"
+
+      # Verify the consumer group supervisor is still alive
+      assert Process.alive?(group_pid),
+             "Consumer group supervisor should still be alive"
+
+      # Verify a new consumer was started by the supervisor
+      [new_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+
+      assert Process.alive?(new_consumer_pid),
+             "New consumer should be alive after topic unload recovery"
+
+      assert new_consumer_pid != initial_consumer_pid,
+             "Should be a new consumer process after restart"
+
+      # Verify exactly one consumer is registered with the broker (the restarted one)
+      consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
+
+      assert map_size(consumers_after) == 1,
+             "Should have exactly 1 consumer registered after topic unload recovery"
+
+      [{new_consumer_id, new_registered_pid}] = Map.to_list(consumers_after)
+
+      assert new_registered_pid == new_consumer_pid,
+             "The registered consumer should be the new restarted consumer"
+
+      Logger.info("Consumer #{new_consumer_id} successfully re-registered after topic unload")
+    end
   end
 end

@@ -26,7 +26,8 @@ defmodule Pulsar.Consumer do
     :callback_module,
     :callback_state,
     :broker_pid,
-    :broker_url
+    :broker_url,
+    :broker_monitor
   ]
 
   @type t :: %__MODULE__{
@@ -37,7 +38,8 @@ defmodule Pulsar.Consumer do
           callback_module: module(),
           callback_state: term(),
           broker_pid: pid(),
-          broker_url: String.t()
+          broker_url: String.t(),
+          broker_monitor: reference()
         }
 
   ## Public API
@@ -113,6 +115,9 @@ defmodule Pulsar.Consumer do
          :ok <- send_initial_flow(broker_pid, consumer_id) do
       Logger.info("Successfully subscribed to #{topic}")
 
+      # Monitor the broker process to detect crashes
+      broker_monitor = Process.monitor(broker_pid)
+
       state = %__MODULE__{
         topic: topic,
         subscription_name: subscription_name,
@@ -121,7 +126,8 @@ defmodule Pulsar.Consumer do
         callback_module: callback_module,
         callback_state: callback_state,
         broker_pid: broker_pid,
-        broker_url: broker_url
+        broker_url: broker_url,
+        broker_monitor: broker_monitor
       }
 
       {:ok, state}
@@ -212,6 +218,19 @@ defmodule Pulsar.Consumer do
 
         {:noreply, state}
     end
+  end
+
+  # Handle broker crashes - stop so supervisor can restart us with fresh lookup
+  @impl true
+  def handle_info(
+        {:DOWN, monitor_ref, :process, broker_pid, reason},
+        %__MODULE__{broker_monitor: monitor_ref, broker_pid: broker_pid} = state
+      ) do
+    Logger.info(
+      "Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, consumer will restart"
+    )
+
+    {:stop, :broker_crashed, state}
   end
 
   # Handle other info messages by delegating to callback module

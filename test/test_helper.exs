@@ -80,6 +80,34 @@ defmodule Pulsar.TestHelper do
     end)
   end
 
+  @doc """
+  Unloads a topic using pulsar-admin, forcing consumers to reconnect.
+  This simulates broker-initiated topic unloading scenarios.
+  """
+  def unload_topic(topic) do
+    {output, exit_code} =
+      System.cmd(
+        "docker",
+        [
+          "exec",
+          "pulsar",
+          "bin/pulsar-admin",
+          "topics",
+          "unload",
+          topic
+        ],
+        stderr_to_stdout: true
+      )
+
+    if exit_code != 0 do
+      Logger.error("Failed to unload topic: #{output}")
+      {:error, output}
+    else
+      Logger.info("Successfully unloaded topic: #{topic}")
+      :ok
+    end
+  end
+
   # Private helper functions
   defp wait_for_pulsar(retries \\ 30) do
     case System.cmd("curl", ["-f", @pulsar_health_url], stderr_to_stdout: true) do
