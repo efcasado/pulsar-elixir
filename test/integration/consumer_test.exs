@@ -4,7 +4,6 @@ defmodule Pulsar.Integration.ConsumerTest do
   alias Pulsar.TestHelper
 
   @moduletag :integration
-  @pulsar_url "pulsar://localhost:6650"
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
   @messages [
@@ -27,13 +26,15 @@ defmodule Pulsar.Integration.ConsumerTest do
   end
 
   setup do
-    {:ok, _broker_pid} = Pulsar.start_broker(@pulsar_url)
+    # Use a random broker for each test since Pulsar is leaderless
+    pulsar_url = TestHelper.random_broker_url()
+    {:ok, _broker_pid} = Pulsar.start_broker(pulsar_url)
 
     on_exit(fn ->
-      Pulsar.stop_broker(@pulsar_url)
+      Pulsar.stop_broker(pulsar_url)
     end)
 
-    :ok
+    {:ok, pulsar_url: pulsar_url}
   end
 
   describe "Consumer Integration" do

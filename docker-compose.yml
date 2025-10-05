@@ -1,9 +1,136 @@
 services:
-  pulsar:
+  # ZooKeeper - Metadata store
+  zookeeper:
     image: apachepulsar/pulsar:4.1.1
-    container_name: pulsar
+    container_name: pulsar-zookeeper
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - PULSAR_MEM=-Xms128m -Xmx256m
     command: >
-      bin/pulsar standalone
-    ports:
-      - "6650:6650"
-      - "8080:8080"
+      bash -c "bin/apply-config-from-env.py conf/zookeeper.conf &&
+               bin/generate-zookeeper-config.sh conf/zookeeper.conf &&
+               exec bin/pulsar zookeeper"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Initialize cluster metadata
+  pulsar-init:
+    image: apachepulsar/pulsar:4.1.1
+    container_name: pulsar-init
+    networks:
+      - pulsar
+    environment:
+      - PULSAR_MEM=-Xms128m -Xmx256m
+    command:
+      - bin/pulsar
+      - initialize-cluster-metadata
+      - --cluster
+      - pulsar-cluster
+      - --zookeeper
+      - zookeeper:2181
+      - --configuration-store
+      - zookeeper:2181
+      - --web-service-url
+      - http://broker-1:8080,http://broker-2:8080
+      - --broker-service-url
+      - pulsar://broker-1:6650,pulsar://broker-2:6650
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+
+  # BookKeeper - Storage layer
+  bookkeeper-1:
+    image: apachepulsar/pulsar:4.1.1
+    container_name: pulsar-bookkeeper-1
+    restart: on-failure
+    networks:
+      - pulsar
+    environment:
+      - PULSAR_MEM=-Xms256m -Xmx512m
+      - clusterName=pulsar-cluster
+      - zkServers=zookeeper:2181
+      - metadataServiceUri=metadata-store:zk:zookeeper:2181
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      pulsar-init:
+        condition: service_completed_successfully
+    command: bash -c "bin/apply-config-from-env.py conf/bookkeeper.conf && exec bin/pulsar bookie"
+    healthcheck:
+      test: ["CMD", "bin/bookkeeper", "shell", "bookiesanity"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Broker 1
+  broker-1:
+    image: apachepulsar/pulsar:4.1.1
+    container_name: pulsar-broker-1
+    hostname: broker-1
+    restart: on-failure
+    network_mode: host
+    environment:
+      - PULSAR_MEM=-Xms256m -Xmx512m
+      - clusterName=pulsar-cluster
+      - zookeeperServers=zookeeper:2181
+      - configurationStoreServers=zookeeper:2181
+      - advertisedAddress=broker-1
+      - brokerServicePort=6650
+      - webServicePort=8080
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      - loadBalancerEnabled=true
+      - loadBalancerSheddingEnabled=true
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      bookkeeper-1:
+        condition: service_healthy
+    command: bash -c "bin/apply-config-from-env.py conf/broker.conf && exec bin/pulsar broker"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/v2/brokers/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Broker 2
+  broker-2:
+    image: apachepulsar/pulsar:4.1.1
+    container_name: pulsar-broker-2
+    hostname: broker-2
+    restart: on-failure
+    network_mode: host
+    environment:
+      - PULSAR_MEM=-Xms256m -Xmx512m
+      - clusterName=pulsar-cluster
+      - zookeeperServers=zookeeper:2181
+      - configurationStoreServers=zookeeper:2181
+      - advertisedAddress=broker-2
+      - brokerServicePort=6651
+      - webServicePort=8081
+      - managedLedgerDefaultEnsembleSize=1
+      - managedLedgerDefaultWriteQuorum=1
+      - managedLedgerDefaultAckQuorum=1
+      - loadBalancerEnabled=true
+      - loadBalancerSheddingEnabled=true
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      bookkeeper-1:
+        condition: service_healthy
+    command: bash -c "bin/apply-config-from-env.py conf/broker.conf && exec bin/pulsar broker"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/admin/v2/brokers/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+networks:
+  pulsar:
+    driver: bridge
