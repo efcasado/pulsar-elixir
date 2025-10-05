@@ -133,6 +133,8 @@ defmodule Pulsar do
   @doc """
   Stops a broker connection by broker URL.
 
+  Gracefully stops all connected consumers and producers before shutting down the broker.
+
   ## Examples
 
       iex> Pulsar.stop_broker("pulsar://localhost:6650")
@@ -142,7 +144,8 @@ defmodule Pulsar do
   def stop_broker(broker_url) do
     case lookup_broker(broker_url) do
       {:ok, broker_pid} ->
-        DynamicSupervisor.terminate_child(@supervisor_name, broker_pid)
+        Pulsar.Broker.stop(broker_pid)
+        :ok
 
       {:error, :not_found} ->
         {:error, :not_found}

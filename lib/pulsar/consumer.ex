@@ -73,6 +73,14 @@ defmodule Pulsar.Consumer do
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
   end
 
+  @doc """
+  Gracefully stops a consumer process.
+  """
+  @spec stop(GenServer.server(), term(), timeout()) :: :ok
+  def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
+    GenServer.stop(consumer, reason, timeout)
+  end
+
   ## GenServer Callbacks
 
   @impl true

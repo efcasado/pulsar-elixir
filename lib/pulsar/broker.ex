@@ -178,10 +178,43 @@ defmodule Pulsar.Broker do
     end
   end
 
+  @doc """
+  Gracefully stops the broker by closing all consumers/producers first.
+  """
+  @spec stop(GenServer.server(), term(), timeout()) :: :ok
+  def stop(broker, reason \\ :normal, timeout \\ :infinity) do
+    :gen_statem.stop(broker, reason, timeout)
+  end
+
   ## gen_statem Callbacks
 
   @impl true
   def callback_mode, do: [:state_functions, :state_enter]
+
+  @impl true
+  def terminate(reason, _state, broker) do
+    Logger.info(
+      "Broker terminating: #{inspect(reason)}, gracefully stopping #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers"
+    )
+
+    # Gracefully stop all consumer processes
+    Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
+      if Process.alive?(consumer_pid) do
+        Logger.debug("Gracefully stopping consumer #{consumer_id}")
+        Pulsar.Consumer.stop(consumer_pid)
+      end
+    end)
+
+    # Gracefully stop all producer processes (when we add Producer.stop/1)
+    Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
+      if Process.alive?(producer_pid) do
+        Logger.debug("Gracefully stopping producer #{producer_id}")
+        # TODO: Add Pulsar.Producer.stop(producer_pid) when we implement producers
+      end
+    end)
+
+    :ok
+  end
 
   @impl true
   def init([name, uri, socket_opts, conn_timeout, auth, post_actions]) do
