@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  MIX_ENV: test
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install mise
+      uses: jdx/mise-action@v2
+      with:
+        experimental: true
+
+    - name: Cache mise tools
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.local/share/mise
+          ~/.cache/mise
+        key: ${{ runner.os }}-mise-${{ hashFiles('.mise.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-mise-
+
+    - name: Install tools with mise
+      run: mise install
+
+    - name: Cache Mix dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-mix-
+
+    - name: Get Mix dependencies
+      run: mix deps.get
+
+    - name: Check formatting
+      run: mix format --check-formatted
+
+    - name: Compile (warnings as errors)
+      run: mix compile --warnings-as-errors
+
+    - name: Run tests
+      run: mix test
