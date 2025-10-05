@@ -107,9 +107,7 @@ defmodule Pulsar.Consumer do
           raise "Callback initialization failed: #{inspect(reason)}"
       end
 
-    with {:ok, discovery_broker_pid} <- get_random_broker(),
-         {:ok, lookup_result} <- Pulsar.Broker.lookup_topic(discovery_broker_pid, topic),
-         broker_url <- get_broker_url(lookup_result),
+    with {:ok, broker_url} <- lookup_topic_with_redirect(topic),
          {:ok, broker_pid} <- Pulsar.start_broker(broker_url),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, consumer_id, self()),
          {:ok, _response} <-
@@ -342,6 +340,79 @@ defmodule Pulsar.Consumer do
 
   defp get_broker_url(%{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}) do
     service_url_tls || service_url
+  end
+
+  # New function to handle topic lookup with redirect support
+  defp lookup_topic_with_redirect(topic, max_redirects \\ 20) do
+    lookup_topic_with_redirect(topic, false, max_redirects)
+  end
+
+  defp lookup_topic_with_redirect(topic, authoritative, max_redirects) when max_redirects > 0 do
+    case get_random_broker() do
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, discovery_broker_pid} ->
+        case Pulsar.Broker.lookup_topic(discovery_broker_pid, topic, authoritative) do
+          {:ok, %{response: :Connect} = response} ->
+            # Success - we can connect to this broker
+            broker_url = get_broker_url(response)
+            {:ok, broker_url}
+
+          {:ok, %{response: :Redirect, brokerServiceUrl: redirect_url} = response}
+          when redirect_url != nil ->
+            # Redirect - perform authoritative lookup using the redirected broker
+            Logger.debug(
+              "Topic lookup redirected to #{redirect_url}, performing authoritative lookup"
+            )
+
+            redirect_broker_url = get_broker_url(response)
+
+            case Pulsar.start_broker(redirect_broker_url) do
+              {:ok, redirect_broker_pid} ->
+                case Pulsar.Broker.lookup_topic(redirect_broker_pid, topic, true) do
+                  {:ok, %{response: :Connect} = final_response} ->
+                    final_broker_url = get_broker_url(final_response)
+                    {:ok, final_broker_url}
+
+                  {:ok, %{response: :Redirect, authoritative: redirect_authoritative}} ->
+                    # Another redirect - recurse with decremented counter, using authoritative value from response
+                    authoritative_for_next = redirect_authoritative || false
+                    lookup_topic_with_redirect(topic, authoritative_for_next, max_redirects - 1)
+
+                  {:ok, %{response: :Failed, error: error}} ->
+                    Logger.error("Authoritative topic lookup failed: #{inspect(error)}")
+                    {:error, {:lookup_failed, error}}
+
+                  {:error, reason} ->
+                    Logger.error("Authoritative topic lookup error: #{inspect(reason)}")
+                    {:error, reason}
+                end
+
+              {:error, broker_start_error} ->
+                Logger.error("Failed to start redirect broker: #{inspect(broker_start_error)}")
+                {:error, {:broker_start_failed, broker_start_error}}
+            end
+
+          {:ok, %{response: :Redirect}} ->
+            # Redirect but no broker URL provided - should not happen but handle gracefully
+            Logger.error("Received redirect response without broker URL")
+            {:error, :invalid_redirect_response}
+
+          {:ok, %{response: :Failed, error: error}} ->
+            Logger.error("Topic lookup failed: #{inspect(error)}")
+            {:error, {:lookup_failed, error}}
+
+          {:error, reason} ->
+            Logger.error("Topic lookup error: #{inspect(reason)}")
+            {:error, reason}
+        end
+    end
+  end
+
+  defp lookup_topic_with_redirect(_topic, _authoritative, 0) do
+    Logger.error("Too many redirects during topic lookup")
+    {:error, :too_many_redirects}
   end
 
   defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id) do

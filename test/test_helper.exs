@@ -6,19 +6,167 @@ defmodule Pulsar.TestHelper do
   """
   require Logger
 
-  @pulsar_health_url "http://localhost:8080/admin/v2/brokers/health"
-  @pulsar_namespace_url "http://localhost:8080/admin/v2/namespaces/public/default"
-  @pulsar_topic_url "http://localhost:8080/admin/v2/persistent/public/default/integration-test-topic"
+  # Broker configurations - we'll randomly pick one for admin operations since Pulsar is leaderless
+  @broker_configs [
+    %{
+      web_port: 8080,
+      service_port: 6650,
+      service_url: "pulsar://localhost:6650",
+      health_url: "http://localhost:8080/admin/v2/brokers/health"
+    },
+    %{
+      web_port: 8081,
+      service_port: 6651,
+      service_url: "pulsar://localhost:6651",
+      health_url: "http://localhost:8081/admin/v2/brokers/health"
+    }
+  ]
 
   @doc """
   Starts Pulsar with Docker Compose and waits for it to be ready.
   """
   def start_pulsar do
     Logger.info("Starting Pulsar with Docker Compose...")
-    {_, 0} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)
+    {output, exit_code} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)
+
+    if exit_code != 0 do
+      Logger.error("Docker compose failed to start: #{output}")
+      # Try to stop any containers that might have started
+      System.cmd("docker", ["compose", "down"], stderr_to_stdout: true)
+      raise "Failed to start Docker Compose. Exit code: #{exit_code}. Output: #{output}"
+    end
 
     Logger.info("Waiting for Pulsar to be ready...")
     wait_for_pulsar()
+  end
+
+  @doc """
+  Returns a random broker service URL for connecting to Pulsar.
+  Since Pulsar is leaderless, any broker can handle client connections.
+  """
+  def random_broker_url do
+    broker = Enum.random(@broker_configs)
+    broker.service_url
+  end
+
+  @doc """
+  Creates a namespace using a specific broker.
+  """
+  def create_namespace(broker, namespace) do
+    Logger.info("Creating namespace '#{namespace}' using broker on port #{broker.web_port}...")
+
+    namespace_url = "http://localhost:#{broker.web_port}/admin/v2/namespaces/#{namespace}"
+
+    case System.cmd(
+           "curl",
+           [
+             "-X",
+             "PUT",
+             "-H",
+             "Content-Type: application/json",
+             namespace_url,
+             "-d",
+             "{}"
+           ],
+           stderr_to_stdout: true
+         ) do
+      {_, 0} ->
+        Logger.info("Namespace '#{namespace}' created/verified")
+        :ok
+
+      {error, _} ->
+        Logger.warning("Namespace '#{namespace}' creation failed: #{error}")
+        {:error, error}
+    end
+  end
+
+  @doc """
+  Creates a topic using a specific broker.
+  """
+  def create_topic(broker, topic) do
+    Logger.info("Creating topic '#{topic}' using broker on port #{broker.web_port}...")
+
+    topic_url = "http://localhost:#{broker.web_port}/admin/v2/persistent/#{topic}"
+
+    case System.cmd(
+           "curl",
+           [
+             "-X",
+             "PUT",
+             topic_url
+           ],
+           stderr_to_stdout: true
+         ) do
+      {_, 0} ->
+        Logger.info("Topic '#{topic}' created/verified")
+        :ok
+
+      {error, _} ->
+        Logger.warning("Topic '#{topic}' creation failed: #{error}")
+        {:error, error}
+    end
+  end
+
+  @doc """
+  Sets up Pulsar resources (namespaces and topics) for testing.
+
+  ## Options
+  - `:namespaces` - List of namespace names to create (default: ["public/default"])
+  - `:topics` - List of topic names to create (default: ["public/default/integration-test-topic"])
+
+  ## Examples
+
+      setup_pulsar_resources(broker)
+      setup_pulsar_resources(broker, namespaces: ["public/test1", "public/test2"])
+      setup_pulsar_resources(broker, topics: ["public/default/topic1", "public/default/topic2"])
+  """
+  def setup_pulsar_resources(broker, opts \\ []) do
+    namespaces = Keyword.get(opts, :namespaces, ["public/default"])
+    topics = Keyword.get(opts, :topics, ["public/default/integration-test-topic"])
+
+    Logger.info("Setting up Pulsar resources using broker on port #{broker.web_port}...")
+
+    # Create all requested namespaces
+    Enum.each(namespaces, fn namespace ->
+      create_namespace(broker, namespace)
+    end)
+
+    # Create all requested topics
+    Enum.each(topics, fn topic ->
+      create_topic(broker, topic)
+    end)
+
+    # Give a moment for the changes to propagate
+    Process.sleep(1000)
+  end
+
+  @doc """
+  Sets up Pulsar resources using a random broker.
+  This is a convenience function that selects a random broker and sets up resources.
+
+  ## Examples
+
+      setup_test_resources()
+      setup_test_resources(topics: ["public/default/topic1", "public/default/topic2"])
+  """
+  def setup_test_resources(opts \\ []) do
+    broker = Enum.random(@broker_configs)
+    setup_pulsar_resources(broker, opts)
+    broker
+  end
+
+  @doc """
+  Creates multiple test topics in the default namespace.
+
+  ## Examples
+
+      create_test_topics(["topic1", "topic2", "topic3"])
+  """
+  def create_test_topics(topic_names) when is_list(topic_names) do
+    broker = Enum.random(@broker_configs)
+    topics = Enum.map(topic_names, &"public/default/#{&1}")
+    setup_pulsar_resources(broker, topics: topics)
+    broker
   end
 
   @doc """
@@ -33,9 +181,13 @@ defmodule Pulsar.TestHelper do
   Produces a message to a topic using the pulsar-client in the Docker container.
   """
   def produce_message(topic, message, key \\ nil) do
+    # Randomly select a broker container for message production
+    # Both broker-1 and broker-2 containers can handle message production
+    broker_container = Enum.random(["pulsar-broker-1", "pulsar-broker-2"])
+
     base_args = [
       "exec",
-      "pulsar",
+      broker_container,
       "bin/pulsar-client",
       "produce",
       topic,
@@ -53,10 +205,13 @@ defmodule Pulsar.TestHelper do
     {output, exit_code} = System.cmd("docker", args, stderr_to_stdout: true)
 
     if exit_code != 0 do
-      Logger.error("Failed to produce message: #{output}")
+      Logger.error("Failed to produce message using #{broker_container}: #{output}")
       {:error, output}
     else
-      Logger.debug("Produced message: #{message}#{if key, do: " (key: #{key})", else: ""}")
+      Logger.debug(
+        "Produced message using #{broker_container}: #{message}#{if key, do: " (key: #{key})", else: ""}"
+      )
+
       :ok
     end
   end
@@ -85,12 +240,15 @@ defmodule Pulsar.TestHelper do
   This simulates broker-initiated topic unloading scenarios.
   """
   def unload_topic(topic) do
+    # Randomly select a broker container for admin operations
+    broker_container = Enum.random(["pulsar-broker-1", "pulsar-broker-2"])
+
     {output, exit_code} =
       System.cmd(
         "docker",
         [
           "exec",
-          "pulsar",
+          broker_container,
           "bin/pulsar-admin",
           "topics",
           "unload",
@@ -100,70 +258,43 @@ defmodule Pulsar.TestHelper do
       )
 
     if exit_code != 0 do
-      Logger.error("Failed to unload topic: #{output}")
+      Logger.error("Failed to unload topic using #{broker_container}: #{output}")
       {:error, output}
     else
-      Logger.info("Successfully unloaded topic: #{topic}")
+      Logger.info("Successfully unloaded topic using #{broker_container}: #{topic}")
       :ok
     end
   end
 
   # Private helper functions
   defp wait_for_pulsar(retries \\ 30) do
-    case System.cmd("curl", ["-f", @pulsar_health_url], stderr_to_stdout: true) do
-      {_, 0} ->
-        Logger.info("Pulsar is ready!")
-        setup_pulsar_resources()
+    # Try each broker until one responds or we run out of retries
+    case try_brokers_health_check(@broker_configs) do
+      {:ok, working_broker} ->
+        Logger.info("Pulsar broker on port #{working_broker.web_port} is ready!")
+        setup_pulsar_resources(working_broker)
         :ok
 
-      {_, _} when retries > 0 ->
-        Logger.info("Pulsar not ready yet, waiting... (#{retries} retries left)")
+      {:error, _} when retries > 0 ->
+        Logger.info("Pulsar brokers not ready yet, waiting... (#{retries} retries left)")
         Process.sleep(2000)
         wait_for_pulsar(retries - 1)
 
-      {output, _} ->
-        raise "Pulsar failed to start after 60 seconds. Output: #{output}"
+      {:error, last_error} ->
+        raise "Pulsar failed to start after 60 seconds. Last error: #{last_error}"
     end
   end
 
-  defp setup_pulsar_resources do
-    Logger.info("Setting up Pulsar namespace and topic...")
+  defp try_brokers_health_check(brokers) do
+    # Shuffle brokers to randomly select which one to try first
+    shuffled_brokers = Enum.shuffle(brokers)
 
-    # Create namespace (if it doesn't exist)
-    case System.cmd(
-           "curl",
-           [
-             "-X",
-             "PUT",
-             "-H",
-             "Content-Type: application/json",
-             @pulsar_namespace_url,
-             "-d",
-             "{}"
-           ],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} -> Logger.info("Namespace created/verified")
-      {_, _} -> Logger.info("Namespace might already exist or creation failed")
-    end
-
-    # Create topic (topics are created automatically on first use in Pulsar,
-    # but we can pre-create it to ensure it exists)
-    case System.cmd(
-           "curl",
-           [
-             "-X",
-             "PUT",
-             @pulsar_topic_url
-           ],
-           stderr_to_stdout: true
-         ) do
-      {_, 0} -> Logger.info("Topic created/verified")
-      {_, _} -> Logger.info("Topic might already exist or creation failed")
-    end
-
-    # Give a moment for the changes to propagate
-    Process.sleep(1000)
+    Enum.reduce_while(shuffled_brokers, {:error, "No brokers available"}, fn broker, _acc ->
+      case System.cmd("curl", ["-f", broker.health_url], stderr_to_stdout: true) do
+        {_, 0} -> {:halt, {:ok, broker}}
+        {error, _} -> {:cont, {:error, error}}
+      end
+    end)
   end
 end
 

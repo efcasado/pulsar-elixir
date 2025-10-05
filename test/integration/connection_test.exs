@@ -4,7 +4,6 @@ defmodule Pulsar.Integration.ConnectionTest do
   alias Pulsar.TestHelper
 
   @moduletag :integration
-  @pulsar_url "pulsar://localhost:6650"
   @test_topic "persistent://public/default/integration-test-topic"
   @test_subscription "integration-test-subscription"
 
@@ -21,8 +20,9 @@ defmodule Pulsar.Integration.ConnectionTest do
   end
 
   setup do
-    # Start a broker for each test
-    {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
+    # Use a random broker for each test since Pulsar is leaderless
+    pulsar_url = TestHelper.random_broker_url()
+    {:ok, broker_pid} = Pulsar.start_broker(pulsar_url)
 
     # Trap exit signals to handle process crashes in tests
     original_trap_exit = Process.flag(:trap_exit, true)
@@ -30,15 +30,15 @@ defmodule Pulsar.Integration.ConnectionTest do
     # Cleanup after test
     on_exit(fn ->
       # Stop broker using Pulsar API - this will also stop linked consumers
-      Pulsar.stop_broker(@pulsar_url)
+      Pulsar.stop_broker(pulsar_url)
       Process.flag(:trap_exit, original_trap_exit)
     end)
 
-    {:ok, broker_pid: broker_pid}
+    {:ok, broker_pid: broker_pid, pulsar_url: pulsar_url}
   end
 
   describe "Connection Reliability" do
-    test "broker crash recovery", %{broker_pid: broker_pid} do
+    test "broker crash recovery", %{broker_pid: broker_pid, pulsar_url: pulsar_url} do
       # Start a consumer group (this returns the group supervisor PID)
       {:ok, group_pid} =
         Pulsar.start_consumer(
@@ -53,7 +53,7 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       # Wait for consumer to connect and check it's registered
       Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(@pulsar_url)
+      consumers_before = Pulsar.Broker.get_consumers(pulsar_url)
       initial_consumer_count = map_size(consumers_before)
       assert initial_consumer_count == 1
 
@@ -70,7 +70,7 @@ defmodule Pulsar.Integration.ConnectionTest do
       assert Process.alive?(group_pid), "Consumer group supervisor should still be alive"
 
       # Verify broker restarted automatically
-      {:ok, new_broker_pid} = Pulsar.lookup_broker(@pulsar_url)
+      {:ok, new_broker_pid} = Pulsar.lookup_broker(pulsar_url)
       assert Process.alive?(new_broker_pid)
       assert new_broker_pid != broker_pid
 
@@ -88,7 +88,7 @@ defmodule Pulsar.Integration.ConnectionTest do
              "Should be a new consumer process"
 
       # Verify consumer re-registered with new broker
-      consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
+      consumers_after = Pulsar.Broker.get_consumers(pulsar_url)
 
       # Debug: show what consumers we actually have
       Logger.info("Consumers after crash: #{inspect(consumers_after)}")
@@ -98,7 +98,7 @@ defmodule Pulsar.Integration.ConnectionTest do
              "Expected at least 1 consumer to be re-registered after crash"
     end
 
-    test "broker-initiated topic unload recovery" do
+    test "broker-initiated topic unload recovery", %{pulsar_url: pulsar_url} do
       # Start a consumer group
       {:ok, group_pid} =
         Pulsar.start_consumer(
@@ -113,7 +113,7 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       # Wait for consumer to connect and verify it's registered
       Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(@pulsar_url)
+      consumers_before = Pulsar.Broker.get_consumers(pulsar_url)
       assert map_size(consumers_before) == 1
       [{consumer_id, registered_pid}] = Map.to_list(consumers_before)
       assert registered_pid == initial_consumer_pid
@@ -144,7 +144,7 @@ defmodule Pulsar.Integration.ConnectionTest do
              "Should be a new consumer process after restart"
 
       # Verify exactly one consumer is registered with the broker (the restarted one)
-      consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
+      consumers_after = Pulsar.Broker.get_consumers(pulsar_url)
 
       assert map_size(consumers_after) == 1,
              "Should have exactly 1 consumer registered after topic unload recovery"
