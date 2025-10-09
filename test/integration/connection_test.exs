@@ -53,16 +53,31 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       # Wait for consumer to connect and check it's registered
       Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(pulsar_url)
+      
+      # Find which broker actually has the consumer registered
+      # Due to Pulsar's load balancing, the consumer might be on a different broker
+      all_brokers = ["pulsar://broker1:6650", "pulsar://broker2:6651"]
+      
+      {actual_broker_url, consumers_before} = 
+        Enum.find_value(all_brokers, fn broker_url ->
+          consumers = Pulsar.Broker.get_consumers(broker_url)
+          if map_size(consumers) > 0 do
+            {broker_url, consumers}
+          else
+            nil
+          end
+        end) || {pulsar_url, %{}}
+
+      {:ok, initial_broker_pid} = Pulsar.lookup_broker(actual_broker_url)
       initial_consumer_count = map_size(consumers_before)
       assert initial_consumer_count == 1
 
-      # Crash the broker
-      Process.exit(broker_pid, :kill)
+			# Crash the broker
+			Process.exit(initial_broker_pid, :kill)
       Process.sleep(3000)
 
       # Verify original processes behavior:
-      assert not Process.alive?(broker_pid), "Broker should have crashed"
+      assert not Process.alive?(initial_broker_pid), "Broker should have crashed"
 
       assert not Process.alive?(individual_consumer_pid),
              "Individual consumer should have crashed due to broker link"
@@ -70,7 +85,7 @@ defmodule Pulsar.Integration.ConnectionTest do
       assert Process.alive?(group_pid), "Consumer group supervisor should still be alive"
 
       # Verify broker restarted automatically
-      {:ok, new_broker_pid} = Pulsar.lookup_broker(pulsar_url)
+      {:ok, new_broker_pid} = Pulsar.lookup_broker(actual_broker_url)
       assert Process.alive?(new_broker_pid)
       assert new_broker_pid != broker_pid
 
@@ -88,14 +103,23 @@ defmodule Pulsar.Integration.ConnectionTest do
              "Should be a new consumer process"
 
       # Verify consumer re-registered with new broker
-      consumers_after = Pulsar.Broker.get_consumers(pulsar_url)
+      # After crash recovery, consumer might be on any available broker
+      {recovery_broker_url, consumers_after} = 
+        Enum.find_value(all_brokers, fn broker_url ->
+          consumers = Pulsar.Broker.get_consumers(broker_url)
+          if map_size(consumers) > 0 do
+            {broker_url, consumers}
+          else
+            nil
+          end
+        end) || {pulsar_url, %{}}
 
       # Debug: show what consumers we actually have
-      Logger.info("Consumers after crash: #{inspect(consumers_after)}")
+      Logger.info("Consumers after crash on #{recovery_broker_url}: #{inspect(consumers_after)}")
       Logger.info("Number of consumers: #{map_size(consumers_after)}")
 
       assert map_size(consumers_after) >= 1,
-             "Expected at least 1 consumer to be re-registered after crash"
+             "Expected at least 1 consumer to be re-registered after crash on any broker"
     end
 
     test "broker-initiated topic unload recovery", %{pulsar_url: pulsar_url} do
@@ -113,7 +137,18 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       # Wait for consumer to connect and verify it's registered
       Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(pulsar_url)
+      all_brokers = ["pulsar://broker1:6650", "pulsar://broker2:6651"]
+
+      {actual_broker_url, consumers_before} =
+        Enum.find_value(all_brokers, fn broker_url ->
+          consumers = Pulsar.Broker.get_consumers(broker_url)
+          if map_size(consumers) > 0 do
+            {broker_url, consumers}
+          else
+            nil
+          end
+        end) || {pulsar_url, %{}}
+
       assert map_size(consumers_before) == 1
       [{consumer_id, registered_pid}] = Map.to_list(consumers_before)
       assert registered_pid == initial_consumer_pid
@@ -144,7 +179,7 @@ defmodule Pulsar.Integration.ConnectionTest do
              "Should be a new consumer process after restart"
 
       # Verify exactly one consumer is registered with the broker (the restarted one)
-      consumers_after = Pulsar.Broker.get_consumers(pulsar_url)
+      consumers_after = Pulsar.Broker.get_consumers(actual_broker_url)
 
       assert map_size(consumers_after) == 1,
              "Should have exactly 1 consumer registered after topic unload recovery"
