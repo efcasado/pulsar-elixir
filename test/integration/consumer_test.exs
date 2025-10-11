@@ -6,7 +6,7 @@ defmodule Pulsar.Integration.ConsumerTest do
   @moduletag :integration
   @topic "persistent://public/default/integration-test-topic"
   @subscription "integration-test-subscription"
-	@consumer_callback Pulsar.Test.Support.DummyConsumer
+  @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
     {"key1", "Message 1 for key1 - #{:os.system_time(:millisecond)}"},
     {"key2", "Message 1 for key2 - #{:os.system_time(:millisecond)}"},
@@ -43,10 +43,8 @@ defmodule Pulsar.Integration.ConsumerTest do
           @consumer_callback
         )
 
-      # Get the individual consumer PID from the group
       [consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      Process.sleep(3000)
       System.produce_messages(@topic, @messages)
       Process.sleep(3000)
 
@@ -66,15 +64,11 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
-      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
-      assert length(consumer_pids) == 2
-      [consumer1_pid, consumer2_pid] = consumer_pids
+      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      Process.sleep(3000)
       System.produce_messages(@topic, @messages)
       Process.sleep(3000)
 
-      # Get messages from each consumer
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer2_messages = @consumer_callback.get_messages(consumer2_pid)
 
@@ -103,14 +97,13 @@ defmodule Pulsar.Integration.ConsumerTest do
       # With 4 different keys and Key_Shared mode, both consumers should receive messages
       # Key_Shared distributes messages based on key hashing, so different keys should
       # go to different consumers
-      assert consumer1_count > 0, "Consumer 1 should receive at least one message"
-      assert consumer2_count > 0, "Consumer 2 should receive at least one message"
+      assert consumer1_count > 0
+      assert consumer2_count > 0
 
       # Verify key partitioning - no key should be consumed by both consumers
       key_overlap = MapSet.intersection(consumer1_keys, consumer2_keys)
 
-      assert MapSet.size(key_overlap) == 0,
-             "Keys should be partitioned between consumers, but found overlap: #{inspect(MapSet.to_list(key_overlap))}"
+      assert MapSet.size(key_overlap) == 0
     end
 
     test "Shared subscription with multiple consumers (round-robin)" do
@@ -123,27 +116,20 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
-      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
-      assert length(consumer_pids) == 2
-      [consumer1_pid, consumer2_pid] = consumer_pids
+      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      Process.sleep(3000)
       System.produce_messages(@topic, @messages)
       Process.sleep(5000)
 
-      # Check message distribution across consumers
       consumer1_count = @consumer_callback.count_messages(consumer1_pid)
       consumer2_count = @consumer_callback.count_messages(consumer2_pid)
       total_messages = consumer1_count + consumer2_count
 
-      Logger.info("Consumer 1 received #{consumer1_count} messages")
-      Logger.info("Consumer 2 received #{consumer2_count} messages")
-      Logger.info("Total messages received: #{total_messages}")
-
       # In Shared mode with round-robin distribution, both consumers should receive messages
       # This is more predictable than Key_Shared since it's not based on key hashing
-      assert consumer1_count > 0, "Consumer 1 should receive at least one message"
-      assert consumer2_count > 0, "Consumer 2 should receive at least one message"
+      assert total_messages == Enum.count(@messages)
+      assert consumer1_count > 0
+      assert consumer2_count > 0
     end
 
     test "Failover subscription with multiple consumers" do
@@ -156,15 +142,11 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
-      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
-      assert length(consumer_pids) == 2
-      [consumer1_pid, consumer2_pid] = consumer_pids
+      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      Process.sleep(3000)
       System.produce_messages(@topic, @messages)
       Process.sleep(3000)
 
-      # Get messages from each consumer
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer2_messages = @consumer_callback.get_messages(consumer2_pid)
 
@@ -172,18 +154,12 @@ defmodule Pulsar.Integration.ConsumerTest do
       consumer2_count = length(consumer2_messages)
       total_messages = consumer1_count + consumer2_count
 
-      Logger.info("Consumer 1 received #{consumer1_count} messages")
-      Logger.info("Consumer 2 received #{consumer2_count} messages")
-      Logger.info("Total messages received: #{total_messages}")
-
       # In Failover mode, only one consumer (the active one) should receive all messages
       # The other consumer should be in standby mode and receive no messages
-      assert total_messages == Enum.count(@messages), "All messages should be consumed"
+      assert total_messages == Enum.count(@messages)
 
-      # One consumer should receive all messages, the other should receive none
       assert (consumer1_count == Enum.count(@messages) and consumer2_count == 0) or
-               (consumer1_count == 0 and consumer2_count == Enum.count(@messages)),
-             "In Failover mode, only one consumer should be active and receive all messages. Got consumer1: #{consumer1_count}, consumer2: #{consumer2_count}"
+               (consumer1_count == 0 and consumer2_count == Enum.count(@messages))
     end
 
     test "Exclusive subscription with multiple consumers" do
@@ -199,7 +175,6 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 2
         )
 
-      # This should fail because exclusive subscriptions don't allow multiple consumers
       assert {:error, _reason} = result
     end
 
@@ -214,19 +189,15 @@ defmodule Pulsar.Integration.ConsumerTest do
           consumer_count: 1
         )
 
-      consumer_pids = Pulsar.ConsumerGroup.list_consumers(group_pid)
-      assert length(consumer_pids) == 1
-      [consumer1_pid] = consumer_pids
+      [consumer1_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      Process.sleep(3000)
       System.produce_messages(@topic, @messages)
       Process.sleep(3000)
 
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer1_count = length(consumer1_messages)
 
-      assert consumer1_count == Enum.count(@messages),
-             "Exclusive consumer should receive all messages. Expected: #{Enum.count(@messages)}, Got: #{consumer1_count}"
+      assert consumer1_count == Enum.count(@messages)
     end
   end
 end
