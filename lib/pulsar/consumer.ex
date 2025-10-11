@@ -417,6 +417,7 @@ defmodule Pulsar.Consumer do
 
   defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id) do
     request_id = System.unique_integer([:positive, :monotonic])
+
     subscribe_command = %Binary.CommandSubscribe{
       topic: topic,
       subscription: subscription_name,
