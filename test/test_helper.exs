@@ -54,6 +54,74 @@ defmodule Pulsar.TestHelper do
   end
 
   @doc """
+  Returns the list of all broker configs used by tests.
+  Each broker is a map with keys: :container, :host, :web_port, :service_port, :service_url, :health_url
+  """
+  def all_brokers, do: @brokers
+
+  @doc """
+  Returns all broker service URLs as a list of strings.
+  """
+  def all_broker_urls, do: Enum.map(@brokers, & &1.service_url)
+
+  @doc """
+  Get consumers registered on a specific broker service URL.
+  """
+  def consumers_on(broker_url) when is_binary(broker_url) do
+    Pulsar.Broker.get_consumers(broker_url)
+  end
+
+  @doc """
+  Returns {:ok, broker, consumers} for the first broker that has any consumers registered,
+  or :error if none have consumers.
+  """
+  def first_broker_with_consumers do
+    Enum.find_value(@brokers, fn broker ->
+      consumers = Pulsar.Broker.get_consumers(broker.service_url)
+      if map_size(consumers) > 0, do: {:ok, broker, consumers}, else: nil
+    end) || :error
+  end
+
+	@doc """
+	Finds the broker a consumer is registered on.
+	"""
+	def broker_for_consumer(consumer) when is_pid(consumer) do
+		@brokers
+		|> Enum.find(
+			nil,
+			fn broker ->
+				broker.service_url
+				|> Pulsar.Broker.get_consumers
+				|> Enum.any?(fn {_id, pid} -> pid == consumer end)
+			end
+		)
+	end
+	
+  @doc """
+  Finds the broker a specific consumer pid is registered on.
+  Returns {:ok, broker, consumers_on_broker} or :error if not found.
+  """
+  def broker_for_consumer_pid(consumer_pid) when is_pid(consumer_pid) do
+    Enum.find_value(@brokers, fn broker ->
+      consumers = Pulsar.Broker.get_consumers(broker.service_url)
+      if Enum.any?(consumers, fn {_id, pid} -> pid == consumer_pid end) do
+        {:ok, broker, consumers}
+      else
+        nil
+      end
+    end) || :error
+  end
+
+  @doc """
+  Kill a broker container by broker map. Intended for integration tests.
+  """
+  def kill_broker!(%{container: container}) do
+    Logger.info("Killing broker container: #{container}")
+    {_out, _code} = System.cmd("docker", ["kill", container], stderr_to_stdout: true)
+    :ok
+  end
+
+  @doc """
   Creates a namespace using a specific broker.
   """
   def create_namespace(broker, namespace) do

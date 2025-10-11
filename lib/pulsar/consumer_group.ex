@@ -186,7 +186,7 @@ defmodule Pulsar.ConsumerGroup do
       end
 
     # Use :one_for_one strategy - if one consumer fails, only restart that consumer
-    opts = [strategy: :one_for_one]
+    opts = [strategy: :one_for_one, max_restarts: 10]
 
     Supervisor.init(children, opts)
   end
