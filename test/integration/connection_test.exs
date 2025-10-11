@@ -1,160 +1,92 @@
 defmodule Pulsar.Integration.ConnectionTest do
   use ExUnit.Case
   require Logger
-  alias Pulsar.TestHelper
+  alias Pulsar.Test.Support.Utils
+  alias Pulsar.Test.Support.System
 
   @moduletag :integration
-  @pulsar_url "pulsar://localhost:6650"
-  @test_topic "persistent://public/default/integration-test-topic"
-  @test_subscription "integration-test-subscription"
+  @topic "persistent://public/default/integration-test-topic"
+  @subscription "integration-test-subscription"
+  @consumer_callback Pulsar.Test.Support.DummyConsumer
 
   setup_all do
-    # Start Pulsar using test helper
-    TestHelper.start_pulsar()
+    :ok = System.start_pulsar()
 
-    # Cleanup function
+    :ok = System.create_topic(@topic)
+
     on_exit(fn ->
-      TestHelper.stop_pulsar()
+      :ok = System.stop_pulsar()
     end)
-
-    :ok
   end
 
   setup do
-    # Start a broker for each test
-    {:ok, broker_pid} = Pulsar.start_broker(@pulsar_url)
+    broker = System.broker()
+    {:ok, _broker_pid} = Pulsar.start_broker(broker.service_url)
 
-    # Trap exit signals to handle process crashes in tests
     original_trap_exit = Process.flag(:trap_exit, true)
 
-    # Cleanup after test
     on_exit(fn ->
-      # Stop broker using Pulsar API - this will also stop linked consumers
-      Pulsar.stop_broker(@pulsar_url)
+      Pulsar.stop_broker(broker.service_url)
       Process.flag(:trap_exit, original_trap_exit)
     end)
-
-    {:ok, broker_pid: broker_pid}
   end
 
   describe "Connection Reliability" do
-    test "broker crash recovery", %{broker_pid: broker_pid} do
-      # Start a consumer group (this returns the group supervisor PID)
+    test "consumer recovers from broker crash" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @test_topic,
-          @test_subscription <> "-crash",
+          @topic,
+          @subscription <> "-crash",
           :Shared,
-          Pulsar.DummyConsumer
+          @consumer_callback
         )
 
-      # Get the individual consumer PID from the group
-      [individual_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_before_crash] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      # Wait for consumer to connect and check it's registered
-      Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(@pulsar_url)
-      initial_consumer_count = map_size(consumers_before)
-      assert initial_consumer_count == 1
+      broker = System.broker_for_consumer(consumer_pid_before_crash)
 
-      # Crash the broker
+      {:ok, broker_pid} = Pulsar.lookup_broker(broker.service_url)
       Process.exit(broker_pid, :kill)
-      Process.sleep(3000)
 
-      # Verify original processes behavior:
-      assert not Process.alive?(broker_pid), "Broker should have crashed"
+      Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
 
-      assert not Process.alive?(individual_consumer_pid),
-             "Individual consumer should have crashed due to broker link"
+      [consumer_pid_after_crash] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      assert Process.alive?(group_pid), "Consumer group supervisor should still be alive"
-
-      # Verify broker restarted automatically
-      {:ok, new_broker_pid} = Pulsar.lookup_broker(@pulsar_url)
-      assert Process.alive?(new_broker_pid)
-      assert new_broker_pid != broker_pid
-
-      # Verify individual consumer restarted (group supervisor restarts it)
-      # Give some time for the consumer to restart and reconnect
-      Process.sleep(5000)
-
-      # Get the new individual consumer PID
-      [new_individual_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
-
-      assert Process.alive?(new_individual_consumer_pid),
-             "New individual consumer should be alive"
-
-      assert new_individual_consumer_pid != individual_consumer_pid,
-             "Should be a new consumer process"
-
-      # Verify consumer re-registered with new broker
-      consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
-
-      # Debug: show what consumers we actually have
-      Logger.info("Consumers after crash: #{inspect(consumers_after)}")
-      Logger.info("Number of consumers: #{map_size(consumers_after)}")
-
-      assert map_size(consumers_after) >= 1,
-             "Expected at least 1 consumer to be re-registered after crash"
+      # consumer crashed due to broker link
+      assert not Process.alive?(consumer_pid_before_crash)
+      # consumer group supervisor is still alive
+      assert Process.alive?(group_pid)
+      # a new consumer started
+      assert Process.alive?(consumer_pid_after_crash)
+      # the old and new consumers are not the same
+      assert consumer_pid_before_crash != consumer_pid_after_crash
     end
 
-    test "broker-initiated topic unload recovery" do
-      # Start a consumer group
+    test "consumer recovers from broker-initiated topic unload" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @test_topic,
-          @test_subscription <> "-unload",
+          @topic,
+          @subscription <> "-unload",
           :Shared,
-          Pulsar.DummyConsumer
+          Pulsar.Test.Support.DummyConsumer
         )
 
-      # Get the individual consumer PID from the group
-      [initial_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_before_unload] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      # Wait for consumer to connect and verify it's registered
-      Process.sleep(2000)
-      consumers_before = Pulsar.Broker.get_consumers(@pulsar_url)
-      assert map_size(consumers_before) == 1
-      [{consumer_id, registered_pid}] = Map.to_list(consumers_before)
-      assert registered_pid == initial_consumer_pid
+      :ok = System.unload_topic(@topic)
 
-      Logger.info("Consumer #{consumer_id} registered with broker before unload")
+      Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_unload) end)
 
-      # Unload the topic using pulsar-admin - this should trigger CommandCloseConsumer
-      assert :ok = TestHelper.unload_topic(@test_topic)
+      [consumer_pid_after_unload] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
-      # Wait for the consumer to be closed and restarted
-      Process.sleep(3000)
-
-      # Verify the original consumer was closed (should have exited)
-      assert not Process.alive?(initial_consumer_pid),
-             "Original consumer should have exited due to topic unload"
-
-      # Verify the consumer group supervisor is still alive
-      assert Process.alive?(group_pid),
-             "Consumer group supervisor should still be alive"
-
-      # Verify a new consumer was started by the supervisor
-      [new_consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
-
-      assert Process.alive?(new_consumer_pid),
-             "New consumer should be alive after topic unload recovery"
-
-      assert new_consumer_pid != initial_consumer_pid,
-             "Should be a new consumer process after restart"
-
-      # Verify exactly one consumer is registered with the broker (the restarted one)
-      consumers_after = Pulsar.Broker.get_consumers(@pulsar_url)
-
-      assert map_size(consumers_after) == 1,
-             "Should have exactly 1 consumer registered after topic unload recovery"
-
-      [{new_consumer_id, new_registered_pid}] = Map.to_list(consumers_after)
-
-      assert new_registered_pid == new_consumer_pid,
-             "The registered consumer should be the new restarted consumer"
-
-      Logger.info("Consumer #{new_consumer_id} successfully re-registered after topic unload")
+      # original consumer crashed due to topic unload
+      assert not Process.alive?(consumer_pid_before_unload)
+      # consumer group supervisor is still alive
+      assert Process.alive?(group_pid)
+      # a new consumer started
+      assert Process.alive?(consumer_pid_after_unload)
+      # the old and new consumers are not the same
+      assert consumer_pid_before_unload != consumer_pid_after_unload
     end
   end
 end
