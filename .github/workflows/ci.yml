@@ -55,5 +55,9 @@ jobs:
     - name: Compile (warnings as errors)
       run: mix compile --warnings-as-errors
 
+    - name: Add broker hostnames to /etc/hosts
+      run: |
+        echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
+      
     - name: Run tests
       run: mix test
