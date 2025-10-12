@@ -21,12 +21,18 @@ defmodule Pulsar.Integration.ConnectionTest do
 
   setup do
     broker = System.broker()
-    {:ok, _broker_pid} = Pulsar.start_broker(broker.service_url)
+
+    config = [
+      host: broker.service_url
+    ]
+
+    {:ok, app_pid} = Pulsar.Application.start(config)
 
     original_trap_exit = Process.flag(:trap_exit, true)
 
     on_exit(fn ->
-      Pulsar.stop_broker(broker.service_url)
+      Process.exit(app_pid, :shutdown)
+      Utils.wait_for(fn -> not Process.alive?(app_pid) end)
       Process.flag(:trap_exit, original_trap_exit)
     end)
   end
@@ -35,10 +41,10 @@ defmodule Pulsar.Integration.ConnectionTest do
     test "consumer recovers from broker crash" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-crash",
-          :Shared,
-          @consumer_callback
+          topic: @topic,
+          subscription_name: @subscription <> "-crash",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback
         )
 
       [consumer_pid_before_crash] = Pulsar.ConsumerGroup.list_consumers(group_pid)
@@ -65,10 +71,10 @@ defmodule Pulsar.Integration.ConnectionTest do
     test "consumer recovers from broker-initiated topic unload" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-unload",
-          :Shared,
-          Pulsar.Test.Support.DummyConsumer
+          topic: @topic,
+          subscription_name: @subscription <> "-unload",
+          subscription_type: :Shared,
+          callback_module: Pulsar.Test.Support.DummyConsumer
         )
 
       [consumer_pid_before_unload] = Pulsar.ConsumerGroup.list_consumers(group_pid)
