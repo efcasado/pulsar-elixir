@@ -26,7 +26,7 @@ defmodule Pulsar.Integration.ConnectionTest do
       host: broker.service_url
     ]
 
-    {:ok, app_pid} = Pulsar.Application.start(config)
+    {:ok, app_pid} = Pulsar.start(config)
 
     original_trap_exit = Process.flag(:trap_exit, true)
 

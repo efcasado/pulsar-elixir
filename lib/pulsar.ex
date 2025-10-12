@@ -47,13 +47,87 @@ defmodule Pulsar do
       # Service discovery via broker
       {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
   """
-
+  use Application
   require Logger
 
+  @app_supervisor Pulsar.Supervisor
   @broker_registry Pulsar.BrokerRegistry
+  @consumer_registry Pulsar.ConsumerRegistry
   @broker_supervisor Pulsar.BrokerSupervisor
   @consumer_supervisor Pulsar.ConsumerSupervisor
-  @consumer_registry Pulsar.ConsumerRegistry
+
+  @doc """
+  Start the Pulsar application with custom configuration.
+
+  ## Examples
+
+      # Start with custom configuration
+      {:ok, pid} = Pulsar.Application.start(
+        host: "pulsar://localhost:6650",
+        consumers: [
+          {:my_consumer, [
+            topic: "my-topic",
+            subscription_name: "my-subscription",
+            subscription_type: :Shared,
+            callback: MyConsumerCallback
+          ]}
+        ]
+      )
+      
+      # Later, stop it
+      :ok = Pulsar.Application.stop(pid)
+  """
+  def start(config) do
+    start(:normal, config)
+  end
+
+  @impl true
+  def start(_type, opts) do
+    socket_opts =
+      Keyword.get(opts, :socket_opts, Application.get_env(:pulsar, :socket_opts, []))
+
+    conn_timeout =
+      Keyword.get(opts, :conn_timeout, Application.get_env(:pulsar, :conn_timeout, 5_000))
+
+    auth =
+      Keyword.get(opts, :auth, Application.get_env(:pulsar, :auth, []))
+
+    consumers =
+      Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
+
+    bootstrap_host =
+      Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
+
+    broker_opts = [
+      socket_opts: socket_opts,
+      conn_timeout: conn_timeout,
+      auth: auth
+    ]
+
+    children =
+      [
+        {Registry, keys: :unique, name: @broker_registry},
+        {Registry, keys: :unique, name: @consumer_registry},
+        {DynamicSupervisor, strategy: :one_for_one, name: @broker_supervisor},
+        {DynamicSupervisor, strategy: :one_for_one, name: @consumer_supervisor}
+      ]
+
+    opts = [strategy: :one_for_one, name: @app_supervisor]
+    {:ok, pid} = Supervisor.start_link(children, opts)
+
+    # a bootstrap host is required
+    {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
+
+    consumers
+    |> Enum.each(fn {_, consumer_opts} -> {:ok, _} = Pulsar.start_consumer(consumer_opts) end)
+
+    {:ok, pid}
+  end
+
+  @impl true
+  def stop(pid) when is_pid(pid) do
+    Supervisor.stop(pid, :normal)
+  end
 
   @doc """
   Starts a broker connection.
