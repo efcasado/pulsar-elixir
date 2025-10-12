@@ -50,10 +50,10 @@ defmodule Pulsar do
 
   require Logger
 
-  @registry_name Pulsar.BrokerRegistry
-  @supervisor_name Pulsar.BrokerSupervisor
-  @consumer_group_supervisor_name Pulsar.ConsumerSupervisor
-  @consumer_group_registry_name Pulsar.ConsumerGroupRegistry
+  @broker_registry Pulsar.BrokerRegistry
+  @broker_supervisor Pulsar.BrokerSupervisor
+  @consumer_supervisor Pulsar.ConsumerSupervisor
+  @consumer_registry Pulsar.ConsumerRegistry
 
   @doc """
   Starts a broker connection.
@@ -78,7 +78,7 @@ defmodule Pulsar do
         {:ok, broker_pid}
 
       {:error, :not_found} ->
-        registry_opts = [{:name, {:via, Registry, {@registry_name, broker_url}}} | opts]
+        registry_opts = [{:name, {:via, Registry, {@broker_registry, broker_url}}} | opts]
 
         child_spec = %{
           id: broker_url,
@@ -87,7 +87,7 @@ defmodule Pulsar do
           restart: :permanent
         }
 
-        case DynamicSupervisor.start_child(@supervisor_name, child_spec) do
+        case DynamicSupervisor.start_child(@broker_supervisor, child_spec) do
           {:ok, broker_pid} ->
             {:ok, broker_pid}
 
@@ -115,7 +115,7 @@ defmodule Pulsar do
   """
   @spec lookup_broker(String.t()) :: {:ok, pid()} | {:error, :not_found}
   def lookup_broker(broker_url) do
-    case Registry.lookup(@registry_name, broker_url) do
+    case Registry.lookup(@broker_registry, broker_url) do
       [{pid, _value}] -> {:ok, pid}
       [] -> {:error, :not_found}
     end
@@ -235,7 +235,7 @@ defmodule Pulsar do
              strategy: :one_for_one,
              # TO-DO: should be configurable
              max_restarts: 10,
-             name: {:via, Registry, {@consumer_group_registry_name, group_id}}
+             name: {:via, Registry, {@consumer_registry, group_id}}
            ]
          ]},
       # TO-DO: should be transient?
@@ -243,7 +243,7 @@ defmodule Pulsar do
       type: :supervisor
     }
 
-    DynamicSupervisor.start_child(@consumer_group_supervisor_name, consumer_group_spec)
+    DynamicSupervisor.start_child(@consumer_supervisor, consumer_group_spec)
   end
 
   @doc """
@@ -272,7 +272,7 @@ defmodule Pulsar do
   end
 
   def stop_consumer(group_id) when is_binary(group_id) do
-    case Registry.lookup(@consumer_group_registry_name, group_id) do
+    case Registry.lookup(@consumer_registry, group_id) do
       [{group_pid, _value}] ->
         stop_consumer(group_pid)
 
@@ -289,7 +289,7 @@ defmodule Pulsar do
   end
 
   def consumers_for_group(group_id) when is_binary(group_id) do
-    case Registry.lookup(@consumer_group_registry_name, group_id) do
+    case Registry.lookup(@consumer_registry, group_id) do
       [{group_pid, _value}] ->
         consumers_for_group(group_pid)
 

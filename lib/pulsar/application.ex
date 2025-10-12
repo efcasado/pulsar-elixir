@@ -17,7 +17,7 @@ defmodule Pulsar.Application do
     children =
       [
         {Registry, keys: :unique, name: Pulsar.BrokerRegistry},
-        {Registry, keys: :unique, name: Pulsar.ConsumerGroupRegistry},
+        {Registry, keys: :unique, name: Pulsar.ConsumerRegistry},
         {DynamicSupervisor, strategy: :one_for_one, name: Pulsar.BrokerSupervisor},
         {DynamicSupervisor, strategy: :one_for_one, name: Pulsar.ConsumerSupervisor}
       ]
