@@ -17,6 +17,7 @@ defmodule Pulsar.Consumer do
   require Logger
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Utils
 
   defstruct [
     :topic,
@@ -348,65 +349,61 @@ defmodule Pulsar.Consumer do
   end
 
   defp lookup_topic_with_redirect(topic, authoritative, max_redirects) when max_redirects > 0 do
-    case get_random_broker() do
-      {:error, reason} ->
-        {:error, reason}
+    broker = Utils.broker()
 
-      {:ok, discovery_broker_pid} ->
-        case Pulsar.Broker.lookup_topic(discovery_broker_pid, topic, authoritative) do
-          {:ok, %{response: :Connect} = response} ->
-            # Success - we can connect to this broker
-            broker_url = get_broker_url(response)
-            {:ok, broker_url}
+    case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do
+      {:ok, %{response: :Connect} = response} ->
+        # Success - we can connect to this broker
+        broker_url = get_broker_url(response)
+        {:ok, broker_url}
 
-          {:ok, %{response: :Redirect, brokerServiceUrl: redirect_url} = response}
-          when redirect_url != nil ->
-            # Redirect - perform authoritative lookup using the redirected broker
-            Logger.debug(
-              "Topic lookup redirected to #{redirect_url}, performing authoritative lookup"
-            )
+      {:ok, %{response: :Redirect, brokerServiceUrl: redirect_url} = response}
+      when redirect_url != nil ->
+        # Redirect - perform authoritative lookup using the redirected broker
+        Logger.debug(
+          "Topic lookup redirected to #{redirect_url}, performing authoritative lookup"
+        )
 
-            redirect_broker_url = get_broker_url(response)
+        redirect_broker_url = get_broker_url(response)
 
-            case Pulsar.start_broker(redirect_broker_url) do
-              {:ok, redirect_broker_pid} ->
-                case Pulsar.Broker.lookup_topic(redirect_broker_pid, topic, true) do
-                  {:ok, %{response: :Connect} = final_response} ->
-                    final_broker_url = get_broker_url(final_response)
-                    {:ok, final_broker_url}
+        case Pulsar.start_broker(redirect_broker_url) do
+          {:ok, redirect_broker_pid} ->
+            case Pulsar.Broker.lookup_topic(redirect_broker_pid, topic, true) do
+              {:ok, %{response: :Connect} = final_response} ->
+                final_broker_url = get_broker_url(final_response)
+                {:ok, final_broker_url}
 
-                  {:ok, %{response: :Redirect, authoritative: redirect_authoritative}} ->
-                    # Another redirect - recurse with decremented counter, using authoritative value from response
-                    authoritative_for_next = redirect_authoritative || false
-                    lookup_topic_with_redirect(topic, authoritative_for_next, max_redirects - 1)
+              {:ok, %{response: :Redirect, authoritative: redirect_authoritative}} ->
+                # Another redirect - recurse with decremented counter, using authoritative value from response
+                authoritative_for_next = redirect_authoritative || false
+                lookup_topic_with_redirect(topic, authoritative_for_next, max_redirects - 1)
 
-                  {:ok, %{response: :Failed, error: error}} ->
-                    Logger.error("Authoritative topic lookup failed: #{inspect(error)}")
-                    {:error, {:lookup_failed, error}}
+              {:ok, %{response: :Failed, error: error}} ->
+                Logger.error("Authoritative topic lookup failed: #{inspect(error)}")
+                {:error, {:lookup_failed, error}}
 
-                  {:error, reason} ->
-                    Logger.error("Authoritative topic lookup error: #{inspect(reason)}")
-                    {:error, reason}
-                end
-
-              {:error, broker_start_error} ->
-                Logger.error("Failed to start redirect broker: #{inspect(broker_start_error)}")
-                {:error, {:broker_start_failed, broker_start_error}}
+              {:error, reason} ->
+                Logger.error("Authoritative topic lookup error: #{inspect(reason)}")
+                {:error, reason}
             end
 
-          {:ok, %{response: :Redirect}} ->
-            # Redirect but no broker URL provided - should not happen but handle gracefully
-            Logger.error("Received redirect response without broker URL")
-            {:error, :invalid_redirect_response}
-
-          {:ok, %{response: :Failed, error: error}} ->
-            Logger.error("Topic lookup failed: #{inspect(error)}")
-            {:error, {:lookup_failed, error}}
-
-          {:error, reason} ->
-            Logger.error("Topic lookup error: #{inspect(reason)}")
-            {:error, reason}
+          {:error, broker_start_error} ->
+            Logger.error("Failed to start redirect broker: #{inspect(broker_start_error)}")
+            {:error, {:broker_start_failed, broker_start_error}}
         end
+
+      {:ok, %{response: :Redirect}} ->
+        # Redirect but no broker URL provided - should not happen but handle gracefully
+        Logger.error("Received redirect response without broker URL")
+        {:error, :invalid_redirect_response}
+
+      {:ok, %{response: :Failed, error: error}} ->
+        Logger.error("Topic lookup failed: #{inspect(error)}")
+        {:error, {:lookup_failed, error}}
+
+      {:error, reason} ->
+        Logger.error("Topic lookup error: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -436,16 +433,5 @@ defmodule Pulsar.Consumer do
     }
 
     Pulsar.Broker.send_command(broker_pid, flow_command)
-  end
-
-  defp get_random_broker do
-    case Pulsar.list_brokers() do
-      [] ->
-        {:error, :no_brokers_available}
-
-      brokers ->
-        {_broker_key, broker_pid} = Enum.random(brokers)
-        {:ok, broker_pid}
-    end
   end
 end

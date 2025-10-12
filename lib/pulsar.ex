@@ -144,36 +144,6 @@ defmodule Pulsar do
   end
 
   @doc """
-  Lists all active broker connections.
-
-  Returns a list of tuples: `[{broker_key, broker_pid}]`
-
-  ## Examples
-
-      iex> Pulsar.list_brokers()
-      [{"localhost:6650", #PID<0.123.0>}]
-  """
-  @spec list_brokers() :: [{String.t(), pid()}]
-  def list_brokers do
-    Registry.select(@registry_name, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
-  end
-
-  @doc """
-  Returns the number of active broker connections.
-
-  ## Examples
-
-      iex> Pulsar.broker_count()
-      2
-  """
-  @spec broker_count() :: non_neg_integer()
-  def broker_count do
-    Registry.count(@registry_name)
-  end
-
-  ## Consumer Management
-
-  @doc """
   Starts consumer group that manages one or more consumer processes.
 
   This is the primary way to consume messages from Pulsar topics. Even for a 
@@ -274,18 +244,6 @@ defmodule Pulsar do
     }
 
     DynamicSupervisor.start_child(@consumer_group_supervisor_name, consumer_group_spec)
-  end
-
-  @doc """
-  Lists all active consumer groups.
-
-  Returns a list of tuples: `[{group_id, group_pid}]`
-  """
-  @spec list_consumer_groups() :: [{String.t(), pid()}]
-  def list_consumer_groups do
-    Registry.select(@consumer_group_registry_name, [
-      {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}
-    ])
   end
 
   @doc """
