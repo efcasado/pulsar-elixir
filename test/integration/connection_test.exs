@@ -47,7 +47,7 @@ defmodule Pulsar.Integration.ConnectionTest do
           callback_module: @consumer_callback
         )
 
-      [consumer_pid_before_crash] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_before_crash] = Pulsar.consumers_for_group(group_pid)
 
       broker = System.broker_for_consumer(consumer_pid_before_crash)
 
@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
 
-      [consumer_pid_after_crash] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_after_crash] = Pulsar.consumers_for_group(group_pid)
 
       # consumer crashed due to broker link
       assert not Process.alive?(consumer_pid_before_crash)
@@ -77,13 +77,13 @@ defmodule Pulsar.Integration.ConnectionTest do
           callback_module: Pulsar.Test.Support.DummyConsumer
         )
 
-      [consumer_pid_before_unload] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_before_unload] = Pulsar.consumers_for_group(group_pid)
 
       :ok = System.unload_topic(@topic)
 
       Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_unload) end)
 
-      [consumer_pid_after_unload] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid_after_unload] = Pulsar.consumers_for_group(group_pid)
 
       # original consumer crashed due to topic unload
       assert not Process.alive?(consumer_pid_before_unload)
