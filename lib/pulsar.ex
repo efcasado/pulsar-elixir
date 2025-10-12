@@ -83,6 +83,7 @@ defmodule Pulsar do
         child_spec = %{
           id: broker_url,
           start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
+          # TO-DO: should be transient?
           restart: :permanent
         }
 
@@ -267,6 +268,7 @@ defmodule Pulsar do
              name: {:via, Registry, {@consumer_group_registry_name, group_id}}
            ]
          ]},
+      # TO-DO: should be transient?
       restart: :permanent,
       type: :supervisor
     }
