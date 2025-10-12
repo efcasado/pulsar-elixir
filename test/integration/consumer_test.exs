@@ -32,7 +32,7 @@ defmodule Pulsar.Integration.ConsumerTest do
       host: broker.service_url
     ]
 
-    {:ok, app_pid} = Pulsar.Application.start(config)
+    {:ok, app_pid} = Pulsar.start(config)
 
     on_exit(fn ->
       Process.exit(app_pid, :shutdown)
