@@ -1,7 +1,8 @@
-Adefmodule Pulsar.Integration.ConsumerTest do
+defmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
   require Logger
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @topic "persistent://public/default/integration-test-topic"
@@ -46,7 +47,11 @@ Adefmodule Pulsar.Integration.ConsumerTest do
       [consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       System.produce_messages(@topic, @messages)
-      Process.sleep(3000)
+
+      Utils.wait_for(fn ->
+        consumer_count = @consumer_callback.count_messages(consumer_pid)
+        Enum.count(@messages) == consumer_count
+      end)
 
       message_count = @consumer_callback.count_messages(consumer_pid)
 
@@ -66,7 +71,12 @@ Adefmodule Pulsar.Integration.ConsumerTest do
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       System.produce_messages(@topic, @messages)
-      Process.sleep(3000)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
+        Enum.count(@messages) == consumer1_count + consumer2_count
+      end)
 
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer2_messages = @consumer_callback.get_messages(consumer2_pid)
@@ -118,7 +128,12 @@ Adefmodule Pulsar.Integration.ConsumerTest do
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       System.produce_messages(@topic, @messages)
-      Process.sleep(5000)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
+        Enum.count(@messages) == consumer1_count + consumer2_count
+      end)
 
       consumer1_count = @consumer_callback.count_messages(consumer1_pid)
       consumer2_count = @consumer_callback.count_messages(consumer2_pid)
@@ -144,7 +159,12 @@ Adefmodule Pulsar.Integration.ConsumerTest do
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       System.produce_messages(@topic, @messages)
-      Process.sleep(3000)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
+        Enum.count(@messages) == consumer1_count + consumer2_count
+      end)
 
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer2_messages = @consumer_callback.get_messages(consumer2_pid)
@@ -191,7 +211,11 @@ Adefmodule Pulsar.Integration.ConsumerTest do
       [consumer1_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
 
       System.produce_messages(@topic, @messages)
-      Process.sleep(3000)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        Enum.count(@messages) == consumer1_count
+      end)
 
       consumer1_messages = @consumer_callback.get_messages(consumer1_pid)
       consumer1_count = length(consumer1_messages)
