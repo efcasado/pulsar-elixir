@@ -50,7 +50,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           callback_module: @consumer_callback
         )
 
-      [consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
 
       System.produce_messages(@topic, @messages)
 
@@ -74,7 +74,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           opts: [consumer_count: 2]
         )
 
-      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
       System.produce_messages(@topic, @messages)
 
@@ -131,7 +131,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           opts: [consumer_count: 2]
         )
 
-      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
       System.produce_messages(@topic, @messages)
 
@@ -162,7 +162,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           opts: [consumer_count: 2]
         )
 
-      [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
       System.produce_messages(@topic, @messages)
 
@@ -214,7 +214,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           opts: [consumer_count: 1]
         )
 
-      [consumer1_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
+      [consumer1_pid] = Pulsar.consumers_for_group(group_pid)
 
       System.produce_messages(@topic, @messages)
 

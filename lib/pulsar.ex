@@ -233,25 +233,45 @@ defmodule Pulsar do
     {:ok, callback_module} = Keyword.fetch(args, :callback_module)
     opts = Keyword.get(args, :opts, [])
 
-    group_id = Pulsar.ConsumerGroup.generate_group_id(topic, subscription_name)
+    consumer_count = Keyword.get(opts, :consumer_count, 1)
+    init_args = Keyword.get(opts, :init_args, [])
 
-    consumer_group_opts =
-      [
-        topic: topic,
-        subscription_name: subscription_name,
-        subscription_type: subscription_type,
-        callback_module: callback_module,
-        name: {:via, Registry, {@consumer_group_registry_name, group_id}}
-      ] ++ opts
+    group_id = unique_group_id(topic, subscription_name)
 
-    child_spec = %{
+    children =
+      for i <- 1..consumer_count do
+        consumer_id = "#{group_id}-consumer-#{i}"
+
+        %{
+          id: consumer_id,
+          start: {
+            Pulsar.Consumer,
+            :start_link,
+            [topic, subscription_name, subscription_type, callback_module, [init_args: init_args]]
+          },
+          restart: :transient,
+          type: :worker
+        }
+      end
+
+    consumer_group_spec = %{
       id: group_id,
-      start: {Pulsar.ConsumerGroup, :start_link, [consumer_group_opts]},
+      start:
+        {Supervisor, :start_link,
+         [
+           children,
+           [
+             strategy: :one_for_one,
+             # TO-DO: should be configurable
+             max_restarts: 10,
+             name: {:via, Registry, {@consumer_group_registry_name, group_id}}
+           ]
+         ]},
       restart: :permanent,
       type: :supervisor
     }
 
-    DynamicSupervisor.start_child(@consumer_group_supervisor_name, child_spec)
+    DynamicSupervisor.start_child(@consumer_group_supervisor_name, consumer_group_spec)
   end
 
   @doc """
@@ -264,23 +284,6 @@ defmodule Pulsar do
     Registry.select(@consumer_group_registry_name, [
       {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}
     ])
-  end
-
-  @doc """
-  Gets information about a specific consumer group by group ID.
-
-  Returns `{:ok, info_map}` if found, `{:error, :not_found}` otherwise.
-  """
-  @spec get_consumer_group_info(String.t()) :: {:ok, map()} | {:error, :not_found}
-  def get_consumer_group_info(group_id) do
-    case Registry.lookup(@consumer_group_registry_name, group_id) do
-      [{group_pid, _value}] ->
-        info = Pulsar.ConsumerGroup.get_info(group_pid)
-        {:ok, Map.put(info, :group_id, group_id)}
-
-      [] ->
-        {:error, :not_found}
-    end
   end
 
   @doc """
@@ -305,25 +308,39 @@ defmodule Pulsar do
   """
   @spec stop_consumer(pid() | String.t()) :: :ok | {:error, :not_found}
   def stop_consumer(group_pid) when is_pid(group_pid) do
-    Pulsar.ConsumerGroup.stop(group_pid)
+    Supervisor.stop(group_pid)
   end
 
   def stop_consumer(group_id) when is_binary(group_id) do
     case Registry.lookup(@consumer_group_registry_name, group_id) do
       [{group_pid, _value}] ->
-        Pulsar.ConsumerGroup.stop(group_pid)
-        :ok
+        stop_consumer(group_pid)
 
       [] ->
         {:error, :not_found}
     end
   end
 
-  @doc """
-  Returns the total number of active consumer groups.
-  """
-  @spec consumer_group_count() :: non_neg_integer()
-  def consumer_group_count do
-    Registry.count(@consumer_group_registry_name)
+  @spec stop_consumer(pid() | String.t()) :: :ok | {:error, :not_found}
+  def consumers_for_group(group_pid) when is_pid(group_pid) do
+    group_pid
+    |> Supervisor.which_children()
+    |> Enum.map(fn {_, child_pid, _, _} -> child_pid end)
+  end
+
+  def consumers_for_group(group_id) when is_binary(group_id) do
+    case Registry.lookup(@consumer_group_registry_name, group_id) do
+      [{group_pid, _value}] ->
+        consumers_for_group(group_pid)
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @spec unique_group_id(String.t(), String.t()) :: String.t()
+  defp unique_group_id(topic, subscription_name) do
+    timestamp = System.unique_integer([:positive])
+    "#{topic}-#{subscription_name}-#{timestamp}"
   end
 end
