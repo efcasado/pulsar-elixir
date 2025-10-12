@@ -27,10 +27,16 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   setup do
     broker = System.broker()
-    {:ok, _broker_pid} = Pulsar.start_broker(broker.service_url)
+
+    config = [
+      host: broker.service_url
+    ]
+
+    {:ok, app_pid} = Pulsar.Application.start(config)
 
     on_exit(fn ->
-      :ok = Pulsar.stop_broker(broker.service_url)
+      Process.exit(app_pid, :shutdown)
+      Utils.wait_for(fn -> not Process.alive?(app_pid) end)
     end)
   end
 
@@ -38,10 +44,10 @@ defmodule Pulsar.Integration.ConsumerTest do
     test "produce and consume messages" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-e2e",
-          :Shared,
-          @consumer_callback
+          topic: @topic,
+          subscription_name: @subscription <> "-e2e",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback
         )
 
       [consumer_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
@@ -61,11 +67,11 @@ defmodule Pulsar.Integration.ConsumerTest do
     test "Key_Shared subscription with multiple consumers" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-key-shared",
-          :Key_Shared,
-          @consumer_callback,
-          consumer_count: 2
+          topic: @topic,
+          subscription_name: @subscription <> "-key-shared",
+          subscription_type: :Key_Shared,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 2]
         )
 
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
@@ -118,11 +124,11 @@ defmodule Pulsar.Integration.ConsumerTest do
     test "Shared subscription with multiple consumers (round-robin)" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-shared",
-          :Shared,
-          @consumer_callback,
-          consumer_count: 2
+          topic: @topic,
+          subscription_name: @subscription <> "-shared",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 2]
         )
 
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
@@ -149,11 +155,11 @@ defmodule Pulsar.Integration.ConsumerTest do
     test "Failover subscription with multiple consumers" do
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-failover",
-          :Failover,
-          @consumer_callback,
-          consumer_count: 2
+          topic: @topic,
+          subscription_name: @subscription <> "-failover",
+          subscription_type: :Failover,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 2]
         )
 
       [consumer1_pid, consumer2_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)
@@ -187,11 +193,11 @@ defmodule Pulsar.Integration.ConsumerTest do
       # because exclusive subscriptions only allow one consumer at a time
       result =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-exclusive-multi",
-          :Exclusive,
-          @consumer_callback,
-          consumer_count: 2
+          topic: @topic,
+          subscription_name: @subscription <> "-exclusive-multi",
+          subscription_type: :Exclusive,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 2]
         )
 
       assert {:error, _reason} = result
@@ -201,11 +207,11 @@ defmodule Pulsar.Integration.ConsumerTest do
       # Test that exclusive subscription works correctly with a single consumer
       {:ok, group_pid} =
         Pulsar.start_consumer(
-          @topic,
-          @subscription <> "-exclusive-single",
-          :Exclusive,
-          @consumer_callback,
-          consumer_count: 1
+          topic: @topic,
+          subscription_name: @subscription <> "-exclusive-single",
+          subscription_type: :Exclusive,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 1]
         )
 
       [consumer1_pid] = Pulsar.ConsumerGroup.list_consumers(group_pid)

@@ -55,33 +55,8 @@ defmodule Pulsar do
   @consumer_group_supervisor_name Pulsar.ConsumerSupervisor
   @consumer_group_registry_name Pulsar.ConsumerGroupRegistry
 
-  ## Broker Management
-
   @doc """
-  Starts a broker connection with default options (idempotent).
-
-  Uses sensible defaults for socket options, connection timeout, and authentication.
-  If a broker for the given URL already exists, returns the existing broker.
-  Otherwise, starts a new broker connection.
-
-  Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
-
-  ## Examples
-
-      iex> Pulsar.start_broker("pulsar://localhost:6650")
-      {:ok, #PID<0.123.0>}
-      
-      # Safe to call again - returns existing broker
-      iex> Pulsar.start_broker("pulsar://localhost:6650")
-      {:ok, #PID<0.123.0>}
-  """
-  @spec start_broker(String.t()) :: {:ok, pid()} | {:error, term()}
-  def start_broker(broker_url) do
-    start_broker(broker_url, default_broker_opts())
-  end
-
-  @doc """
-  Starts a broker connection with custom options (idempotent).
+  Starts a broker connection.
 
   If a broker for the given URL already exists, returns the existing broker.
   Otherwise, starts a new broker connection with the provided options.
@@ -97,13 +72,30 @@ defmodule Pulsar do
       {:ok, #PID<0.123.0>}
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def start_broker(broker_url, opts) do
+  def start_broker(broker_url, opts \\ []) do
     case lookup_broker(broker_url) do
       {:ok, broker_pid} ->
         {:ok, broker_pid}
 
       {:error, :not_found} ->
-        do_start_broker(broker_url, opts)
+        registry_opts = [{:name, {:via, Registry, {@registry_name, broker_url}}} | opts]
+
+        child_spec = %{
+          id: broker_url,
+          start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
+          restart: :permanent
+        }
+
+        case DynamicSupervisor.start_child(@supervisor_name, child_spec) do
+          {:ok, broker_pid} ->
+            {:ok, broker_pid}
+
+          {:error, {:already_started, broker_pid}} ->
+            {:ok, broker_pid}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -122,9 +114,7 @@ defmodule Pulsar do
   """
   @spec lookup_broker(String.t()) :: {:ok, pid()} | {:error, :not_found}
   def lookup_broker(broker_url) do
-    broker_key = broker_key(broker_url)
-
-    case Registry.lookup(@registry_name, broker_key) do
+    case Registry.lookup(@registry_name, broker_url) do
       [{pid, _value}] -> {:ok, pid}
       [] -> {:error, :not_found}
     end
@@ -183,9 +173,8 @@ defmodule Pulsar do
   ## Consumer Management
 
   @doc """
-  Starts a consumer group (supervised for automatic restart).
+  Starts consumer group that manages one or more consumer processes.
 
-  Creates a consumer group supervisor that manages one or more consumer processes.
   This is the primary way to consume messages from Pulsar topics. Even for a 
   single consumer, a consumer group is created for consistent supervision and 
   restart behavior.
@@ -201,93 +190,68 @@ defmodule Pulsar do
     - `:init_args` - Arguments passed to callback module's init/1 function
     - Other options passed to ConsumerGroup supervisor
 
-  Returns `{:ok, group_pid}` where `group_pid` is the PID of the consumer group supervisor.
+  Returns `{:ok, pid}` where `pid` is the PID of the consumer group supervisor.
   Use this PID with `stop_consumer/1` to stop the entire consumer group.
 
   ## Examples
 
       # Start a single consumer (default behavior)
       iex> Pulsar.start_consumer(
-      ...>   "persistent://public/default/my-topic",
-      ...>   "my-subscription",
-      ...>   :Exclusive,
-      ...>   MyApp.MessageHandler
+      ...>   topic: "persistent://public/default/my-topic",
+      ...>   subscription_name: "my-subscription",
+      ...>   subscription_type: :Exclusive,
+      ...>   callback_module: MyApp.MessageHandler
       ...> )
       {:ok, #PID<0.456.0>}
 
       # With initialization arguments for the callback module
       iex> Pulsar.start_consumer(
-      ...>   "persistent://public/default/my-topic",
-      ...>   "my-subscription",
-      ...>   :Exclusive,
-      ...>   MyApp.MessageCounter,
-      ...>   init_args: [max_messages: 100]
+      ...>   topic: "persistent://public/default/my-topic",
+      ...>   subscription_name: "my-subscription",
+      ...>   subscription_type: :Exclusive,
+      ...>   callback_module: MyApp.MessageCounter,
+      ...>   opts: [init_args: [max_messages: 100]]
       ...> )
       {:ok, #PID<0.456.0>}
 
       # With multiple consumers for parallel processing
       iex> Pulsar.start_consumer(
-      ...>   "persistent://public/default/my-topic",
-      ...>   "my-subscription",
-      ...>   :Key_Shared,
-      ...>   MyApp.MessageHandler,
-      ...>   consumer_count: 3
+      ...>   topic: "persistent://public/default/my-topic",
+      ...>   subscription_name: "my-subscription",
+      ...>   subscription_type: :Key_Shared,
+      ...>   callback_module: MyApp.MessageHandler,
+      ...>   opts: [consumer_count: 3]
       ...> )
-      {:ok, #PID<0.456.0>}  # Returns consumer group supervisor PID
+      {:ok, #PID<0.456.0>}
   """
-  @spec start_consumer(String.t(), String.t(), atom(), module(), keyword()) ::
-          {:ok, pid()} | {:error, term()}
-  def start_consumer(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
-    start_consumer_group(
-      topic,
-      subscription_name,
-      subscription_type,
-      callback_module,
-      opts
-    )
-  end
 
-  ## Private Functions
+  @spec start_consumer(keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_consumer(args) do
+    {:ok, topic} = Keyword.fetch(args, :topic)
+    {:ok, subscription_name} = Keyword.fetch(args, :subscription_name)
+    {:ok, subscription_type} = Keyword.fetch(args, :subscription_type)
+    {:ok, callback_module} = Keyword.fetch(args, :callback_module)
+    opts = Keyword.get(args, :opts, [])
 
-  defp default_broker_opts do
-    [
-      socket_opts: [],
-      conn_timeout: 5_000,
-      auth: []
-    ]
-  end
+    group_id = Pulsar.ConsumerGroup.generate_group_id(topic, subscription_name)
 
-  defp do_start_broker(broker_url, opts) do
-    broker_key = broker_key(broker_url)
+    consumer_group_opts =
+      [
+        topic: topic,
+        subscription_name: subscription_name,
+        subscription_type: subscription_type,
+        callback_module: callback_module,
+        name: {:via, Registry, {@consumer_group_registry_name, group_id}}
+      ] ++ opts
 
-    # Add registry name to opts for registration
-    registry_opts = [{:name, {:via, Registry, {@registry_name, broker_key}}} | opts]
-
-    # Start the broker process
     child_spec = %{
-      id: broker_key,
-      start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
-      restart: :permanent
+      id: group_id,
+      start: {Pulsar.ConsumerGroup, :start_link, [consumer_group_opts]},
+      restart: :permanent,
+      type: :supervisor
     }
 
-    case DynamicSupervisor.start_child(@supervisor_name, child_spec) do
-      {:ok, broker_pid} ->
-        Logger.info("Started broker #{broker_key} with PID #{inspect(broker_pid)}")
-        {:ok, broker_pid}
-
-      {:error, {:already_started, broker_pid}} ->
-        Logger.debug("Broker #{broker_key} already exists with PID #{inspect(broker_pid)}")
-        {:ok, broker_pid}
-
-      {:error, reason} ->
-        Logger.error("Failed to start broker #{broker_key}: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp broker_key(broker_url) do
-    %URI{host: host, port: port} = URI.parse(broker_url)
-    "#{host}:#{port}"
+    DynamicSupervisor.start_child(@consumer_group_supervisor_name, child_spec)
   end
 
   @doc """
@@ -356,54 +320,10 @@ defmodule Pulsar do
   end
 
   @doc """
-  Stops a consumer group by group ID.
-
-  **Deprecated:** Use `stop_consumer/1` instead, which accepts both PIDs and group IDs.
-  """
-  @deprecated "Use stop_consumer/1 instead"
-  @spec stop_consumer_group(String.t()) :: :ok | {:error, :not_found}
-  def stop_consumer_group(group_id) do
-    stop_consumer(group_id)
-  end
-
-  @doc """
   Returns the total number of active consumer groups.
   """
   @spec consumer_group_count() :: non_neg_integer()
   def consumer_group_count do
     Registry.count(@consumer_group_registry_name)
-  end
-
-  ## Private Functions
-
-  defp start_consumer_group(topic, subscription_name, subscription_type, callback_module, opts) do
-    # Generate unique group ID using the same logic as ConsumerGroup
-    group_id = Pulsar.ConsumerGroup.generate_group_id(topic, subscription_name)
-
-    consumer_group_opts =
-      [
-        topic: topic,
-        subscription_name: subscription_name,
-        subscription_type: subscription_type,
-        callback_module: callback_module,
-        name: {:via, Registry, {@consumer_group_registry_name, group_id}}
-      ] ++ opts
-
-    child_spec = %{
-      id: group_id,
-      start: {Pulsar.ConsumerGroup, :start_link, [consumer_group_opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
-
-    case DynamicSupervisor.start_child(@consumer_group_supervisor_name, child_spec) do
-      {:ok, group_pid} ->
-        Logger.info("Started consumer group #{group_id} with PID #{inspect(group_pid)}")
-        {:ok, group_pid}
-
-      {:error, reason} ->
-        Logger.error("Failed to start consumer group #{group_id}: #{inspect(reason)}")
-        {:error, reason}
-    end
   end
 end

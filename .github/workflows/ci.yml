@@ -60,4 +60,4 @@ jobs:
         echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
       
     - name: Run tests
-      run: mix test
+      run: mix test --no-start
