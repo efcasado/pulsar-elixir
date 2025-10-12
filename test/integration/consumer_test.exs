@@ -1,4 +1,4 @@
-defmodule Pulsar.Integration.ConsumerTest do
+Adefmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
   require Logger
   alias Pulsar.Test.Support.System
@@ -50,8 +50,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       message_count = @consumer_callback.count_messages(consumer_pid)
 
-      assert message_count == Enum.count(@messages),
-             "Expected to receive as many messages as were produced"
+      assert message_count == Enum.count(@messages)
     end
 
     test "Key_Shared subscription with multiple consumers" do
