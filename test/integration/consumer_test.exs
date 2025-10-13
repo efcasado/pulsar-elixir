@@ -42,7 +42,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-e2e",
@@ -65,7 +65,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Key_Shared subscription with multiple consumers" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-key-shared",
@@ -122,7 +122,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Shared subscription with multiple consumers (round-robin)" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-shared",
@@ -153,7 +153,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Failover subscription with multiple consumers" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-failover",
@@ -205,7 +205,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
     test "Exclusive subscription with single consumer" do
       # Test that exclusive subscription works correctly with a single consumer
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-exclusive-single",
@@ -227,6 +227,49 @@ defmodule Pulsar.Integration.ConsumerTest do
       consumer1_count = length(consumer1_messages)
 
       assert consumer1_count == Enum.count(@messages)
+    end
+
+    test "Consumer groups in a partitioned topic" do
+      partitioned_topic = @topic <> "-partitioned"
+      System.create_topic(partitioned_topic, 3)
+
+      {:ok, group_pids} =
+        Pulsar.start_consumer(
+          topic: partitioned_topic,
+          subscription_name: @subscription <> "-partitioned",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [consumer_count: 2]
+        )
+
+      consumers =
+        group_pids
+        |> Enum.flat_map(&Pulsar.consumers_for_group(&1))
+
+      System.produce_messages(partitioned_topic, @messages)
+
+      Utils.wait_for(fn ->
+        consumers
+        |> Enum.reduce(0, fn consumer_pid, acc ->
+          @consumer_callback.count_messages(consumer_pid) + acc
+        end)
+        |> Kernel.==(Enum.count(@messages))
+      end)
+
+      consumed_messages =
+        consumers
+        |> Enum.reduce(0, fn consumer_pid, acc ->
+          @consumer_callback.count_messages(consumer_pid) + acc
+        end)
+
+      # The number of consumer (groups) should be equal to the number of
+      # partitions in the topic. The total number of consumers should be
+      # equal to the number of topics times the number of consumers per
+      # partition. Last but not least, all messages produced should be
+      # consumed.
+      assert length(group_pids) == 3
+      assert Enum.count(consumers) == 6
+      assert consumed_messages == Enum.count(@messages)
     end
   end
 end
