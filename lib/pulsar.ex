@@ -121,7 +121,7 @@ defmodule Pulsar do
     {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
 
     consumers
-    |> Enum.each(fn {_, consumer_opts} -> {:ok, _} = Pulsar.start_consumer(consumer_opts) end)
+    |> Enum.each(fn {_, consumer_opts} -> Pulsar.start_consumer(consumer_opts) end)
 
     {:ok, pid}
   end
