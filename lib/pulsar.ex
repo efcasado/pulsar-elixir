@@ -104,6 +104,8 @@ defmodule Pulsar do
       auth: auth
     ]
 
+    :persistent_term.put({Pulsar, :broker_opts}, broker_opts)
+
     children =
       [
         {Registry, keys: :unique, name: @broker_registry},
@@ -152,7 +154,9 @@ defmodule Pulsar do
         {:ok, broker_pid}
 
       {:error, :not_found} ->
-        registry_opts = [{:name, {:via, Registry, {@broker_registry, broker_url}}} | opts]
+        global_opts = :persistent_term.get({Pulsar, :broker_opts}, [])
+        merged_opts = Keyword.merge(global_opts, opts)
+        registry_opts = [{:name, {:via, Registry, {@broker_registry, broker_url}}} | merged_opts]
 
         child_spec = %{
           id: broker_url,
