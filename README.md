@@ -104,6 +104,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | NACK               | ✅        |
 | Consumer  | NACK back-off      | ❌        |
 | Consumer  | Batching           | ❌        |
+| Consumer  | Partitioned topics | ✅        |
 | Consumer  | Chunking           | ❌        |
 | Consumer  | Seek               | ❌        |
 | Consumer  | Subscription types | ✅        |

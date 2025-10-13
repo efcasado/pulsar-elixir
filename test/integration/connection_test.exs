@@ -39,7 +39,7 @@ defmodule Pulsar.Integration.ConnectionTest do
 
   describe "Connection Reliability" do
     test "consumer recovers from broker crash" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-crash",
@@ -69,7 +69,7 @@ defmodule Pulsar.Integration.ConnectionTest do
     end
 
     test "consumer recovers from broker-initiated topic unload" do
-      {:ok, group_pid} =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: @topic,
           subscription_name: @subscription <> "-unload",

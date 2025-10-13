@@ -82,9 +82,28 @@ defmodule Pulsar.Test.Support.System do
     :ok = docker_exec(command)
   end
 
-  def create_topic(topic) do
+  def create_topic(topic, partitions \\ 0)
+
+  def create_topic(topic, 0) do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "create", topic]
+
+    :ok = docker_exec(command)
+  end
+
+  def create_topic(topic, n) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "create-partitioned-topic",
+      topic,
+      "--partitions",
+      "#{n}"
+    ]
 
     :ok = docker_exec(command)
   end
