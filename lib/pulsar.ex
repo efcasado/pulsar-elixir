@@ -7,8 +7,8 @@ defmodule Pulsar do
 
   ## Consumer Architecture
 
-  All consumers are managed as **consumer groups** - supervised collections of 
-  consumer processes. Even when you want a single consumer, it's created as a 
+  All consumers are managed as **consumer groups** - supervised collections of
+  consumer processes. Even when you want a single consumer, it's created as a
   consumer group with `consumer_count: 1` (the default).
 
   This provides:
@@ -20,7 +20,7 @@ defmodule Pulsar do
 
       # Start a broker connection (idempotent)
       {:ok, broker_pid} = Pulsar.start_broker("pulsar://localhost:6650")
-      
+
       # Start a single consumer (creates a consumer group with 1 consumer)
       {:ok, [group_pid]} = Pulsar.start_consumer(
         topic: "persistent://public/default/my-topic",
@@ -28,7 +28,7 @@ defmodule Pulsar do
         subscription_type: :Exclusive,
         callback_module: MyApp.MessageHandler
       )
-      
+
       # Start consumers for a partitioned topic (returns one PID per partition)
       {:ok, group_pids} = Pulsar.start_consumer(
         topic: "persistent://public/default/my-partitioned-topic",
@@ -37,13 +37,13 @@ defmodule Pulsar do
         callback_module: MyApp.MessageHandler,
         opts: [consumer_count: 2]  # 2 consumers per partition
       )
-      
+
       # Stop individual consumer groups (one PID at a time)
       Pulsar.stop_consumer(group_pid)
-      
+
       # Stop all partitions
       Enum.each(group_pids, &Pulsar.stop_consumer/1)
-      
+
       # Service discovery via broker
       {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
   """
@@ -73,7 +73,7 @@ defmodule Pulsar do
           ]}
         ]
       )
-      
+
       # Later, stop it
       :ok = Pulsar.Application.stop(pid)
   """
@@ -143,7 +143,7 @@ defmodule Pulsar do
 
       iex> Pulsar.start_broker("pulsar://localhost:6650", socket_opts: [verify: :none])
       {:ok, #PID<0.123.0>}
-      
+
       iex> Pulsar.start_broker("pulsar://localhost:6650", conn_timeout: 10_000)
       {:ok, #PID<0.123.0>}
   """
@@ -187,7 +187,7 @@ defmodule Pulsar do
 
       iex> Pulsar.lookup_broker("pulsar://localhost:6650")
       {:ok, #PID<0.123.0>}
-      
+
       iex> Pulsar.lookup_broker("pulsar://unknown:6650")
       {:error, :not_found}
   """
@@ -225,7 +225,7 @@ defmodule Pulsar do
   Starts consumer groups for a topic (regular or partitioned).
 
   This is the primary way to consume messages from Pulsar topics. For regular topics,
-  a single consumer group is created. For partitioned topics, individual consumer 
+  a single consumer group is created. For partitioned topics, individual consumer
   groups are created for each partition automatically.
 
   ## Parameters
@@ -237,6 +237,9 @@ defmodule Pulsar do
   - `opts` - Additional options:
     - `:consumer_count` - Number of consumer processes per topic/partition (default: 1)
     - `:init_args` - Arguments passed to callback module's init/1 function
+    - `:flow_initial_permits` - Initial flow permits (default: 100)
+    - `:flow_permits_threshold` - Flow permits threshold for refill (default: 50)
+    - `:flow_permits_refill` - Flow permits refill amount (default: 50)
     - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
@@ -244,7 +247,7 @@ defmodule Pulsar do
   Returns:
   - `{:ok, [pid()]}` - List of consumer group supervisor PIDs when all succeed:
     - For regular topics: List with one PID
-    - For partitioned topics: List with one PID per partition  
+    - For partitioned topics: List with one PID per partition
   - `{:error, [reason()]}` - List of error reasons when one or more consumers fail to start
 
   ## Partitioned Topics
@@ -273,7 +276,7 @@ defmodule Pulsar do
       # Partitioned topic - returns list with one PID per partition
       iex> Pulsar.start_consumer(
       ...>   topic: "persistent://public/default/my-partitioned-topic",
-      ...>   subscription_name: "my-subscription", 
+      ...>   subscription_name: "my-subscription",
       ...>   subscription_type: :Shared,
       ...>   callback_module: MyApp.MessageHandler
       ...> )
@@ -287,7 +290,21 @@ defmodule Pulsar do
       ...>   callback_module: MyApp.MessageHandler,
       ...>   opts: [consumer_count: 2]  # 2 consumers per partition
       ...> )
-      {:ok, [#PID<0.456.0>, #PID<0.457.0>, #PID<0.458.0>]}  # 3 partitions, 2 consumers each
+      {:ok, #PID<0.456.0>}
+
+      # With custom flow control settings
+      iex> Pulsar.start_consumer(
+      ...>   topic: "persistent://public/default/my-topic",
+      ...>   subscription_name: "my-subscription",
+      ...>   subscription_type: :Shared,
+      ...>   callback_module: MyApp.MessageHandler,
+      ...>   opts: [
+      ...>     flow_initial_permits: 200,
+      ...>     flow_permits_threshold: 100,
+      ...>     flow_permits_refill: 100
+      ...>   ]
+      ...> )
+      {:ok, #PID<0.456.0>}
   """
 
   @spec start_consumer(keyword()) :: {:ok, [pid()]} | {:error, [term()]}
@@ -341,18 +358,30 @@ defmodule Pulsar do
 
   defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do
     consumer_count = Keyword.get(opts, :consumer_count, 1)
-    init_args = Keyword.get(opts, :init_args, [])
+    init_args = Keyword.get(opts, :init_args)
+    flow_initial_permits = Keyword.get(opts, :flow_initial_permits)
+    flow_permits_threshold = Keyword.get(opts, :flow_permits_threshold)
+    flow_permits_refill = Keyword.get(opts, :flow_permits_refill)
 
     children =
       for i <- 1..consumer_count do
         consumer_id = "#{name}-consumer-#{i}"
+
+        consumer_opts =
+          [
+            init_args: init_args,
+            flow_initial_permits: flow_initial_permits,
+            flow_permits_threshold: flow_permits_threshold,
+            flow_permits_refill: flow_permits_refill
+          ]
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
         %{
           id: consumer_id,
           start: {
             Pulsar.Consumer,
             :start_link,
-            [topic, subscription_name, subscription_type, callback_module, [init_args: init_args]]
+            [topic, subscription_name, subscription_type, callback_module, consumer_opts]
           },
           restart: :transient,
           type: :worker

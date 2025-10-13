@@ -37,11 +37,16 @@ config :pulsar,
 		topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-app-my-consumer-subscription",
         subscription_type: "Exclusive",
-		callback_module: MyApp.MyConsumer
+        callback_module: MyApp.MyConsumer,
+        opts: [
+          # Optional flow control settings (defaults: 100, 50, 50)
+          flow_initial_permits: 100,
+          flow_permits_threshold: 50,
+          flow_permits_refill: 50
+        ]
     ]
   ]
 ```
-
 Alternatively, you can start the Pulsar client on demand and add it to your application's supervisor
 by calling `Pulsar.start/1` directly, as follows:
 
