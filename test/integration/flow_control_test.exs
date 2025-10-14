@@ -49,7 +49,6 @@ defmodule Pulsar.Integration.FlowControlTest do
 
       [consumer_pid] = Pulsar.consumers_for_group(group_pid)
 
-      # Generate a few messages
       messages =
         for i <- 1..5 do
           {"key#{i}", "Message #{i}"}
@@ -98,7 +97,6 @@ defmodule Pulsar.Integration.FlowControlTest do
       [consumer_pid1] = Pulsar.consumers_for_group(group_pid1)
       [consumer_pid2] = Pulsar.consumers_for_group(group_pid2)
 
-      # Produce messages
       messages =
         for i <- 1..10 do
           {"key#{rem(i, 3)}", "Message #{i}"}
@@ -107,7 +105,6 @@ defmodule Pulsar.Integration.FlowControlTest do
       System.produce_messages(@topic, messages)
 
       # Both consumers should receive some messages (since they have different subscriptions)
-      # Note: With different subscription names, they each get all messages
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer_pid1)
         consumer2_count = @consumer_callback.count_messages(consumer_pid2)
@@ -138,7 +135,6 @@ defmodule Pulsar.Integration.FlowControlTest do
 
       [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
-      # Produce a batch of messages
       messages =
         for i <- 1..15 do
           {"key#{rem(i, 5)}", "Message #{i}"}

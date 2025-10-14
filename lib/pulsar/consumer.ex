@@ -205,10 +205,8 @@ defmodule Pulsar.Consumer do
 
         Pulsar.Broker.send_command(state.broker_pid, ack_command)
 
-        # Check if we need to refill permits and update state
         state = check_and_refill_permits(state)
 
-        # Update state and continue
         new_state = %{state | callback_state: new_callback_state}
         {:noreply, new_state}
 
@@ -422,7 +420,6 @@ defmodule Pulsar.Consumer do
     outstanding_permits = state.flow_outstanding_permits
 
     if outstanding_permits <= refill_threshold do
-      # We need to request more permits
       flow_command = %Binary.CommandFlow{
         consumer_id: state.consumer_id,
         messagePermits: refill_amount
@@ -430,10 +427,8 @@ defmodule Pulsar.Consumer do
 
       Pulsar.Broker.send_command(state.broker_pid, flow_command)
 
-      # Update outstanding permits (we just requested more)
       %{state | flow_outstanding_permits: outstanding_permits + refill_amount}
     else
-      # No refill needed
       state
     end
   end
