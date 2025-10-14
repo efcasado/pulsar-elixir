@@ -59,6 +59,35 @@ by calling `Pulsar.start/1` directly, as follows:
 )
 ```
 
+
+## Testing
+
+> [!IMPORTANT]
+> Do not forget to add the following line to your `/etc/hosts` file before running the tests:
+>
+> ```
+> 127.0.0.1 broker1 broker2
+> ```
+
+To run the tests, run the following command:
+
+```
+mix test --no-start
+```
+
+If you want to run only a subset of tests, specify the file including the tests you want to run
+
+```
+mix test test/integration/consumer_test.exs --no-start
+```
+
+You can also run individual tests by passing the line number where they are defined
+
+```
+mix test test/integration/consumer_test.exs:43 --no-start
+```
+
+
 ## Features
 
 The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apache.org/client-feature-matrix/).
