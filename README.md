@@ -58,3 +58,31 @@ by calling `Pulsar.start/1` directly, as follows:
   ]
 )
 ```
+
+## Features
+
+The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apache.org/client-feature-matrix/).
+
+| Component | Feature            | Supported |
+|-----------|--------------------|-----------|
+| Client    | TLS encryption     | ✅        |
+| Client    | Authentication     | ⚠️        |
+| Client    | Transaction        | ❌        |
+| Client    | Statistics         | ❌        |
+| Producer  |                    | ❌        |
+| Consumer  | ACK                | ✅        |
+| Consumer  | Batch-index ACK    | ❌        |
+| Consumer  | NACK               | ✅        |
+| Consumer  | NACK back-off      | ❌        |
+| Consumer  | Batching           | ❌        |
+| Consumer  | Chunking           | ❌        |
+| Consumer  | Seek               | ❌        |
+| Consumer  | Subscription types | ✅        |
+| Consumer  | Subscription modes | ❌        |
+| Consumer  | Retry letter topic | ❌        |
+| Consumer  | Dead letter topic  | ❌        |
+| Consumer  | Compression        | ❌        |
+| Consumer  | Compaction         | ❌        |
+| Consumer  | Schema             | ❌        |
+| Reader    |                    | ❌        |
+| TableView |                    | ❌        |
