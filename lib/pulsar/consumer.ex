@@ -400,36 +400,63 @@ defmodule Pulsar.Consumer do
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
   end
 
-  defp send_initial_flow(broker_pid, consumer_id, permits) do
-    flow_command = %Binary.CommandFlow{
-      consumer_id: consumer_id,
-      messagePermits: permits
-    }
-
-    Pulsar.Broker.send_command(broker_pid, flow_command)
-  end
-
   defp decrement_permits(state) do
     new_permits = max(state.flow_outstanding_permits - 1, 0)
     %{state | flow_outstanding_permits: new_permits}
   end
 
+  defp send_initial_flow(broker_pid, consumer_id, permits) do
+    # Initial flow starts from 0 outstanding permits
+    send_flow_command(broker_pid, consumer_id, permits, 0)
+  end
+
   defp check_and_refill_permits(state) do
     refill_threshold = state.flow_threshold
     refill_amount = state.flow_refill
-    outstanding_permits = state.flow_outstanding_permits
+    current_permits = state.flow_outstanding_permits
 
-    if outstanding_permits <= refill_threshold do
-      flow_command = %Binary.CommandFlow{
-        consumer_id: state.consumer_id,
-        messagePermits: refill_amount
-      }
+    if current_permits <= refill_threshold do
+      case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+        :ok ->
+          %{state | flow_outstanding_permits: current_permits + refill_amount}
 
-      Pulsar.Broker.send_command(state.broker_pid, flow_command)
-
-      %{state | flow_outstanding_permits: outstanding_permits + refill_amount}
+        error ->
+          Logger.error("Failed to send flow command: #{inspect(error)}")
+          state
+      end
     else
       state
     end
+  end
+
+  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits) do
+    flow_command = %Binary.CommandFlow{
+      consumer_id: consumer_id,
+      messagePermits: permits
+    }
+
+    # Metadata for :start event
+    start_metadata = %{
+      consumer_id: consumer_id,
+      permits_requested: permits,
+      permits_before: outstanding_permits
+    }
+
+    :telemetry.span(
+      [:pulsar, :consumer, :flow_control],
+      start_metadata,
+      fn ->
+        result = Pulsar.Broker.send_command(broker_pid, flow_command)
+
+        stop_metadata =
+          if result == :ok do
+            %{success: true, permits_after: outstanding_permits + permits}
+          else
+            %{success: false, permits_after: outstanding_permits}
+          end
+
+        {result, Map.merge(start_metadata, stop_metadata)}
+      end
+    )
   end
 end
