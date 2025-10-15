@@ -240,7 +240,8 @@ defmodule Pulsar do
     - `:flow_initial` - Initial flow permits (default: 100)
     - `:flow_threshold` - Flow permits threshold for refill (default: 50)
     - `:flow_refill` - Flow permits refill amount (default: 50)
-    - Other options passed to ConsumerGroup supervisor
+    - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
+  - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
 
@@ -362,6 +363,7 @@ defmodule Pulsar do
     flow_initial = Keyword.get(opts, :flow_initial)
     flow_threshold = Keyword.get(opts, :flow_threshold)
     flow_refill = Keyword.get(opts, :flow_refill)
+    initial_position = Keyword.get(opts, :initial_position)
 
     children =
       for i <- 1..consumer_count do
@@ -372,7 +374,8 @@ defmodule Pulsar do
             init_args: init_args,
             flow_initial: flow_initial,
             flow_threshold: flow_threshold,
-            flow_refill: flow_refill
+            flow_refill: flow_refill,
+            initial_position: initial_position
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 

@@ -7,16 +7,16 @@ defmodule Pulsar.Integration.ConsumerTest do
   alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
-  @topic "persistent://public/default/integration-test-topic"
-  @subscription "integration-test-subscription"
+  @topic_prefix "persistent://public/default/integration-test-topic-"
+  @subscription_prefix "integration-test-subscription-"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
-    {"key1", "Message 1 for key1 - #{:os.system_time(:millisecond)}"},
-    {"key2", "Message 1 for key2 - #{:os.system_time(:millisecond)}"},
-    {"key1", "Message 2 for key1 - #{:os.system_time(:millisecond)}"},
-    {"key2", "Message 2 for key2 - #{:os.system_time(:millisecond)}"},
-    {"key3", "Message 1 for key3 - #{:os.system_time(:millisecond)}"},
-    {"key4", "Message 1 for key4 - #{:os.system_time(:millisecond)}"}
+    {"key1", "Message 1 for key1"},
+    {"key2", "Message 1 for key2"},
+    {"key1", "Message 2 for key1"},
+    {"key2", "Message 2 for key2"},
+    {"key3", "Message 1 for key3"},
+    {"key4", "Message 1 for key4"}
   ]
 
   setup do
@@ -38,17 +38,19 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
+      topic = @topic_prefix <> "e2e"
+
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-e2e",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "e2e",
           subscription_type: :Shared,
           callback_module: @consumer_callback
         )
 
       [consumer_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer_count = @consumer_callback.count_messages(consumer_pid)
@@ -61,10 +63,12 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Key_Shared subscription with multiple consumers" do
+      topic = @topic_prefix <> "key-shared"
+
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-key-shared",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "key-shared",
           subscription_type: :Key_Shared,
           callback_module: @consumer_callback,
           opts: [consumer_count: 2]
@@ -72,7 +76,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer1_pid)
@@ -118,10 +122,12 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Shared subscription with multiple consumers (round-robin)" do
+      topic = @topic_prefix <> "shared"
+
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-shared",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "shared",
           subscription_type: :Shared,
           callback_module: @consumer_callback,
           opts: [consumer_count: 2]
@@ -129,7 +135,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer1_pid)
@@ -149,10 +155,12 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Failover subscription with multiple consumers" do
+      topic = @topic_prefix <> "failover"
+
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-failover",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "failover",
           subscription_type: :Failover,
           callback_module: @consumer_callback,
           opts: [consumer_count: 2]
@@ -160,7 +168,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid, consumer2_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer1_pid)
@@ -184,13 +192,14 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Exclusive subscription with multiple consumers" do
+      topic = @topic_prefix <> "exclusive-multi"
       # In Exclusive mode, only one consumer should be allowed to subscribe
       # When we try to start multiple consumers, the consumer group should fail
       # because exclusive subscriptions only allow one consumer at a time
       result =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-exclusive-multi",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "exclusive-multi",
           subscription_type: :Exclusive,
           callback_module: @consumer_callback,
           opts: [consumer_count: 2]
@@ -200,11 +209,12 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Exclusive subscription with single consumer" do
+      topic = @topic_prefix <> "exclusive-single"
       # Test that exclusive subscription works correctly with a single consumer
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-exclusive-single",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "exclusive-single",
           subscription_type: :Exclusive,
           callback_module: @consumer_callback,
           opts: [consumer_count: 1]
@@ -212,7 +222,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer1_pid)
@@ -226,13 +236,13 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
 
     test "Consumer groups in a partitioned topic" do
-      partitioned_topic = @topic <> "-partitioned"
-      System.create_topic(partitioned_topic, 3)
+      topic = @topic_prefix <> "partitioned"
+      System.create_topic(topic, 3)
 
       {:ok, group_pids} =
         Pulsar.start_consumer(
-          topic: partitioned_topic,
-          subscription_name: @subscription <> "-partitioned",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "partitioned",
           subscription_type: :Shared,
           callback_module: @consumer_callback,
           opts: [consumer_count: 2]
@@ -242,7 +252,7 @@ defmodule Pulsar.Integration.ConsumerTest do
         group_pids
         |> Enum.flat_map(&Pulsar.consumers_for_group(&1))
 
-      System.produce_messages(partitioned_topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumers
@@ -267,15 +277,77 @@ defmodule Pulsar.Integration.ConsumerTest do
       assert Enum.count(consumers) == 6
       assert consumed_messages == Enum.count(@messages)
     end
+
+    test "Consumer only receives new messages when initial position is set to latest" do
+      topic = @topic_prefix <> "latest"
+      new_message = {"key5", "Message 1 for key5"}
+
+      System.produce_messages(topic, @messages)
+
+      {:ok, [group_pid]} =
+        Pulsar.start_consumer(
+          topic: topic,
+          subscription_name: @subscription_prefix <> "latest",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [initial_position: :latest]
+        )
+
+      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+      System.produce_messages(topic, [new_message])
+
+      Utils.wait_for(fn ->
+        @consumer_callback.count_messages(consumer_pid) == 1
+      end)
+
+      [consumed_message] = @consumer_callback.get_messages(consumer_pid)
+
+      # Only the new message should be consumed, not the initial ones
+      assert {consumed_message.partition_key, consumed_message.payload} == new_message
+    end
+
+    test "Consumer receives all messages when initial position is set to earliest" do
+      topic = @topic_prefix <> "earliest"
+      new_message = {"key5", "Message 1 for key5"}
+
+      System.produce_messages(topic, @messages)
+
+      {:ok, [group_pid]} =
+        Pulsar.start_consumer(
+          topic: topic,
+          subscription_name: @subscription_prefix <> "earliest",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [initial_position: :earliest]
+        )
+
+      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+      System.produce_messages(topic, [new_message])
+
+      expected_total = Enum.count(@messages) + 1
+
+      Utils.wait_for(fn ->
+        @consumer_callback.count_messages(consumer_pid) == expected_total
+      end)
+
+      consumed_messages = @consumer_callback.get_messages(consumer_pid)
+
+      # All messages should be consumed, including the initial ones
+      assert Enum.count(consumed_messages) == expected_total
+    end
   end
 
   describe "Flow Control Configuration" do
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
     test "consumer with one permit at a time" do
+      topic = @topic_prefix <> "tiny-permits"
+
       {:ok, [group_pid]} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-tiny-permits",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "tiny-permits",
           subscription_type: :Shared,
           callback_module: @consumer_callback,
           opts: [
@@ -287,7 +359,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer_pid] = Pulsar.consumers_for_group(group_pid)
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer_count = @consumer_callback.count_messages(consumer_pid)
@@ -304,10 +376,12 @@ defmodule Pulsar.Integration.ConsumerTest do
 
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
     test "multiple consumers in same group with shared flow control settings" do
+      topic = @topic_prefix <> "group-shared"
+
       {:ok, group_pids} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-group-shared",
+          topic: topic,
+          subscription_name: @subscription_prefix <> "group-shared",
           subscription_type: :Shared,
           callback_module: @consumer_callback,
           opts: [
@@ -320,7 +394,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid, consumer2_pid] = Enum.flat_map(group_pids, &Pulsar.consumers_for_group(&1))
 
-      System.produce_messages(@topic, @messages)
+      System.produce_messages(topic, @messages)
 
       Utils.wait_for(fn ->
         consumer1_count = @consumer_callback.count_messages(consumer1_pid)

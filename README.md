@@ -39,10 +39,10 @@ config :pulsar,
         subscription_type: "Exclusive",
         callback_module: MyApp.MyConsumer,
         opts: [
-          # Optional flow control settings (defaults: 100, 50, 50)
           flow_initial: 100,
           flow_threshold: 50,
-          flow_refill: 50
+          flow_refill: 50,
+		  initial_position: :earliest
         ]
     ]
   ]

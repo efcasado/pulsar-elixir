@@ -65,6 +65,7 @@ defmodule Pulsar.Consumer do
     - `:flow_initial` - Initial flow permits (default: 100)
     - `:flow_threshold` - Flow permits threshold (default: 50)
     - `:flow_refill` - Flow permits refill (default: 50)
+    - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
@@ -74,6 +75,7 @@ defmodule Pulsar.Consumer do
     {initial_permits, genserver_opts} = Keyword.pop(genserver_opts, :flow_initial, 100)
     {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_threshold, 50)
     {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
+    {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -84,7 +86,8 @@ defmodule Pulsar.Consumer do
       init_args: init_args,
       flow_initial: initial_permits,
       flow_threshold: refill_threshold,
-      flow_refill: refill_amount
+      flow_refill: refill_amount,
+      initial_position: initial_position
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -110,7 +113,8 @@ defmodule Pulsar.Consumer do
       init_args: init_args,
       flow_initial: initial_permits,
       flow_threshold: refill_threshold,
-      flow_refill: refill_amount
+      flow_refill: refill_amount,
+      initial_position: initial_position
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
@@ -135,7 +139,8 @@ defmodule Pulsar.Consumer do
              topic,
              subscription_name,
              subscription_type,
-             consumer_id
+             consumer_id,
+             initial_position: initial_position
            ),
          :ok <- send_initial_flow(broker_pid, consumer_id, initial_permits) do
       Logger.info("Successfully subscribed to #{topic}")
@@ -355,6 +360,9 @@ defmodule Pulsar.Consumer do
     service_url_tls || service_url
   end
 
+  defp initial_position(:latest), do: :Latest
+  defp initial_position(:earliest), do: :Earliest
+
   defp lookup_topic(topic) do
     broker = Utils.broker()
 
@@ -386,15 +394,24 @@ defmodule Pulsar.Consumer do
     end
   end
 
-  defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id) do
+  defp subscribe_to_topic(
+         broker_pid,
+         topic,
+         subscription_name,
+         subscription_type,
+         consumer_id,
+         opts
+       ) do
     request_id = System.unique_integer([:positive, :monotonic])
+    initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
 
     subscribe_command = %Binary.CommandSubscribe{
       topic: topic,
       subscription: subscription_name,
       subType: subscription_type,
       consumer_id: consumer_id,
-      request_id: request_id
+      request_id: request_id,
+      initialPosition: initial_position
     }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
