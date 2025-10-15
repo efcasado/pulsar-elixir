@@ -28,9 +28,9 @@ defmodule Pulsar.Consumer do
     :callback_state,
     :broker_pid,
     :broker_monitor,
-    :flow_initial_permits,
-    :flow_permits_threshold,
-    :flow_permits_refill,
+    :flow_initial,
+    :flow_threshold,
+    :flow_refill,
     :flow_outstanding_permits
   ]
 
@@ -43,9 +43,9 @@ defmodule Pulsar.Consumer do
           callback_state: term(),
           broker_pid: pid(),
           broker_monitor: reference(),
-          flow_initial_permits: non_neg_integer(),
-          flow_permits_threshold: non_neg_integer(),
-          flow_permits_refill: non_neg_integer(),
+          flow_initial: non_neg_integer(),
+          flow_threshold: non_neg_integer(),
+          flow_refill: non_neg_integer(),
           flow_outstanding_permits: non_neg_integer()
         }
 
@@ -62,18 +62,18 @@ defmodule Pulsar.Consumer do
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
   - `opts` - Additional options:
     - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial_permits` - Initial flow permits (default: 100)
-    - `:flow_permits_threshold` - Flow permits threshold (default: 50)
-    - `:flow_permits_refill` - Flow permits refill (default: 50)
+    - `:flow_initial` - Initial flow permits (default: 100)
+    - `:flow_threshold` - Flow permits threshold (default: 50)
+    - `:flow_refill` - Flow permits refill (default: 50)
     - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
   """
   def start_link(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
     {init_args, genserver_opts} = Keyword.pop(opts, :init_args, [])
-    {initial_permits, genserver_opts} = Keyword.pop(genserver_opts, :flow_initial_permits, 100)
-    {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_permits_threshold, 50)
-    {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_permits_refill, 50)
+    {initial_permits, genserver_opts} = Keyword.pop(genserver_opts, :flow_initial, 100)
+    {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_threshold, 50)
+    {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -82,9 +82,9 @@ defmodule Pulsar.Consumer do
       subscription_type: subscription_type,
       callback_module: callback_module,
       init_args: init_args,
-      flow_initial_permits: initial_permits,
-      flow_permits_threshold: refill_threshold,
-      flow_permits_refill: refill_amount
+      flow_initial: initial_permits,
+      flow_threshold: refill_threshold,
+      flow_refill: refill_amount
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -108,9 +108,9 @@ defmodule Pulsar.Consumer do
       subscription_type: subscription_type,
       callback_module: callback_module,
       init_args: init_args,
-      flow_initial_permits: initial_permits,
-      flow_permits_threshold: refill_threshold,
-      flow_permits_refill: refill_amount
+      flow_initial: initial_permits,
+      flow_threshold: refill_threshold,
+      flow_refill: refill_amount
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
@@ -152,9 +152,9 @@ defmodule Pulsar.Consumer do
         callback_state: callback_state,
         broker_pid: broker_pid,
         broker_monitor: broker_monitor,
-        flow_initial_permits: initial_permits,
-        flow_permits_threshold: refill_threshold,
-        flow_permits_refill: refill_amount,
+        flow_initial: initial_permits,
+        flow_threshold: refill_threshold,
+        flow_refill: refill_amount,
         flow_outstanding_permits: initial_permits
       }
 
@@ -415,8 +415,8 @@ defmodule Pulsar.Consumer do
   end
 
   defp check_and_refill_permits(state) do
-    refill_threshold = state.flow_permits_threshold
-    refill_amount = state.flow_permits_refill
+    refill_threshold = state.flow_threshold
+    refill_amount = state.flow_refill
     outstanding_permits = state.flow_outstanding_permits
 
     if outstanding_permits <= refill_threshold do

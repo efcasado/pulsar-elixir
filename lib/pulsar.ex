@@ -237,9 +237,9 @@ defmodule Pulsar do
   - `opts` - Additional options:
     - `:consumer_count` - Number of consumer processes per topic/partition (default: 1)
     - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial_permits` - Initial flow permits (default: 100)
-    - `:flow_permits_threshold` - Flow permits threshold for refill (default: 50)
-    - `:flow_permits_refill` - Flow permits refill amount (default: 50)
+    - `:flow_initial` - Initial flow permits (default: 100)
+    - `:flow_threshold` - Flow permits threshold for refill (default: 50)
+    - `:flow_refill` - Flow permits refill amount (default: 50)
     - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
@@ -299,9 +299,9 @@ defmodule Pulsar do
       ...>   subscription_type: :Shared,
       ...>   callback_module: MyApp.MessageHandler,
       ...>   opts: [
-      ...>     flow_initial_permits: 200,
-      ...>     flow_permits_threshold: 100,
-      ...>     flow_permits_refill: 100
+      ...>     flow_initial: 200,
+      ...>     flow_threshold: 100,
+      ...>     flow_refill: 100
       ...>   ]
       ...> )
       {:ok, #PID<0.456.0>}
@@ -359,9 +359,9 @@ defmodule Pulsar do
   defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do
     consumer_count = Keyword.get(opts, :consumer_count, 1)
     init_args = Keyword.get(opts, :init_args)
-    flow_initial_permits = Keyword.get(opts, :flow_initial_permits)
-    flow_permits_threshold = Keyword.get(opts, :flow_permits_threshold)
-    flow_permits_refill = Keyword.get(opts, :flow_permits_refill)
+    flow_initial = Keyword.get(opts, :flow_initial)
+    flow_threshold = Keyword.get(opts, :flow_threshold)
+    flow_refill = Keyword.get(opts, :flow_refill)
 
     children =
       for i <- 1..consumer_count do
@@ -370,9 +370,9 @@ defmodule Pulsar do
         consumer_opts =
           [
             init_args: init_args,
-            flow_initial_permits: flow_initial_permits,
-            flow_permits_threshold: flow_permits_threshold,
-            flow_permits_refill: flow_permits_refill
+            flow_initial: flow_initial,
+            flow_threshold: flow_threshold,
+            flow_refill: flow_refill
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
