@@ -1,5 +1,7 @@
 defmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
+  import TelemetryTest
+
   require Logger
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
@@ -39,6 +41,8 @@ defmodule Pulsar.Integration.ConsumerTest do
       Utils.wait_for(fn -> not Process.alive?(app_pid) end)
     end)
   end
+
+  setup [:telemetry_listen]
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
@@ -270,6 +274,114 @@ defmodule Pulsar.Integration.ConsumerTest do
       assert length(group_pids) == 3
       assert Enum.count(consumers) == 6
       assert consumed_messages == Enum.count(@messages)
+    end
+  end
+
+  describe "Flow Control Configuration" do
+    @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+    test "consumer with one permit at a time" do
+      {:ok, [group_pid]} =
+        Pulsar.start_consumer(
+          topic: @topic,
+          subscription_name: @subscription <> "-tiny-permits",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [
+            flow_initial: 1,
+            flow_threshold: 0,
+            flow_refill: 1
+          ]
+        )
+
+      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+      System.produce_messages(@topic, @messages)
+
+      Utils.wait_for(fn ->
+        consumer_count = @consumer_callback.count_messages(consumer_pid)
+        Enum.count(@messages) == consumer_count
+      end)
+
+      consumer_id = consumer_pid |> :sys.get_state() |> Map.get(:consumer_id)
+
+      # We expect: 1 initial request + 6 refills (one per message) = 7 total events
+      # Each event requests 1 permit, so requested_total should be 7
+      stats = flow_control_stats()
+      assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
+    end
+
+    @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+    test "multiple consumers in same group with shared flow control settings" do
+      {:ok, group_pids} =
+        Pulsar.start_consumer(
+          topic: @topic,
+          subscription_name: @subscription <> "-group-shared",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [
+            consumer_count: 2,
+            flow_initial: 5,
+            flow_threshold: 1,
+            flow_refill: 4
+          ]
+        )
+
+      [consumer1_pid, consumer2_pid] = Enum.flat_map(group_pids, &Pulsar.consumers_for_group(&1))
+
+      System.produce_messages(@topic, @messages)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
+        Enum.count(@messages) == consumer1_count + consumer2_count
+      end)
+
+      consumer1_id = consumer1_pid |> :sys.get_state() |> Map.get(:consumer_id)
+      consumer2_id = consumer2_pid |> :sys.get_state() |> Map.get(:consumer_id)
+
+      # Each consumer gets initial request of 5 permits
+      # Since messages (6 total) are distributed between 2 consumers (~3 each),
+      # neither should hit threshold so we expect only 2 events total
+      stats = flow_control_stats()
+
+      assert %{
+               ^consumer1_id => %{event_count: 1, requested_total: 5},
+               ^consumer2_id => %{event_count: 1, requested_total: 5}
+             } = stats
+    end
+
+    # Helper function to collect and aggregate flow control statistics from telemetry events
+    # Returns a map with statistics grouped by consumer_id
+    defp flow_control_stats do
+      collect_flow_events([]) |> aggregate_stats()
+    end
+
+    defp collect_flow_events(acc) do
+      receive do
+        {:telemetry_event,
+         %{
+           event: [:pulsar, :consumer, :flow_control, :stop],
+           metadata: metadata
+         }} ->
+          collect_flow_events([metadata | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    defp aggregate_stats(events) do
+      events
+      |> Enum.group_by(& &1.consumer_id)
+      |> Enum.map(fn {consumer_id, consumer_events} ->
+        stats = %{
+          consumer_id: consumer_id,
+          event_count: length(consumer_events),
+          requested_total: Enum.sum(Enum.map(consumer_events, & &1.permits_requested))
+        }
+
+        {consumer_id, stats}
+      end)
+      |> Map.new()
     end
   end
 end

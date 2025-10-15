@@ -27,7 +27,11 @@ defmodule Pulsar.Consumer do
     :callback_module,
     :callback_state,
     :broker_pid,
-    :broker_monitor
+    :broker_monitor,
+    :flow_initial,
+    :flow_threshold,
+    :flow_refill,
+    :flow_outstanding_permits
   ]
 
   @type t :: %__MODULE__{
@@ -38,7 +42,11 @@ defmodule Pulsar.Consumer do
           callback_module: module(),
           callback_state: term(),
           broker_pid: pid(),
-          broker_monitor: reference()
+          broker_monitor: reference(),
+          flow_initial: non_neg_integer(),
+          flow_threshold: non_neg_integer(),
+          flow_refill: non_neg_integer(),
+          flow_outstanding_permits: non_neg_integer()
         }
 
   ## Public API
@@ -54,19 +62,29 @@ defmodule Pulsar.Consumer do
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
   - `opts` - Additional options:
     - `:init_args` - Arguments passed to callback module's init/1 function
+    - `:flow_initial` - Initial flow permits (default: 100)
+    - `:flow_threshold` - Flow permits threshold (default: 50)
+    - `:flow_refill` - Flow permits refill (default: 50)
     - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
   """
   def start_link(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
     {init_args, genserver_opts} = Keyword.pop(opts, :init_args, [])
+    {initial_permits, genserver_opts} = Keyword.pop(genserver_opts, :flow_initial, 100)
+    {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_threshold, 50)
+    {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
 
+    # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
       callback_module: callback_module,
-      init_args: init_args
+      init_args: init_args,
+      flow_initial: initial_permits,
+      flow_threshold: refill_threshold,
+      flow_refill: refill_amount
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -89,7 +107,10 @@ defmodule Pulsar.Consumer do
       subscription_name: subscription_name,
       subscription_type: subscription_type,
       callback_module: callback_module,
-      init_args: init_args
+      init_args: init_args,
+      flow_initial: initial_permits,
+      flow_threshold: refill_threshold,
+      flow_refill: refill_amount
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
@@ -116,7 +137,7 @@ defmodule Pulsar.Consumer do
              subscription_type,
              consumer_id
            ),
-         :ok <- send_initial_flow(broker_pid, consumer_id) do
+         :ok <- send_initial_flow(broker_pid, consumer_id, initial_permits) do
       Logger.info("Successfully subscribed to #{topic}")
 
       # Monitor the broker process to detect crashes
@@ -130,7 +151,11 @@ defmodule Pulsar.Consumer do
         callback_module: callback_module,
         callback_state: callback_state,
         broker_pid: broker_pid,
-        broker_monitor: broker_monitor
+        broker_monitor: broker_monitor,
+        flow_initial: initial_permits,
+        flow_threshold: refill_threshold,
+        flow_refill: refill_amount,
+        flow_outstanding_permits: initial_permits
       }
 
       {:ok, state}
@@ -146,6 +171,8 @@ defmodule Pulsar.Consumer do
         {:broker_message, {%Binary.CommandMessage{message_id: message_id}, metadata, payload}},
         state
       ) do
+    state = decrement_permits(state)
+
     # Build message structure for callback
     message = %{
       id: {message_id.ledgerId, message_id.entryId},
@@ -169,7 +196,7 @@ defmodule Pulsar.Consumer do
     # Handle acknowledgment and state updates based on callback result
     case result do
       {:ok, new_callback_state} ->
-        # Auto-acknowledge successful messages  
+        # Auto-acknowledge successful messages
         ack_command = %Binary.CommandAck{
           consumer_id: state.consumer_id,
           ack_type: :Individual,
@@ -178,15 +205,8 @@ defmodule Pulsar.Consumer do
 
         Pulsar.Broker.send_command(state.broker_pid, ack_command)
 
-        # Request more messages
-        flow_command = %Binary.CommandFlow{
-          consumer_id: state.consumer_id,
-          messagePermits: 1
-        }
+        state = check_and_refill_permits(state)
 
-        Pulsar.Broker.send_command(state.broker_pid, flow_command)
-
-        # Update state and continue
         new_state = %{state | callback_state: new_callback_state}
         {:noreply, new_state}
 
@@ -380,12 +400,63 @@ defmodule Pulsar.Consumer do
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
   end
 
-  defp send_initial_flow(broker_pid, consumer_id) do
+  defp decrement_permits(state) do
+    new_permits = max(state.flow_outstanding_permits - 1, 0)
+    %{state | flow_outstanding_permits: new_permits}
+  end
+
+  defp send_initial_flow(broker_pid, consumer_id, permits) do
+    # Initial flow starts from 0 outstanding permits
+    send_flow_command(broker_pid, consumer_id, permits, 0)
+  end
+
+  defp check_and_refill_permits(state) do
+    refill_threshold = state.flow_threshold
+    refill_amount = state.flow_refill
+    current_permits = state.flow_outstanding_permits
+
+    if current_permits <= refill_threshold do
+      case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+        :ok ->
+          %{state | flow_outstanding_permits: current_permits + refill_amount}
+
+        error ->
+          Logger.error("Failed to send flow command: #{inspect(error)}")
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits) do
     flow_command = %Binary.CommandFlow{
       consumer_id: consumer_id,
-      messagePermits: 100
+      messagePermits: permits
     }
 
-    Pulsar.Broker.send_command(broker_pid, flow_command)
+    # Metadata for :start event
+    start_metadata = %{
+      consumer_id: consumer_id,
+      permits_requested: permits,
+      permits_before: outstanding_permits
+    }
+
+    :telemetry.span(
+      [:pulsar, :consumer, :flow_control],
+      start_metadata,
+      fn ->
+        result = Pulsar.Broker.send_command(broker_pid, flow_command)
+
+        stop_metadata =
+          if result == :ok do
+            %{success: true, permits_after: outstanding_permits + permits}
+          else
+            %{success: false, permits_after: outstanding_permits}
+          end
+
+        {result, Map.merge(start_metadata, stop_metadata)}
+      end
+    )
   end
 end

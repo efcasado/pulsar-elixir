@@ -37,11 +37,16 @@ config :pulsar,
 		topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-app-my-consumer-subscription",
         subscription_type: "Exclusive",
-		callback_module: MyApp.MyConsumer
+        callback_module: MyApp.MyConsumer,
+        opts: [
+          # Optional flow control settings (defaults: 100, 50, 50)
+          flow_initial: 100,
+          flow_threshold: 50,
+          flow_refill: 50
+        ]
     ]
   ]
 ```
-
 Alternatively, you can start the Pulsar client on demand and add it to your application's supervisor
 by calling `Pulsar.start/1` directly, as follows:
 
@@ -72,19 +77,19 @@ by calling `Pulsar.start/1` directly, as follows:
 To run the tests, run the following command:
 
 ```
-mix test --no-start
+mix test
 ```
 
 If you want to run only a subset of tests, specify the file including the tests you want to run
 
 ```
-mix test test/integration/consumer_test.exs --no-start
+mix test test/integration/consumer_test.exs
 ```
 
 You can also run individual tests by passing the line number where they are defined
 
 ```
-mix test test/integration/consumer_test.exs:43 --no-start
+mix test test/integration/consumer_test.exs:43
 ```
 
 
@@ -114,5 +119,6 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Compression        | ❌        |
 | Consumer  | Compaction         | ❌        |
 | Consumer  | Schema             | ❌        |
+| Consumer  | Configurable flow control settings | ✅ |
 | Reader    |                    | ❌        |
 | TableView |                    | ❌        |
