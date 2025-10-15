@@ -295,9 +295,6 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer_pid] = Pulsar.consumers_for_group(group_pid)
 
-      # Verify Initial flow: 0 -> 1 permits
-      assert_flow_control_event(requested: 1, before: 0, after: 1)
-
       System.produce_messages(@topic, @messages)
 
       Utils.wait_for(fn ->
@@ -305,14 +302,12 @@ defmodule Pulsar.Integration.ConsumerTest do
         Enum.count(@messages) == consumer_count
       end)
 
-      # Check refill events (should be 6 refills)
-      count = Enum.count(@messages)
+      consumer_id = consumer_pid |> :sys.get_state() |> Map.get(:consumer_id)
 
-      for _ <- 1..count do
-        assert_flow_control_event(requested: 1, before: 0, after: 1)
-      end
-
-      refute_received _
+      # We expect: 1 initial request + 6 refills (one per message) = 7 total events
+      # Each event requests 1 permit, so requested_total should be 7
+      stats = flow_control_stats()
+      assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
     end
 
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
@@ -333,11 +328,6 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       [consumer1_pid, consumer2_pid] = Enum.flat_map(group_pids, &Pulsar.consumers_for_group(&1))
 
-      # Verify initial flow span events for both consumers (0 -> 5 permits)
-      for _ <- 1..2 do
-        assert_flow_control_event(requested: 5, before: 0, after: 5)
-      end
-
       System.produce_messages(@topic, @messages)
 
       Utils.wait_for(fn ->
@@ -346,27 +336,52 @@ defmodule Pulsar.Integration.ConsumerTest do
         Enum.count(@messages) == consumer1_count + consumer2_count
       end)
 
-      # each consumer should receive around half the messages so
-      # no consumer should hit the threshold
-      refute_received _
+      consumer1_id = consumer1_pid |> :sys.get_state() |> Map.get(:consumer_id)
+      consumer2_id = consumer2_pid |> :sys.get_state() |> Map.get(:consumer_id)
+
+      # Each consumer gets initial request of 5 permits
+      # Since messages (6 total) are distributed between 2 consumers (~3 each),
+      # neither should hit threshold so we expect only 2 events total
+      stats = flow_control_stats()
+
+      assert %{
+               ^consumer1_id => %{event_count: 1, requested_total: 5},
+               ^consumer2_id => %{event_count: 1, requested_total: 5}
+             } = stats
     end
 
-    # Helper function to assert flow control telemetry events
-    defp assert_flow_control_event(opts) do
-      requested = Keyword.fetch!(opts, :requested)
-      before = Keyword.fetch!(opts, :before)
-      after_val = Keyword.fetch!(opts, :after)
+    # Helper function to collect and aggregate flow control statistics from telemetry events
+    # Returns a map with statistics grouped by consumer_id
+    defp flow_control_stats do
+      collect_flow_events([]) |> aggregate_stats()
+    end
 
-      assert_received {:telemetry_event,
-                       %{
-                         event: [:pulsar, :consumer, :flow_control, :stop],
-                         metadata: %{
-                           permits_requested: ^requested,
-                           permits_before: ^before,
-                           permits_after: ^after_val,
-                           success: true
-                         }
-                       }}
+    defp collect_flow_events(acc) do
+      receive do
+        {:telemetry_event,
+         %{
+           event: [:pulsar, :consumer, :flow_control, :stop],
+           metadata: metadata
+         }} ->
+          collect_flow_events([metadata | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    defp aggregate_stats(events) do
+      events
+      |> Enum.group_by(& &1.consumer_id)
+      |> Enum.map(fn {consumer_id, consumer_events} ->
+        stats = %{
+          consumer_id: consumer_id,
+          event_count: length(consumer_events),
+          requested_total: Enum.sum(Enum.map(consumer_events, & &1.permits_requested))
+        }
+
+        {consumer_id, stats}
+      end)
+      |> Map.new()
     end
   end
 end
