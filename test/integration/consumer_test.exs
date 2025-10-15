@@ -1,5 +1,7 @@
 defmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
+  import TelemetryTest
+
   require Logger
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
@@ -39,6 +41,8 @@ defmodule Pulsar.Integration.ConsumerTest do
       Utils.wait_for(fn -> not Process.alive?(app_pid) end)
     end)
   end
+
+  setup [:telemetry_listen]
 
   describe "Consumer Integration" do
     test "produce and consume messages" do
@@ -270,6 +274,99 @@ defmodule Pulsar.Integration.ConsumerTest do
       assert length(group_pids) == 3
       assert Enum.count(consumers) == 6
       assert consumed_messages == Enum.count(@messages)
+    end
+  end
+
+  describe "Flow Control Configuration" do
+    @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+    test "consumer with one permit at a time" do
+      {:ok, [group_pid]} =
+        Pulsar.start_consumer(
+          topic: @topic,
+          subscription_name: @subscription <> "-tiny-permits",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [
+            flow_initial: 1,
+            flow_threshold: 0,
+            flow_refill: 1
+          ]
+        )
+
+      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+      # Verify Initial flow: 0 -> 1 permits
+      assert_flow_control_event(requested: 1, before: 0, after: 1)
+
+      System.produce_messages(@topic, @messages)
+
+      Utils.wait_for(fn ->
+        consumer_count = @consumer_callback.count_messages(consumer_pid)
+        Enum.count(@messages) == consumer_count
+      end)
+
+      # Check refill events (should be 6 refills)
+      count = Enum.count(@messages)
+
+      for _ <- 1..count do
+        assert_flow_control_event(requested: 1, before: 0, after: 1)
+      end
+
+      refute_received _
+    end
+
+    @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+    test "multiple consumers in same group with shared flow control settings" do
+      {:ok, group_pids} =
+        Pulsar.start_consumer(
+          topic: @topic,
+          subscription_name: @subscription <> "-group-shared",
+          subscription_type: :Shared,
+          callback_module: @consumer_callback,
+          opts: [
+            consumer_count: 2,
+            flow_initial: 5,
+            flow_threshold: 1,
+            flow_refill: 4
+          ]
+        )
+
+      [consumer1_pid, consumer2_pid] = Enum.flat_map(group_pids, &Pulsar.consumers_for_group(&1))
+
+      # Verify initial flow span events for both consumers (0 -> 5 permits)
+      for _ <- 1..2 do
+        assert_flow_control_event(requested: 5, before: 0, after: 5)
+      end
+
+      System.produce_messages(@topic, @messages)
+
+      Utils.wait_for(fn ->
+        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
+        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
+        Enum.count(@messages) == consumer1_count + consumer2_count
+      end)
+
+      # each consumer should receive around half the messages so
+      # no consumer should hit the threshold
+      refute_received _
+    end
+
+    # Helper function to assert flow control telemetry events
+    defp assert_flow_control_event(opts) do
+      requested = Keyword.fetch!(opts, :requested)
+      before = Keyword.fetch!(opts, :before)
+      after_val = Keyword.fetch!(opts, :after)
+
+      assert_received {:telemetry_event,
+                       %{
+                         event: [:pulsar, :consumer, :flow_control, :stop],
+                         metadata: %{
+                           permits_requested: ^requested,
+                           permits_before: ^before,
+                           permits_after: ^after_val,
+                           success: true
+                         }
+                       }}
     end
   end
 end
