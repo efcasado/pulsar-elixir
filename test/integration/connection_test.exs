@@ -10,13 +10,7 @@ defmodule Pulsar.Integration.ConnectionTest do
   @consumer_callback Pulsar.Test.Support.DummyConsumer
 
   setup_all do
-    :ok = System.start_pulsar()
-
     :ok = System.create_topic(@topic)
-
-    on_exit(fn ->
-      :ok = System.stop_pulsar()
-    end)
   end
 
   setup do

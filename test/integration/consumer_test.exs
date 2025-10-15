@@ -19,14 +19,6 @@ defmodule Pulsar.Integration.ConsumerTest do
     {"key4", "Message 1 for key4 - #{:os.system_time(:millisecond)}"}
   ]
 
-  setup_all do
-    :ok = System.start_pulsar()
-
-    on_exit(fn ->
-      :ok = System.stop_pulsar()
-    end)
-  end
-
   setup do
     broker = System.broker()
 
