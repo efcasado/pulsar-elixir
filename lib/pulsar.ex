@@ -326,7 +326,8 @@ defmodule Pulsar do
       topics
       |> Enum.map(fn topic ->
         do_start_consumer(
-          topic,
+          # TO-DO: we should be able to pass the name from the app configuration
+          topic <> "-" <> subscription_name,
           topic,
           subscription_name,
           subscription_type,
