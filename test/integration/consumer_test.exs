@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.ConsumerTest do
   require Logger
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   @moduletag :integration
   @topic_prefix "persistent://public/default/integration-test-topic-"
@@ -196,7 +197,7 @@ defmodule Pulsar.Integration.ConsumerTest do
       # In Exclusive mode, only one consumer should be allowed to subscribe
       # When we try to start multiple consumers, the consumer group should fail
       # because exclusive subscriptions only allow one consumer at a time
-      result =
+      {:ok, [group_pid]} =
         Pulsar.start_consumer(
           topic: topic,
           subscription_name: @subscription_prefix <> "exclusive-multi",
@@ -205,7 +206,9 @@ defmodule Pulsar.Integration.ConsumerTest do
           opts: [consumer_count: 2]
         )
 
-      assert {:error, _reason} = result
+      Utils.wait_for(fn -> Process.alive?(group_pid) == false end)
+
+      assert Process.alive?(group_pid) == false
     end
 
     test "Exclusive subscription with single consumer" do
@@ -399,7 +402,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     topic = @topic_prefix <> "no-force-create-topic"
     subscription = @subscription_prefix <> "no-force-create-topic"
 
-    result =
+    {:ok, [group_pid]} =
       Pulsar.start_consumer(
         topic: topic,
         subscription_name: subscription,
@@ -408,7 +411,139 @@ defmodule Pulsar.Integration.ConsumerTest do
         opts: [force_create_topic: false]
       )
 
-    assert {:error, _reason} = result
+    Utils.wait_for(fn ->
+      not Process.alive?(group_pid)
+    end)
+
+    assert Process.alive?(group_pid) == false
+  end
+
+  test "consumer can start consuming from a given message id" do
+    topic = @topic_prefix <> "start-from-message-id"
+    subscription = @subscription_prefix <> "start-from-message-id"
+
+    {:ok, [group1_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription,
+        subscription_type: :Shared,
+        callback_module: @consumer_callback
+      )
+
+    [consumer1_pid] = Pulsar.consumers_for_group(group1_pid)
+
+    System.produce_messages(topic, @messages)
+
+    expected_total = Enum.count(@messages)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(consumer1_pid) == expected_total
+    end)
+
+    [_first_message, second_message | _] = @consumer_callback.get_messages(consumer1_pid)
+
+    {:ok, [group2_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription <> "-2",
+        subscription_type: :Exclusive,
+        callback_module: @consumer_callback,
+        opts: [start_message_id: second_message.id]
+      )
+
+    [consumer2_pid] = Pulsar.consumers_for_group(group2_pid)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(consumer2_pid) == expected_total - 1
+    end)
+
+    [first_message | _] = @consumer_callback.get_messages(consumer2_pid)
+    assert first_message.payload == second_message.payload
+  end
+
+  test "consumer can start consuming from a given timestamp" do
+    topic = @topic_prefix <> "start-from-message-id"
+    subscription = @subscription_prefix <> "start-from-message-id"
+
+    {:ok, [group1_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription,
+        subscription_type: :Shared,
+        callback_module: @consumer_callback
+      )
+
+    [consumer1_pid] = Pulsar.consumers_for_group(group1_pid)
+
+    System.produce_messages(topic, @messages)
+
+    expected_total = Enum.count(@messages)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(consumer1_pid) == expected_total
+    end)
+
+    [message11, message12 | _] = @consumer_callback.get_messages(consumer1_pid)
+
+    publish_time = publish_time_from_message(message12)
+
+    {:ok, [group2_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription <> "-2",
+        subscription_type: :Exclusive,
+        callback_module: @consumer_callback,
+        opts: [start_timestamp: publish_time]
+      )
+
+    [consumer2_pid] = Pulsar.consumers_for_group(group2_pid)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.get_messages(consumer2_pid) != []
+    end)
+
+    [message21 | _] = @consumer_callback.get_messages(consumer2_pid)
+
+    {:ok, [group3_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription <> "-3",
+        subscription_type: :Exclusive,
+        callback_module: @consumer_callback,
+        opts: [start_timestamp: 0]
+      )
+
+    [consumer3_pid] = Pulsar.consumers_for_group(group3_pid)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.get_messages(consumer3_pid) != []
+    end)
+
+    [message31 | _] = @consumer_callback.get_messages(consumer3_pid)
+
+    #  Wednesday, January 1, 3000 1:00:00 AM
+    future_timestamp = 32_503_683_600_000
+
+    {:ok, [group4_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription <> "-4",
+        subscription_type: :Exclusive,
+        callback_module: @consumer_callback,
+        opts: [start_timestamp: future_timestamp]
+      )
+
+    [consumer4_pid] = Pulsar.consumers_for_group(group4_pid)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.get_messages(consumer4_pid) != []
+    end)
+
+    messages4 = @consumer_callback.get_messages(consumer4_pid)
+
+    assert message21.payload == message12.payload
+    assert message31.payload == message11.payload
+    assert messages4 == []
   end
 
   describe "Flow Control Configuration" do
@@ -521,5 +656,15 @@ defmodule Pulsar.Integration.ConsumerTest do
       end)
       |> Map.new()
     end
+  end
+
+  defp publish_time_from_message(message) do
+    %{
+      metadata: %Binary.MessageMetadata{
+        publish_time: publish_time
+      }
+    } = message
+
+    publish_time
   end
 end

@@ -123,6 +123,7 @@ defmodule Pulsar.Broker do
   """
   @spec send_request(GenServer.server(), struct(), timeout()) :: {:ok, term()} | {:error, term()}
   def send_request(broker, command, timeout \\ 5000) do
+    Logger.debug("Sending request #{inspect(command)}")
     :gen_statem.call(broker, {:send_request, command}, timeout)
   end
 
@@ -629,18 +630,16 @@ defmodule Pulsar.Broker do
   end
 
   # Handle broker-initiated closures - crash the consumer/producer and let supervisor restart
-  defp handle_command(%Binary.CommandCloseConsumer{consumer_id: consumer_id}, broker) do
+  defp handle_command(%Binary.CommandCloseConsumer{consumer_id: consumer_id} = command, broker) do
     case Map.get(broker.consumers, consumer_id) do
       nil ->
         Logger.warning("Received close command for unknown consumer #{consumer_id}")
         :keep_state_and_data
 
       {consumer_pid, _monitor_ref} ->
-        Logger.info(
-          "Broker requested consumer #{consumer_id} closure, will restart with fresh lookup"
-        )
+        Logger.info("Broker requested consumer #{consumer_id} closure")
 
-        Process.exit(consumer_pid, :broker_close_requested)
+        send(consumer_pid, {:broker_message, command})
         :keep_state_and_data
     end
   end

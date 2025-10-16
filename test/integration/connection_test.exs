@@ -43,6 +43,8 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       [consumer_pid_before_crash] = Pulsar.consumers_for_group(group_pid)
 
+      Utils.wait_for(fn -> System.broker_for_consumer(consumer_pid_before_crash) != nil end)
+
       broker = System.broker_for_consumer(consumer_pid_before_crash)
 
       {:ok, broker_pid} = Pulsar.lookup_broker(broker.service_url)

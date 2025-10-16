@@ -322,40 +322,24 @@ defmodule Pulsar do
         {:ok, partitions} -> Range.new(0, partitions - 1) |> Enum.map(&"#{topic}-partition-#{&1}")
       end
 
-    {consumers, errors} =
+    consumers =
       topics
       |> Enum.map(fn topic ->
-        do_start_consumer(
-          # TO-DO: we should be able to pass the name from the app configuration
-          topic <> "-" <> subscription_name,
-          topic,
-          subscription_name,
-          subscription_type,
-          callback_module,
-          opts
-        )
+        {:ok, pid} =
+          do_start_consumer(
+            # TO-DO: we should be able to pass the name from the app configuration
+            topic <> "-" <> subscription_name,
+            topic,
+            subscription_name,
+            subscription_type,
+            callback_module,
+            opts
+          )
+
+        pid
       end)
-      |> Enum.reduce(
-        {[], []},
-        fn
-          {:ok, pid}, {pids, errors} ->
-            {[pid | pids], errors}
 
-          {:error, reason}, {pids, errors} ->
-            {pids, [reason | errors]}
-        end
-      )
-
-    case errors do
-      [] ->
-        {:ok, consumers}
-
-      _ ->
-        consumers
-        |> Enum.each(&DynamicSupervisor.terminate_child(@consumer_supervisor, &1))
-
-        {:error, errors}
-    end
+    {:ok, consumers}
   end
 
   defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do

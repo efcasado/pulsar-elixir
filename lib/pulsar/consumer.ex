@@ -31,7 +31,12 @@ defmodule Pulsar.Consumer do
     :flow_initial,
     :flow_threshold,
     :flow_refill,
-    :flow_outstanding_permits
+    :flow_outstanding_permits,
+    :initial_position,
+    :durable,
+    :force_create_topic,
+    :start_message_id,
+    :start_timestamp
   ]
 
   @type t :: %__MODULE__{
@@ -46,7 +51,11 @@ defmodule Pulsar.Consumer do
           flow_initial: non_neg_integer(),
           flow_threshold: non_neg_integer(),
           flow_refill: non_neg_integer(),
-          flow_outstanding_permits: non_neg_integer()
+          flow_outstanding_permits: non_neg_integer(),
+          initial_position: atom(),
+          force_create_topic: boolean(),
+          start_message_id: {non_neg_integer(), non_neg_integer()},
+          start_timestamp: non_neg_integer()
         }
 
   ## Public API
@@ -78,6 +87,8 @@ defmodule Pulsar.Consumer do
     {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
+    {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
+    {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -91,7 +102,9 @@ defmodule Pulsar.Consumer do
       flow_refill: refill_amount,
       initial_position: initial_position,
       durable: durable,
-      force_create_topic: force_create_topic
+      force_create_topic: force_create_topic,
+      start_message_id: start_message_id,
+      start_timestamp: start_timestamp
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -120,66 +133,135 @@ defmodule Pulsar.Consumer do
       flow_refill: refill_amount,
       initial_position: initial_position,
       durable: durable,
-      force_create_topic: force_create_topic
+      force_create_topic: force_create_topic,
+      start_message_id: start_message_id,
+      start_timestamp: start_timestamp
     } = consumer_config
 
-    consumer_id = System.unique_integer([:positive, :monotonic])
-    Logger.info("Starting consumer for topic #{topic}")
+    state = %__MODULE__{
+      consumer_id: System.unique_integer([:positive, :monotonic]),
+      topic: topic,
+      subscription_name: subscription_name,
+      subscription_type: subscription_type,
+      callback_module: callback_module,
+      flow_initial: initial_permits,
+      flow_threshold: refill_threshold,
+      flow_refill: refill_amount,
+      flow_outstanding_permits: 0,
+      initial_position: initial_position,
+      durable: durable,
+      force_create_topic: force_create_topic,
+      start_message_id: start_message_id,
+      start_timestamp: start_timestamp
+    }
 
-    # Initialize callback module state
-    callback_state =
-      case apply(callback_module, :init, [init_args]) do
-        {:ok, state} ->
-          state
+    Logger.info("Starting consumer for topic #{state.topic}")
+    {:ok, state, {:continue, {:init_callback, init_args}}}
+  end
 
-        {:error, reason} ->
-          Logger.error("Callback initialization failed: #{inspect(reason)}")
-          raise "Callback initialization failed: #{inspect(reason)}"
-      end
+  @impl true
+  def handle_continue({:init_callback, init_args}, state) do
+    case apply(state.callback_module, :init, [init_args]) do
+      {:ok, callback_state} ->
+        {:noreply, %__MODULE__{state | callback_state: callback_state}, {:continue, :subscribe}}
 
-    with {:ok, broker_pid} <- lookup_topic(topic),
-         :ok <- Pulsar.Broker.register_consumer(broker_pid, consumer_id, self()),
+      {:error, reason} ->
+        {:stop, reason, nil}
+    end
+  end
+
+  def handle_continue(:subscribe, state) do
+    with {:ok, broker_pid} <- lookup_topic(state.topic),
+         :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, _response} <-
            subscribe_to_topic(
              broker_pid,
-             topic,
-             subscription_name,
-             subscription_type,
-             consumer_id,
-             initial_position: initial_position,
-             durable: durable,
-             force_create_topic: force_create_topic
-           ),
-         :ok <- send_initial_flow(broker_pid, consumer_id, initial_permits) do
-      Logger.info("Successfully subscribed to #{topic}")
-
-      # Monitor the broker process to detect crashes
-      broker_monitor = Process.monitor(broker_pid)
-
-      state = %__MODULE__{
-        topic: topic,
-        subscription_name: subscription_name,
-        subscription_type: subscription_type,
-        consumer_id: consumer_id,
-        callback_module: callback_module,
-        callback_state: callback_state,
-        broker_pid: broker_pid,
-        broker_monitor: broker_monitor,
-        flow_initial: initial_permits,
-        flow_threshold: refill_threshold,
-        flow_refill: refill_amount,
-        flow_outstanding_permits: initial_permits
-      }
-
-      {:ok, state}
+             state.topic,
+             state.subscription_name,
+             state.subscription_type,
+             state.consumer_id,
+             initial_position: state.initial_position,
+             durable: state.durable,
+             force_create_topic: state.force_create_topic
+           ) do
+      {:noreply, %__MODULE__{state | consumer_id: state.consumer_id, broker_pid: broker_pid},
+       {:continue, :seek_subscription}}
     else
       {:error, reason} ->
-        Logger.error("Consumer initialization failed: #{inspect(reason)}")
-        {:error, reason}
+        {:stop, reason, state}
+    end
+  end
+
+  def handle_continue(:seek_subscription, state) do
+    case maybe_seek_subscription(
+           state.broker_pid,
+           state.consumer_id,
+           state.start_message_id,
+           state.start_timestamp
+         ) do
+      {:ok, :skipped} ->
+        {:noreply, state, {:continue, :send_initial_flow}}
+
+      {:ok, _response} ->
+        {:noreply, state, {:continue, :resubscribe}}
+
+      {:error, reason} ->
+        {:stop, reason, state}
+    end
+  end
+
+  def handle_continue(:resubscribe, state) do
+    receive do
+      # When sending a Seek, we expect the broker to send a CloseConsumer
+      {:broker_message, %Binary.CommandCloseConsumer{}} ->
+        case subscribe_to_topic(
+               state.broker_pid,
+               state.topic,
+               state.subscription_name,
+               state.subscription_type,
+               state.consumer_id,
+               initial_position: state.initial_position,
+               durable: state.durable,
+               force_create_topic: state.force_create_topic
+             ) do
+          {:ok, _response} ->
+            {:noreply, state, {:continue, :send_initial_flow}}
+
+          {:error, reason} ->
+            {:stop, reason, state}
+        end
+    after
+      # TO-DO: Should be configurable
+      1_000 ->
+        {:stop, :no_close_consumer, state}
+    end
+  end
+
+  def handle_continue(:send_initial_flow, state) do
+    case send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial) do
+      :ok ->
+        broker_monitor = Process.monitor(state.broker_pid)
+
+        {:noreply,
+         %__MODULE__{
+           state
+           | broker_monitor: broker_monitor,
+             flow_outstanding_permits: state.flow_initial
+         }}
+
+      {:error, reason} ->
+        {:stop, reason, state}
     end
   end
 
   @impl true
+  def handle_info(
+        {:broker_message, %Binary.CommandCloseConsumer{}},
+        state
+      ) do
+    {:stop, :broker_close_requested, state}
+  end
+
   def handle_info(
         {:broker_message, {%Binary.CommandMessage{message_id: message_id}, metadata, payload}},
         state
@@ -290,6 +372,10 @@ defmodule Pulsar.Consumer do
   end
 
   @impl true
+  def terminate(_reason, nil) do
+    :ok
+  end
+
   def terminate(reason, state) do
     {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
 
@@ -418,18 +504,37 @@ defmodule Pulsar.Consumer do
     durable = Keyword.get(opts, :durable, false)
     force_create_topic = Keyword.get(opts, :force_create_topic, true)
 
-    subscribe_command = %Binary.CommandSubscribe{
-      topic: topic,
-      subscription: subscription_name,
-      subType: subscription_type,
-      consumer_id: consumer_id,
-      request_id: request_id,
-      initialPosition: initial_position,
-      durable: durable,
-      force_topic_creation: force_create_topic
-    }
+    subscribe_command =
+      %Binary.CommandSubscribe{
+        topic: topic,
+        subscription: subscription_name,
+        subType: subscription_type,
+        consumer_id: consumer_id,
+        request_id: request_id,
+        initialPosition: initial_position,
+        durable: durable,
+        force_topic_creation: force_create_topic
+      }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
+  end
+
+  defp maybe_seek_subscription(_broker_pid, _consumer_id, nil, nil) do
+    {:ok, :skipped}
+  end
+
+  defp maybe_seek_subscription(broker_pid, consumer_id, message_id, timestamp) do
+    request_id = System.unique_integer([:positive, :monotonic])
+
+    seek_command =
+      %Binary.CommandSeek{
+        consumer_id: consumer_id,
+        request_id: request_id
+      }
+      |> maybe_add_message_id(message_id)
+      |> maybe_add_timestamp(timestamp)
+
+    Pulsar.Broker.send_request(broker_pid, seek_command)
   end
 
   defp decrement_permits(state) do
@@ -498,5 +603,17 @@ defmodule Pulsar.Consumer do
     }
 
     Pulsar.Broker.send_request(broker_pid, close_consumer_command)
+  end
+
+  defp maybe_add_message_id(command, nil), do: command
+
+  defp maybe_add_message_id(command, {ledger_id, entry_id}) do
+    %{command | message_id: %Binary.MessageIdData{ledgerId: ledger_id, entryId: entry_id}}
+  end
+
+  defp maybe_add_timestamp(command, nil), do: command
+
+  defp maybe_add_timestamp(command, timestamp) do
+    %{command | message_publish_time: timestamp}
   end
 end

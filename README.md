@@ -113,7 +113,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Batching           | ❌        |
 | Consumer  | Partitioned topics | ✅        |
 | Consumer  | Chunking           | ❌        |
-| Consumer  | Seek               | ❌        |
+| Consumer  | Seek               | ✅        |
 | Consumer  | Subscription types | ✅        |
 | Consumer  | Subscription modes | ❌        |
 | Consumer  | Retry letter topic | ❌        |
