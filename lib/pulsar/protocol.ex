@@ -80,6 +80,7 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
   defp command_to_type(%Binary.CommandPartitionedTopicMetadata{}), do: :PARTITIONED_METADATA
   defp command_to_type(%Binary.CommandAck{}), do: :ACK
+  defp command_to_type(%Binary.CommandCloseConsumer{}), do: :CLOSE_CONSUMER
   # defp command_to_type(command) do
   #   command
   #   |> Map.get(:__struct__)

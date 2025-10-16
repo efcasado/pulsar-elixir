@@ -339,6 +339,62 @@ defmodule Pulsar.Integration.ConsumerTest do
     end
   end
 
+  test "Non-durable subscription is deleted if it has no consumers" do
+    topic = @topic_prefix <> "non-durable"
+    subscription = @subscription_prefix <> "non-durable"
+
+    {:ok, [group_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription,
+        subscription_type: :Shared,
+        callback_module: @consumer_callback,
+        opts: [durable: false]
+      )
+
+    [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+    :ok = Pulsar.stop_consumer(consumer_pid)
+
+    Utils.wait_for(fn ->
+      not Process.alive?(consumer_pid)
+    end)
+
+    {:ok, subscriptions} = System.topic_subscriptions(topic)
+
+    # Subscription should be removed from the list of available subscriptions
+    # on the target topic
+    assert subscription not in subscriptions
+  end
+
+  test "Durable subscription remains if it has no consumers" do
+    topic = @topic_prefix <> "durable"
+    subscription = @subscription_prefix <> "durable"
+
+    {:ok, [group_pid]} =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription,
+        subscription_type: :Shared,
+        callback_module: @consumer_callback,
+        opts: [durable: true]
+      )
+
+    [consumer_pid] = Pulsar.consumers_for_group(group_pid)
+
+    :ok = Pulsar.stop_consumer(consumer_pid)
+
+    Utils.wait_for(fn ->
+      not Process.alive?(consumer_pid)
+    end)
+
+    {:ok, subscriptions} = System.topic_subscriptions(topic)
+
+    # Subscription should remain in the list of available subscriptions
+    # on the target topic
+    assert subscription in subscriptions
+  end
+
   describe "Flow Control Configuration" do
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
     test "consumer with one permit at a time" do

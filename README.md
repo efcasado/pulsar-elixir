@@ -43,6 +43,7 @@ config :pulsar,
           flow_threshold: 50,
           flow_refill: 50,
 		  initial_position: :earliest
+		  durable: true
         ]
     ]
   ]

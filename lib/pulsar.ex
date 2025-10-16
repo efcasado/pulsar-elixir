@@ -359,32 +359,17 @@ defmodule Pulsar do
 
   defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do
     consumer_count = Keyword.get(opts, :consumer_count, 1)
-    init_args = Keyword.get(opts, :init_args)
-    flow_initial = Keyword.get(opts, :flow_initial)
-    flow_threshold = Keyword.get(opts, :flow_threshold)
-    flow_refill = Keyword.get(opts, :flow_refill)
-    initial_position = Keyword.get(opts, :initial_position)
 
     children =
       for i <- 1..consumer_count do
         consumer_id = "#{name}-consumer-#{i}"
-
-        consumer_opts =
-          [
-            init_args: init_args,
-            flow_initial: flow_initial,
-            flow_threshold: flow_threshold,
-            flow_refill: flow_refill,
-            initial_position: initial_position
-          ]
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
         %{
           id: consumer_id,
           start: {
             Pulsar.Consumer,
             :start_link,
-            [topic, subscription_name, subscription_type, callback_module, consumer_opts]
+            [topic, subscription_name, subscription_type, callback_module, opts]
           },
           restart: :transient,
           type: :worker

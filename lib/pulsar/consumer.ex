@@ -76,6 +76,7 @@ defmodule Pulsar.Consumer do
     {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_threshold, 50)
     {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
     {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
+    {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -87,7 +88,8 @@ defmodule Pulsar.Consumer do
       flow_initial: initial_permits,
       flow_threshold: refill_threshold,
       flow_refill: refill_amount,
-      initial_position: initial_position
+      initial_position: initial_position,
+      durable: durable
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -114,7 +116,8 @@ defmodule Pulsar.Consumer do
       flow_initial: initial_permits,
       flow_threshold: refill_threshold,
       flow_refill: refill_amount,
-      initial_position: initial_position
+      initial_position: initial_position,
+      durable: durable
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
@@ -140,7 +143,8 @@ defmodule Pulsar.Consumer do
              subscription_name,
              subscription_type,
              consumer_id,
-             initial_position: initial_position
+             initial_position: initial_position,
+             durable: durable
            ),
          :ok <- send_initial_flow(broker_pid, consumer_id, initial_permits) do
       Logger.info("Successfully subscribed to #{topic}")
@@ -283,6 +287,8 @@ defmodule Pulsar.Consumer do
 
   @impl true
   def terminate(reason, state) do
+    {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
+
     # Call callback module's terminate function if it exists
     if function_exported?(state.callback_module, :terminate, 2) do
       try do
@@ -404,6 +410,8 @@ defmodule Pulsar.Consumer do
        ) do
     request_id = System.unique_integer([:positive, :monotonic])
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
+    # default should be true
+    durable = Keyword.get(opts, :durable, false)
 
     subscribe_command = %Binary.CommandSubscribe{
       topic: topic,
@@ -411,7 +419,8 @@ defmodule Pulsar.Consumer do
       subType: subscription_type,
       consumer_id: consumer_id,
       request_id: request_id,
-      initialPosition: initial_position
+      initialPosition: initial_position,
+      durable: durable
     }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
@@ -475,5 +484,13 @@ defmodule Pulsar.Consumer do
         {result, Map.merge(start_metadata, stop_metadata)}
       end
     )
+  end
+
+  defp close_consumer(broker_pid, consumer_id) do
+    close_consumer_command = %Binary.CommandCloseConsumer{
+      consumer_id: consumer_id
+    }
+
+    Pulsar.Broker.send_request(broker_pid, close_consumer_command)
   end
 end
