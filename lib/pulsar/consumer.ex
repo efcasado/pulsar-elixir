@@ -77,6 +77,7 @@ defmodule Pulsar.Consumer do
     {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
     {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
+    {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -89,7 +90,8 @@ defmodule Pulsar.Consumer do
       flow_threshold: refill_threshold,
       flow_refill: refill_amount,
       initial_position: initial_position,
-      durable: durable
+      durable: durable,
+      force_create_topic: force_create_topic
     }
 
     GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
@@ -117,7 +119,8 @@ defmodule Pulsar.Consumer do
       flow_threshold: refill_threshold,
       flow_refill: refill_amount,
       initial_position: initial_position,
-      durable: durable
+      durable: durable,
+      force_create_topic: force_create_topic
     } = consumer_config
 
     consumer_id = System.unique_integer([:positive, :monotonic])
@@ -144,7 +147,8 @@ defmodule Pulsar.Consumer do
              subscription_type,
              consumer_id,
              initial_position: initial_position,
-             durable: durable
+             durable: durable,
+             force_create_topic: force_create_topic
            ),
          :ok <- send_initial_flow(broker_pid, consumer_id, initial_permits) do
       Logger.info("Successfully subscribed to #{topic}")
@@ -412,6 +416,7 @@ defmodule Pulsar.Consumer do
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
     # default should be true
     durable = Keyword.get(opts, :durable, false)
+    force_create_topic = Keyword.get(opts, :force_create_topic, true)
 
     subscribe_command = %Binary.CommandSubscribe{
       topic: topic,
@@ -420,7 +425,8 @@ defmodule Pulsar.Consumer do
       consumer_id: consumer_id,
       request_id: request_id,
       initialPosition: initial_position,
-      durable: durable
+      durable: durable,
+      force_topic_creation: force_create_topic
     }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)

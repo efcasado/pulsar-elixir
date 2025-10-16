@@ -43,7 +43,8 @@ config :pulsar,
           flow_threshold: 50,
           flow_refill: 50,
 		  initial_position: :earliest
-		  durable: true
+		  durable: true,
+		  force_create_topic: true
         ]
     ]
   ]

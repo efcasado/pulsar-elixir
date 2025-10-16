@@ -395,6 +395,22 @@ defmodule Pulsar.Integration.ConsumerTest do
     assert subscription in subscriptions
   end
 
+  test "consumer fails to start if topic does not exist" do
+    topic = @topic_prefix <> "no-force-create-topic"
+    subscription = @subscription_prefix <> "no-force-create-topic"
+
+    result =
+      Pulsar.start_consumer(
+        topic: topic,
+        subscription_name: subscription,
+        subscription_type: :Shared,
+        callback_module: @consumer_callback,
+        opts: [force_create_topic: false]
+      )
+
+    assert {:error, _reason} = result
+  end
+
   describe "Flow Control Configuration" do
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
     test "consumer with one permit at a time" do
