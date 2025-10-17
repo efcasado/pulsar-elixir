@@ -23,7 +23,7 @@ defmodule Pulsar.ServiceDiscovery do
           Utils.broker()
           |> lookup_topic(topic, false)
 
-        metadata = %{result: if(match?({:ok, _}, result), do: :success, else: :failure)}
+        metadata = %{success: match?({:ok, _}, result)}
         {result, metadata}
       end
     )

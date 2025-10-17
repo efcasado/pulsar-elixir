@@ -66,8 +66,8 @@ defmodule Pulsar.Integration.ServiceDiscoveryTest do
   defp aggregate_lookup_stats(events) do
     %{
       total_count: length(events),
-      success_count: Enum.count(events, &(&1.result == :success)),
-      failure_count: Enum.count(events, &(&1.result == :failure))
+      success_count: Enum.count(events, &(&1.success == true)),
+      failure_count: Enum.count(events, &(&1.success == false))
     }
   end
 end
