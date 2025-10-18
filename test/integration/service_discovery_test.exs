@@ -38,36 +38,8 @@ defmodule Pulsar.Integration.ServiceDiscoveryTest do
       assert Process.alive?(broker_pid)
 
       # Verify 1 lookup with success result
-      stats = lookup_stats()
+      stats = Utils.collect_lookup_stats()
       assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
     end
-  end
-
-  # Helper function to collect and aggregate lookup statistics from telemetry events
-  defp lookup_stats do
-    collect_lookup_events([]) |> aggregate_lookup_stats()
-  end
-
-  defp collect_lookup_events(acc) do
-    receive do
-      {:telemetry_event,
-       %{
-         event: [:pulsar, :service_discovery, :lookup_topic, :stop],
-         measurements: measurements,
-         metadata: metadata
-       }} ->
-        event = Map.merge(measurements, metadata)
-        collect_lookup_events([event | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
-  end
-
-  defp aggregate_lookup_stats(events) do
-    %{
-      total_count: length(events),
-      success_count: Enum.count(events, &(&1.success == true)),
-      failure_count: Enum.count(events, &(&1.success == false))
-    }
   end
 end
