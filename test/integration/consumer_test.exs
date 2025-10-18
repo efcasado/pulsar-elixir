@@ -1,5 +1,5 @@
 defmodule Pulsar.Integration.ConsumerTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   import TelemetryTest
 
   require Logger
@@ -38,6 +38,44 @@ defmodule Pulsar.Integration.ConsumerTest do
   setup [:telemetry_listen]
 
   describe "Consumer Integration" do
+    test "consumer group can be retrieved by name" do
+      topic1 = @topic_prefix <> "registry-anonymous-consumer"
+      subscription1 = @subscription_prefix <> "registry-anonymous-consumer"
+
+      {:ok, [group1_pid]} =
+        Pulsar.start_consumer(
+          topic: topic1,
+          subscription_name: subscription1,
+          subscription_type: :Shared,
+          callback_module: @consumer_callback
+        )
+
+      topic2 = @topic_prefix <> "registry-named-consumer"
+      subscription2 = @subscription_prefix <> "registry-named-consumer"
+
+      {:ok, [group2_pid]} =
+        Pulsar.start_consumer(
+          :a_name,
+          topic: topic2,
+          subscription_name: subscription2,
+          subscription_type: :Shared,
+          callback_module: @consumer_callback
+        )
+
+      assert match?(
+               [{group1_pid, _}],
+               Registry.lookup(Pulsar.ConsumerRegistry, "#{topic1}-#{subscription1}")
+             )
+
+      assert match?(
+               [{group2_pid, _}],
+               Registry.lookup(Pulsar.ConsumerRegistry, "a_name-#{topic2}-#{subscription2}")
+             )
+
+      assert [] ==
+               Registry.lookup(Pulsar.ConsumerRegistry, "a-fake-name-#{topic2}-#{subscription2}")
+    end
+
     test "produce and consume messages" do
       topic = @topic_prefix <> "e2e"
 

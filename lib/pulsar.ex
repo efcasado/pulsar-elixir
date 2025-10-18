@@ -121,7 +121,7 @@ defmodule Pulsar do
     {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
 
     consumers
-    |> Enum.each(fn {name, consumer_opts} -> Pulsar.start_consumer(consumer_opts, name) end)
+    |> Enum.each(fn {name, consumer_opts} -> Pulsar.start_consumer(name, consumer_opts) end)
 
     {:ok, pid}
   end
@@ -309,7 +309,12 @@ defmodule Pulsar do
   """
 
   @spec start_consumer(keyword()) :: {:ok, [pid()]} | {:error, [term()]}
-  def start_consumer(args, name \\ nil) do
+  def start_consumer(args) do
+    start_consumer(nil, args)
+  end
+
+  @spec start_consumer(atom(), keyword()) :: {:ok, [pid()]} | {:error, [term()]}
+  def start_consumer(name, args) do
     {:ok, topic} = Keyword.fetch(args, :topic)
     {:ok, subscription_name} = Keyword.fetch(args, :subscription_name)
     {:ok, subscription_type} = Keyword.fetch(args, :subscription_type)
