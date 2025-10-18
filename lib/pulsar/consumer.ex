@@ -500,8 +500,7 @@ defmodule Pulsar.Consumer do
        ) do
     request_id = System.unique_integer([:positive, :monotonic])
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
-    # default should be true
-    durable = Keyword.get(opts, :durable, false)
+    durable = Keyword.get(opts, :durable, true)
     force_create_topic = Keyword.get(opts, :force_create_topic, true)
 
     subscribe_command =

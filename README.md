@@ -99,28 +99,28 @@ mix test test/integration/consumer_test.exs:43
 
 The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apache.org/client-feature-matrix/).
 
-| Component | Feature            | Supported |
-|-----------|--------------------|-----------|
-| Client    | TLS encryption     | ✅        |
-| Client    | Authentication     | ⚠️        |
-| Client    | Transaction        | ❌        |
-| Client    | Statistics         | ❌        |
-| Producer  |                    | ❌        |
-| Consumer  | ACK                | ✅        |
-| Consumer  | Batch-index ACK    | ❌        |
-| Consumer  | NACK               | ✅        |
-| Consumer  | NACK back-off      | ❌        |
-| Consumer  | Batching           | ❌        |
-| Consumer  | Partitioned topics | ✅        |
-| Consumer  | Chunking           | ❌        |
-| Consumer  | Seek               | ✅        |
-| Consumer  | Subscription types | ✅        |
-| Consumer  | Subscription modes | ❌        |
-| Consumer  | Retry letter topic | ❌        |
-| Consumer  | Dead letter topic  | ❌        |
-| Consumer  | Compression        | ❌        |
-| Consumer  | Compaction         | ❌        |
-| Consumer  | Schema             | ❌        |
-| Consumer  | Configurable flow control settings | ✅ |
-| Reader    |                    | ❌        |
-| TableView |                    | ❌        |
+| Component | Feature                            | Supported |
+|-----------|------------------------------------|-----------|
+| Client    | TLS encryption                     | ✅        |
+| Client    | Authentication                     | ⚠️        |
+| Client    | Transaction                        | ❌        |
+| Client    | Statistics                         | ❌        |
+| Producer  |                                    | ❌        |
+| Consumer  | ACK                                | ✅        |
+| Consumer  | Batch-index ACK                    | ❌        |
+| Consumer  | NACK                               | ✅        |
+| Consumer  | NACK back-off                      | ❌        |
+| Consumer  | Batching                           | ❌        |
+| Consumer  | Partitioned topics                 | ✅        |
+| Consumer  | Chunking                           | ❌        |
+| Consumer  | Seek                               | ✅        |
+| Consumer  | Subscription types                 | ✅        |
+| Consumer  | Subscription modes                 | ✅        |
+| Consumer  | Retry letter topic                 | ❌        |
+| Consumer  | Dead letter topic                  | ❌        |
+| Consumer  | Compression                        | ❌        |
+| Consumer  | Compaction                         | ❌        |
+| Consumer  | Schema                             | ❌        |
+| Consumer  | Configurable flow control settings | ✅        |
+| Reader    |                                    | ❌        |
+| TableView |                                    | ❌        |
