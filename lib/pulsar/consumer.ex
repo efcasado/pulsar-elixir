@@ -17,7 +17,7 @@ defmodule Pulsar.Consumer do
   require Logger
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-  alias Pulsar.Utils
+  alias Pulsar.ServiceDiscovery
 
   defstruct [
     :topic,
@@ -171,7 +171,7 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_continue(:subscribe, state) do
-    with {:ok, broker_pid} <- lookup_topic(state.topic),
+    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, _response} <-
            subscribe_to_topic(
@@ -452,43 +452,8 @@ defmodule Pulsar.Consumer do
 
   ## Private Functions
 
-  defp get_broker_url(%{brokerServiceUrl: service_url, brokerServiceUrlTls: service_url_tls}) do
-    service_url_tls || service_url
-  end
-
   defp initial_position(:latest), do: :Latest
   defp initial_position(:earliest), do: :Earliest
-
-  defp lookup_topic(topic) do
-    broker = Utils.broker()
-
-    lookup_topic(broker, topic, false)
-  end
-
-  defp lookup_topic(broker, topic, authoritative) do
-    case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do
-      {:ok, %{response: :Connect} = response} ->
-        response
-        |> get_broker_url
-        |> Pulsar.start_broker()
-
-      {:ok, %{response: :Redirect, authoritative: authoritative} = response} ->
-        {:ok, broker} =
-          response
-          |> get_broker_url
-          |> Pulsar.start_broker()
-
-        lookup_topic(broker, topic, authoritative)
-
-      {:ok, %{response: :Failed, error: error}} ->
-        Logger.error("Topic lookup failed: #{inspect(error)}")
-        {:error, {:lookup_failed, error}}
-
-      {:error, reason} ->
-        Logger.error("Topic lookup error: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
 
   defp subscribe_to_topic(
          broker_pid,

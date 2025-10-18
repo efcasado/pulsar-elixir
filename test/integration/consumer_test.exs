@@ -577,7 +577,7 @@ defmodule Pulsar.Integration.ConsumerTest do
 
       # We expect: 1 initial request + 6 refills (one per message) = 7 total events
       # Each event requests 1 permit, so requested_total should be 7
-      stats = flow_control_stats()
+      stats = Utils.collect_flow_stats()
       assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
     end
 
@@ -615,46 +615,12 @@ defmodule Pulsar.Integration.ConsumerTest do
       # Each consumer gets initial request of 5 permits
       # Since messages (6 total) are distributed between 2 consumers (~3 each),
       # neither should hit threshold so we expect only 2 events total
-      stats = flow_control_stats()
+      stats = Utils.collect_flow_stats()
 
       assert %{
                ^consumer1_id => %{event_count: 1, requested_total: 5},
                ^consumer2_id => %{event_count: 1, requested_total: 5}
              } = stats
-    end
-
-    # Helper function to collect and aggregate flow control statistics from telemetry events
-    # Returns a map with statistics grouped by consumer_id
-    defp flow_control_stats do
-      collect_flow_events([]) |> aggregate_stats()
-    end
-
-    defp collect_flow_events(acc) do
-      receive do
-        {:telemetry_event,
-         %{
-           event: [:pulsar, :consumer, :flow_control, :stop],
-           metadata: metadata
-         }} ->
-          collect_flow_events([metadata | acc])
-      after
-        0 -> Enum.reverse(acc)
-      end
-    end
-
-    defp aggregate_stats(events) do
-      events
-      |> Enum.group_by(& &1.consumer_id)
-      |> Enum.map(fn {consumer_id, consumer_events} ->
-        stats = %{
-          consumer_id: consumer_id,
-          event_count: length(consumer_events),
-          requested_total: Enum.sum(Enum.map(consumer_events, & &1.permits_requested))
-        }
-
-        {consumer_id, stats}
-      end)
-      |> Map.new()
     end
   end
 
