@@ -59,6 +59,9 @@ defmodule Pulsar.Protocol do
       Binary.BaseCommand.decode(command)
       |> do_decode
 
+    # Handle batch messages
+    payload = parse_batch_payload(message_metadata, payload)
+
     {command, message_metadata, payload, broker_entry_metadata}
   end
 
@@ -79,6 +82,9 @@ defmodule Pulsar.Protocol do
     command =
       Binary.BaseCommand.decode(command)
       |> do_decode
+
+    # Handle batch messages
+    payload = parse_batch_payload(metadata, payload)
 
     {command, metadata, payload, nil}
   end
@@ -149,5 +155,31 @@ defmodule Pulsar.Protocol do
     |> Atom.to_string()
     |> String.downcase()
     |> String.to_existing_atom()
+  end
+
+  # Parse batch payload format
+  # For batched messages (num_messages_in_batch > 1 or batch format used):
+  # [SingleMessageMetadata_size][SingleMessageMetadata][payload]
+  defp parse_batch_payload(metadata, payload) when metadata.num_messages_in_batch == 1 do
+    try do
+      <<single_metadata_size::32, rest::binary>> = payload
+
+      if single_metadata_size > 0 and single_metadata_size < byte_size(rest) do
+        <<_single_metadata::bytes-size(single_metadata_size), actual_payload::binary>> = rest
+        actual_payload
+      else
+        # Not batch format, return original payload
+        payload
+      end
+    rescue
+      # If parsing fails, return original payload
+      _ -> payload
+    end
+  end
+
+  defp parse_batch_payload(_metadata, payload) do
+    # For multi-message batches, would need more complex parsing
+    # For now, return as-is
+    payload
   end
 end
