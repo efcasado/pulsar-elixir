@@ -596,6 +596,10 @@ defmodule Pulsar.Consumer do
     )
   end
 
+  defp close_consumer(nil, _consumer_id) do
+    {:ok, :skipped}
+  end
+
   defp close_consumer(broker_pid, consumer_id) do
     close_consumer_command = %Binary.CommandCloseConsumer{
       consumer_id: consumer_id
