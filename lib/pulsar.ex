@@ -465,9 +465,7 @@ defmodule Pulsar do
     Enum.join([topic, subscription], "-")
   end
 
-  defp consumer_group_name(name, topic, subscription) do
-    str_name = Atom.to_string(name)
-
-    Enum.join([str_name, topic, subscription], "-")
+  defp consumer_group_name(name, _topic, _subscription) do
+    name
   end
 end

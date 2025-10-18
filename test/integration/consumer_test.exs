@@ -63,13 +63,13 @@ defmodule Pulsar.Integration.ConsumerTest do
         )
 
       assert match?(
-               [{group1_pid, _}],
+               [{^group1_pid, _}],
                Registry.lookup(Pulsar.ConsumerRegistry, "#{topic1}-#{subscription1}")
              )
 
       assert match?(
-               [{group2_pid, _}],
-               Registry.lookup(Pulsar.ConsumerRegistry, "a_name-#{topic2}-#{subscription2}")
+               [{^group2_pid, _}],
+               Registry.lookup(Pulsar.ConsumerRegistry, :a_name)
              )
 
       assert [] ==
