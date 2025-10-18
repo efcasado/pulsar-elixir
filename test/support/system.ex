@@ -79,7 +79,8 @@ defmodule Pulsar.Test.Support.System do
       namespace
     ]
 
-    :ok = docker_exec(command)
+    {_, 0} = docker_exec(command)
+    :ok
   end
 
   def create_topic(topic, partitions \\ 0)
@@ -88,7 +89,8 @@ defmodule Pulsar.Test.Support.System do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "create", topic]
 
-    :ok = docker_exec(command)
+    {_, 0} = docker_exec(command)
+    :ok
   end
 
   def create_topic(topic, n) do
@@ -105,14 +107,15 @@ defmodule Pulsar.Test.Support.System do
       "#{n}"
     ]
 
-    :ok = docker_exec(command)
+    {_, 0} = docker_exec(command)
+    :ok
   end
 
   def unload_topic(topic) do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "unload", topic]
 
-    docker_exec(command)
+    {_, 0} = docker_exec(command)
     :ok
   end
 
@@ -128,11 +131,35 @@ defmodule Pulsar.Test.Support.System do
     messages
     |> Enum.each(fn
       {key, message} ->
-        :ok = docker_exec(base_cmd ++ ["-m", message, "-k", key])
+        {_, 0} = docker_exec(base_cmd ++ ["-m", message, "-k", key])
 
       message when is_binary(message) ->
-        :ok = docker_exec(base_cmd ++ ["-m", message])
+        {_, 0} = docker_exec(base_cmd ++ ["-m", message])
     end)
+
+    :ok
+  end
+
+  def topic_subscriptions(topic, broker \\ broker()) do
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "subscriptions",
+      topic
+    ]
+
+    with {raw_subscriptions, 0} <- docker_exec(broker.container, command) do
+      subscriptions =
+        raw_subscriptions
+        |> String.split()
+
+      {:ok, subscriptions}
+    else
+      {error_output, exit_code} ->
+        {:error, %{exit_code: exit_code, message: error_output}}
+    end
   end
 
   defp docker_exec(command) do
@@ -142,8 +169,7 @@ defmodule Pulsar.Test.Support.System do
   end
 
   defp docker_exec(container, command) do
-    {_, 0} = System.cmd("docker", ["exec", container | command], stderr_to_stdout: true)
-    :ok
+    System.cmd("docker", ["exec", container | command], stderr_to_stdout: true)
   end
 
   defp brokers_up? do

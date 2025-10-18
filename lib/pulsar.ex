@@ -240,7 +240,8 @@ defmodule Pulsar do
     - `:flow_initial` - Initial flow permits (default: 100)
     - `:flow_threshold` - Flow permits threshold for refill (default: 50)
     - `:flow_refill` - Flow permits refill amount (default: 50)
-    - Other options passed to ConsumerGroup supervisor
+    - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
+  - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
 
@@ -321,67 +322,39 @@ defmodule Pulsar do
         {:ok, partitions} -> Range.new(0, partitions - 1) |> Enum.map(&"#{topic}-partition-#{&1}")
       end
 
-    {consumers, errors} =
+    consumers =
       topics
       |> Enum.map(fn topic ->
-        do_start_consumer(
-          topic,
-          topic,
-          subscription_name,
-          subscription_type,
-          callback_module,
-          opts
-        )
+        {:ok, pid} =
+          do_start_consumer(
+            # TO-DO: we should be able to pass the name from the app configuration
+            topic <> "-" <> subscription_name,
+            topic,
+            subscription_name,
+            subscription_type,
+            callback_module,
+            opts
+          )
+
+        pid
       end)
-      |> Enum.reduce(
-        {[], []},
-        fn
-          {:ok, pid}, {pids, errors} ->
-            {[pid | pids], errors}
 
-          {:error, reason}, {pids, errors} ->
-            {pids, [reason | errors]}
-        end
-      )
-
-    case errors do
-      [] ->
-        {:ok, consumers}
-
-      _ ->
-        consumers
-        |> Enum.each(&DynamicSupervisor.terminate_child(@consumer_supervisor, &1))
-
-        {:error, errors}
-    end
+    {:ok, consumers}
   end
 
   defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do
     consumer_count = Keyword.get(opts, :consumer_count, 1)
-    init_args = Keyword.get(opts, :init_args)
-    flow_initial = Keyword.get(opts, :flow_initial)
-    flow_threshold = Keyword.get(opts, :flow_threshold)
-    flow_refill = Keyword.get(opts, :flow_refill)
 
     children =
       for i <- 1..consumer_count do
         consumer_id = "#{name}-consumer-#{i}"
-
-        consumer_opts =
-          [
-            init_args: init_args,
-            flow_initial: flow_initial,
-            flow_threshold: flow_threshold,
-            flow_refill: flow_refill
-          ]
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
         %{
           id: consumer_id,
           start: {
             Pulsar.Consumer,
             :start_link,
-            [topic, subscription_name, subscription_type, callback_module, consumer_opts]
+            [topic, subscription_name, subscription_type, callback_module, opts]
           },
           restart: :transient,
           type: :worker
