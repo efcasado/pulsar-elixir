@@ -35,7 +35,34 @@ defmodule Pulsar.Protocol do
     <<size + 4::32, size::32, encoded::binary>>
   end
 
-  # TO-DO: handle broker metadata
+  # Message command with broker entry metadata
+  def decode(<<
+        _total_size::32,
+        size::32,
+        command::bytes-size(size),
+        0x0E02::16,
+        broker_metadata_size::32,
+        broker_metadata::bytes-size(broker_metadata_size),
+        0x0E01::16,
+        _checksum::32,
+        metadata_size::32,
+        metadata::bytes-size(metadata_size),
+        payload::binary
+      >>) do
+    # Decode broker entry metadata
+    broker_entry_metadata = Binary.BrokerEntryMetadata.decode(broker_metadata)
+
+    # Decode message metadata
+    message_metadata = Binary.MessageMetadata.decode(metadata)
+
+    command =
+      Binary.BaseCommand.decode(command)
+      |> do_decode
+
+    {command, message_metadata, payload, broker_entry_metadata}
+  end
+
+  # Message command without broker entry metadata (original format)
   def decode(<<
         _total_size::32,
         size::32,
@@ -53,7 +80,7 @@ defmodule Pulsar.Protocol do
       Binary.BaseCommand.decode(command)
       |> do_decode
 
-    {command, metadata, payload}
+    {command, metadata, payload, nil}
   end
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do

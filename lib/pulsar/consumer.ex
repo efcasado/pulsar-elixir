@@ -263,7 +263,8 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_info(
-        {:broker_message, {%Binary.CommandMessage{message_id: message_id}, metadata, payload}},
+        {:broker_message,
+         {%Binary.CommandMessage{message_id: message_id}, metadata, payload, broker_metadata}},
         state
       ) do
     state = decrement_permits(state)
@@ -275,7 +276,8 @@ defmodule Pulsar.Consumer do
       payload: payload,
       partition_key: metadata.partition_key,
       producer_name: metadata.producer_name,
-      publish_time: metadata.publish_time
+      publish_time: metadata.publish_time,
+      broker_metadata: broker_metadata
     }
 
     # Call the user-provided callback with current state
