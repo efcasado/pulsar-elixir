@@ -377,7 +377,15 @@ defmodule Pulsar.Consumer do
   end
 
   def terminate(reason, state) do
-    {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
+    # Only try to close consumer if broker is still alive
+    if state.broker_pid != nil and Process.alive?(state.broker_pid) do
+      try do
+        {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
+      catch
+        # Ignore errors if broker is already dead or connection lost
+        _kind, _error -> :ok
+      end
+    end
 
     # Call callback module's terminate function if it exists
     if function_exported?(state.callback_module, :terminate, 2) do

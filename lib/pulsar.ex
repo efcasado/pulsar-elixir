@@ -121,7 +121,7 @@ defmodule Pulsar do
     {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
 
     consumers
-    |> Enum.each(fn {_, consumer_opts} -> Pulsar.start_consumer(consumer_opts) end)
+    |> Enum.each(fn {name, consumer_opts} -> Pulsar.start_consumer(consumer_opts, name) end)
 
     {:ok, pid}
   end
@@ -309,12 +309,14 @@ defmodule Pulsar do
   """
 
   @spec start_consumer(keyword()) :: {:ok, [pid()]} | {:error, [term()]}
-  def start_consumer(args) do
+  def start_consumer(args, name \\ nil) do
     {:ok, topic} = Keyword.fetch(args, :topic)
     {:ok, subscription_name} = Keyword.fetch(args, :subscription_name)
     {:ok, subscription_type} = Keyword.fetch(args, :subscription_type)
     {:ok, callback_module} = Keyword.fetch(args, :callback_module)
     opts = Keyword.get(args, :opts, [])
+
+    name = consumer_group_name(name, topic, subscription_name)
 
     topics =
       case check_partitioned_topic(topic) do
@@ -327,8 +329,7 @@ defmodule Pulsar do
       |> Enum.map(fn topic ->
         {:ok, pid} =
           do_start_consumer(
-            # TO-DO: we should be able to pass the name from the app configuration
-            topic <> "-" <> subscription_name,
+            name,
             topic,
             subscription_name,
             subscription_type,
@@ -453,5 +454,15 @@ defmodule Pulsar do
       {:ok, %{response: :Failed, error: error}} ->
         {:error, {:partition_metadata_check_failed, error}}
     end
+  end
+
+  defp consumer_group_name(nil, topic, subscription) do
+    Enum.join([topic, subscription], "-")
+  end
+
+  defp consumer_group_name(name, topic, subscription) do
+    str_name = Atom.to_string(name)
+
+    Enum.join([str_name, topic, subscription], "-")
   end
 end
