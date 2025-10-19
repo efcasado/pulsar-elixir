@@ -30,19 +30,26 @@ defmodule Pulsar.Integration.ProducerTest do
   describe "Producer Lifecycle" do
     @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
     test "create producer successfully" do
-      # Create topic first
       topic = @topic <> "-#{:erlang.unique_integer([:positive])}"
       System.create_topic(topic)
 
-      {:ok, producer} = Pulsar.start_producer(topic: topic)
+      assert {:ok, producer} = Pulsar.start_producer(topic: topic)
       assert Process.alive?(producer)
 
       # Wait a bit to ensure telemetry events are emitted
       Process.sleep(100)
 
-      # Verify telemetry using collected stats
       stats = Utils.collect_producer_opened_stats()
       assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
+    end
+
+    @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
+    test "producer creation fails for non-existing topics" do
+      result1 = Pulsar.start_producer(topic: "persistent://fake/fake/fake")
+      assert {:error, _reason} = result1
+
+      stats = Utils.collect_producer_opened_stats()
+      assert %{success_count: 0, failure_count: 1, total_count: 1} = stats
     end
   end
 end
