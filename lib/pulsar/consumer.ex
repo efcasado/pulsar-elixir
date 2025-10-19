@@ -276,40 +276,45 @@ defmodule Pulsar.Consumer do
     final_callback_state =
       payload
       |> Enum.with_index()
-      |> Enum.reduce(state.callback_state, fn {{msg_metadata, msg_payload}, index}, callback_state ->
+      |> Enum.reduce(state.callback_state, fn {{msg_metadata, msg_payload}, index},
+                                              callback_state ->
         msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
+
+        message_id_to_ack =
+          if msg_metadata != nil do
+            %{base_message_id | batch_index: index}
+          else
+            base_message_id
+          end
 
         result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
 
         case result do
           {:ok, new_callback_state} ->
-            # ACK this individual message
-            message_id_to_ack = 
-              if msg_metadata != nil do
-                # Batch message - use batch index
-                %{base_message_id | batch_index: index}
-              else
-                # Single message - use original message ID
-                base_message_id
-              end
-
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
               ack_type: :Individual,
               message_id: [message_id_to_ack]
             }
-            Pulsar.Broker.send_command(state.broker_pid, ack_command)
-            
+
+            {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+
             new_callback_state
 
           {:error, reason, new_callback_state} ->
             Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
-            # Don't ACK this message on error
+
+            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
+            # this feature in the Elixir client.
             new_callback_state
 
           unexpected_result ->
-            Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-            # Don't ACK on unexpected result
+            Logger.warning(
+              "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
+            )
+
+            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
+            # this feature in the Elixir client.
             callback_state
         end
       end)
