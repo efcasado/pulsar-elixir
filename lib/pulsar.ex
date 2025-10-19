@@ -98,6 +98,9 @@ defmodule Pulsar do
     bootstrap_host =
       Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
+    start_delay_ms =
+      Keyword.get(opts, :start_delay_ms, 500)
+
     broker_opts = [
       socket_opts: socket_opts,
       conn_timeout: conn_timeout,
@@ -119,6 +122,8 @@ defmodule Pulsar do
 
     # a bootstrap host is required
     {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
+
+    Process.sleep(start_delay_ms)
 
     consumers
     |> Enum.each(fn {_, consumer_opts} -> Pulsar.start_consumer(consumer_opts) end)
