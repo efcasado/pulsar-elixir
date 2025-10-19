@@ -35,7 +35,37 @@ defmodule Pulsar.Protocol do
     <<size + 4::32, size::32, encoded::binary>>
   end
 
-  # TO-DO: handle broker metadata
+  # Message command with broker entry metadata
+  def decode(<<
+        _total_size::32,
+        size::32,
+        command::bytes-size(size),
+        0x0E02::16,
+        broker_metadata_size::32,
+        broker_metadata::bytes-size(broker_metadata_size),
+        0x0E01::16,
+        _checksum::32,
+        metadata_size::32,
+        metadata::bytes-size(metadata_size),
+        payload::binary
+      >>) do
+    # Decode broker entry metadata
+    broker_entry_metadata = Binary.BrokerEntryMetadata.decode(broker_metadata)
+
+    # Decode message metadata
+    message_metadata = Binary.MessageMetadata.decode(metadata)
+
+    command =
+      Binary.BaseCommand.decode(command)
+      |> do_decode
+
+    # Handle batch messages
+    payload = unwrap_messages(message_metadata, payload)
+
+    {command, message_metadata, payload, broker_entry_metadata}
+  end
+
+  # Message command without broker entry metadata (original format)
   def decode(<<
         _total_size::32,
         size::32,
@@ -53,7 +83,10 @@ defmodule Pulsar.Protocol do
       Binary.BaseCommand.decode(command)
       |> do_decode
 
-    {command, metadata, payload}
+    # Handle batch messages
+    payload = unwrap_messages(metadata, payload)
+
+    {command, metadata, payload, nil}
   end
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
@@ -122,5 +155,42 @@ defmodule Pulsar.Protocol do
     |> Atom.to_string()
     |> String.downcase()
     |> String.to_existing_atom()
+  end
+
+  defp unwrap_messages(metadata, payload) do
+    case metadata.num_messages_in_batch > 0 do
+      true -> parse_batch_messages(payload, metadata.num_messages_in_batch, [])
+      false -> [{nil, payload}]
+    end
+  end
+
+  defp parse_batch_messages(<<>>, 0, acc), do: Enum.reverse(acc)
+  defp parse_batch_messages(_, 0, acc), do: Enum.reverse(acc)
+
+  defp parse_batch_messages(
+         <<
+           metadata_size::32,
+           metadata::bytes-size(metadata_size),
+           data::binary
+         >> = payload,
+         count,
+         acc
+       ) do
+    single_metadata = Binary.SingleMessageMetadata.decode(metadata)
+
+    payload_size = single_metadata.payload_size
+
+    <<payload::bytes-size(payload_size), rest::binary>> = data
+
+    # Build individual message as {metadata, payload} tuple
+    message = {single_metadata, payload}
+
+    parse_batch_messages(rest, count - 1, [message | acc])
+  rescue
+    _ -> [{nil, payload}]
+  end
+
+  defp parse_batch_messages(payload, _, _) do
+    [{nil, payload}]
   end
 end

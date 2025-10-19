@@ -107,10 +107,10 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Client    | Statistics                         | ❌        |
 | Producer  |                                    | ❌        |
 | Consumer  | ACK                                | ✅        |
-| Consumer  | Batch-index ACK                    | ❌        |
-| Consumer  | NACK                               | ✅        |
+| Consumer  | Batch-index ACK                    | ✅        |
+| Consumer  | NACK                               | ❌        |
 | Consumer  | NACK back-off                      | ❌        |
-| Consumer  | Batching                           | ❌        |
+| Consumer  | Batching                           | ✅        |
 | Consumer  | Partitioned topics                 | ✅        |
 | Consumer  | Chunking                           | ❌        |
 | Consumer  | Seek                               | ✅        |

@@ -254,6 +254,10 @@ defmodule Pulsar.Consumer do
     end
   end
 
+  def message_id(%Binary.CommandMessage{} = message) do
+    message.message_id
+  end
+
   @impl true
   def handle_info(
         {:broker_message, %Binary.CommandCloseConsumer{}},
@@ -263,75 +267,61 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_info(
-        {:broker_message, {%Binary.CommandMessage{message_id: message_id}, metadata, payload}},
+        {:broker_message, {command, metadata, payload, broker_metadata}},
         state
       ) do
+    base_message_id = message_id(command)
     state = decrement_permits(state)
 
-    # Build message structure for callback
-    message = %{
-      id: {message_id.ledgerId, message_id.entryId},
-      metadata: metadata,
-      payload: payload,
-      partition_key: metadata.partition_key,
-      producer_name: metadata.producer_name,
-      publish_time: metadata.publish_time
-    }
+    final_callback_state =
+      payload
+      |> Enum.with_index()
+      |> Enum.reduce(state.callback_state, fn {{msg_metadata, msg_payload}, index},
+                                              callback_state ->
+        msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
 
-    # Call the user-provided callback with current state
-    result =
-      try do
-        apply(state.callback_module, :handle_message, [message, state.callback_state])
-      rescue
-        error ->
-          Logger.error("Error in callback: #{inspect(error)}")
-          {:error, error, state.callback_state}
-      end
+        message_id_to_ack =
+          if msg_metadata != nil do
+            %{base_message_id | batch_index: index}
+          else
+            base_message_id
+          end
 
-    # Handle acknowledgment and state updates based on callback result
-    case result do
-      {:ok, new_callback_state} ->
-        # Auto-acknowledge successful messages
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: [message_id]
-        }
+        result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
 
-        Pulsar.Broker.send_command(state.broker_pid, ack_command)
+        case result do
+          {:ok, new_callback_state} ->
+            ack_command = %Binary.CommandAck{
+              consumer_id: state.consumer_id,
+              ack_type: :Individual,
+              message_id: [message_id_to_ack]
+            }
 
-        state = check_and_refill_permits(state)
+            {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
 
-        new_state = %{state | callback_state: new_callback_state}
-        {:noreply, new_state}
+            new_callback_state
 
-      {:error, reason, new_callback_state} ->
-        Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
-        # Update state but don't acknowledge
-        new_state = %{state | callback_state: new_callback_state}
-        {:noreply, new_state}
+          {:error, reason, new_callback_state} ->
+            Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
 
-      {:stop, new_callback_state} ->
-        # Acknowledge the message before stopping
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: [message_id]
-        }
+            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
+            # this feature in the Elixir client.
+            new_callback_state
 
-        Pulsar.Broker.send_command(state.broker_pid, ack_command)
+          unexpected_result ->
+            Logger.warning(
+              "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
+            )
 
-        # Update state and stop
-        new_state = %{state | callback_state: new_callback_state}
-        {:stop, :normal, new_state}
+            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
+            # this feature in the Elixir client.
+            callback_state
+        end
+      end)
 
-      unexpected_result ->
-        Logger.warning(
-          "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
-        )
-
-        {:noreply, state}
-    end
+    state = check_and_refill_permits(state)
+    new_state = %{state | callback_state: final_callback_state}
+    {:noreply, new_state}
   end
 
   # Handle broker crashes - stop so supervisor can restart us with fresh lookup

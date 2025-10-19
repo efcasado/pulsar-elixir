@@ -602,20 +602,9 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker}
   end
 
-  defp handle_command(%Binary.CommandMessage{consumer_id: consumer_id} = command, broker) do
-    case Map.get(broker.consumers, consumer_id) do
-      nil ->
-        Logger.warning("Received message for unknown consumer #{consumer_id}")
-        :keep_state_and_data
-
-      {consumer_pid, _monitor_ref} ->
-        send(consumer_pid, {:broker_message, command})
-        :keep_state_and_data
-    end
-  end
-
   defp handle_command(
-         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload},
+         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload,
+          broker_metadata},
          broker
        ) do
     case Map.get(broker.consumers, consumer_id) do
@@ -624,7 +613,7 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {consumer_pid, _monitor_ref} ->
-        send(consumer_pid, {:broker_message, {command, metadata, payload}})
+        send(consumer_pid, {:broker_message, {command, metadata, payload, broker_metadata}})
         :keep_state_and_data
     end
   end
