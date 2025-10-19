@@ -50,6 +50,18 @@ defmodule Pulsar.Test.Support.System do
     )
   end
 
+  def broker_for_producer(producer) when is_pid(producer) do
+    @brokers
+    |> Enum.find(
+      nil,
+      fn broker ->
+        broker.service_url
+        |> Pulsar.Broker.get_producers()
+        |> Enum.any?(fn {_id, pid} -> pid == producer end)
+      end
+    )
+  end
+
   def consumers_on(broker_url) when is_binary(broker_url) do
     Pulsar.Broker.get_consumers(broker_url)
   end

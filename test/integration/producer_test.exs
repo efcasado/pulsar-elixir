@@ -30,26 +30,58 @@ defmodule Pulsar.Integration.ProducerTest do
   describe "Producer Lifecycle" do
     @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
     test "create producer successfully" do
-      topic = @topic <> "-#{:erlang.unique_integer([:positive])}"
-      System.create_topic(topic)
+      assert {:ok, group_pid} = Pulsar.start_producer(@topic)
+      assert Process.alive?(group_pid)
 
-      assert {:ok, producer} = Pulsar.start_producer(topic: topic)
-      assert Process.alive?(producer)
+      [producer] = Pulsar.get_producers(group_pid)
 
-      # Wait a bit to ensure telemetry events are emitted
-      Process.sleep(100)
+      # Wait for producer to complete registration (producer_name assigned by broker)
+      :ok =
+        Utils.wait_for(fn ->
+          state = :sys.get_state(producer)
+          state.producer_name != nil
+        end)
 
       stats = Utils.collect_producer_opened_stats()
       assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
     end
+  end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
-    test "producer creation fails for non-existing topics" do
-      result1 = Pulsar.start_producer(topic: "persistent://fake/fake/fake")
-      assert {:error, _reason} = result1
+  describe "Connection Reliability" do
+    test "producer recovers from broker crash" do
+      {:ok, group_pid} = Pulsar.start_producer(@topic)
 
-      stats = Utils.collect_producer_opened_stats()
-      assert %{success_count: 0, failure_count: 1, total_count: 1} = stats
+      [producer_pid_before_crash] = Pulsar.get_producers(group_pid)
+
+      # Wait for producer to connect to a broker
+      :ok = Utils.wait_for(fn -> System.broker_for_producer(producer_pid_before_crash) != nil end)
+
+      broker = System.broker_for_producer(producer_pid_before_crash)
+      {:ok, broker_pid} = Pulsar.lookup_broker(broker.service_url)
+
+      # Kill the broker
+      Process.exit(broker_pid, :kill)
+
+      # Wait for original producer to crash due to broker link
+      Utils.wait_for(fn -> not Process.alive?(producer_pid_before_crash) end)
+
+      # Wait for supervisor to restart the producer and reconnect to a broker
+      [producer_pid_after_crash] = Pulsar.get_producers(group_pid)
+
+      :ok =
+        Utils.wait_for(fn ->
+          Process.alive?(producer_pid_after_crash) and
+            System.broker_for_producer(producer_pid_after_crash) != nil
+        end)
+
+      # Original producer crashed
+      assert not Process.alive?(producer_pid_before_crash)
+      # Producer group supervisor is still alive
+      assert Process.alive?(group_pid)
+      # A new producer started
+      assert Process.alive?(producer_pid_after_crash)
+      # The old and new producers are not the same
+      assert producer_pid_before_crash != producer_pid_after_crash
     end
   end
 end

@@ -468,35 +468,153 @@ defmodule Pulsar do
   Starts a producer for the given topic.
 
   The broker will assign a unique producer name automatically.
+  Returns a single ProducerGroup supervisor PID that manages one or more producer processes.
 
   ## Parameters
 
-  - `args` - Keyword list with:
-    - `:topic` - The topic to publish to (required)
-    - `:access_mode` - Producer access mode (optional, default: :Shared)
+  - `topic` - The topic to publish to (required)
+  - `opts` - Optional parameters:
+    - `:name` - Custom name for the producer group (default: "<topic>-producer")
+    - `:producer_count` - Number of producer processes in the group (default: 1)
+    - `:access_mode` - Producer access mode (default: :Shared)
+    - Other options passed to individual producer processes
+
+  ## Producer Naming and Registry
+
+  All producers are automatically registered in a registry and can be looked up by name:
+  - **Default naming**: `"<topic>-producer"`
+  - **Custom naming**: Provided via the `:name` option
+
+  This allows you to manage producers by name without keeping track of PIDs.
 
   ## Examples
 
-      iex> Pulsar.start_producer(topic: "persistent://public/default/my-topic")
+      # Start producer with default settings (1 producer)
+      iex> {:ok, producer_pid} = Pulsar.start_producer(
+      ...>   "persistent://public/default/my-topic"
+      ...> )
+      {:ok, #PID<0.789.0>}
+
+      # Start producer group with multiple producers
+      iex> {:ok, producer_pid} = Pulsar.start_producer(
+      ...>   "persistent://public/default/my-topic",
+      ...>   producer_count: 3,
+      ...>   access_mode: :Exclusive
+      ...> )
+      {:ok, #PID<0.789.0>}
+
+      # Register with custom name
+      iex> {:ok, producer_pid} = Pulsar.start_producer(
+      ...>   "persistent://public/default/my-topic",
+      ...>   name: MyApp.MyProducer
+      ...> )
       {:ok, #PID<0.789.0>}
   """
-  @spec start_producer(keyword()) :: {:ok, pid()} | {:error, term()}
-  def start_producer(args) do
-    topic = Keyword.fetch!(args, :topic)
-    Pulsar.Producer.start_link(topic, args)
+  @spec start_producer(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_producer(topic, opts \\ []) do
+    name = Keyword.get(opts, :name, "#{topic}-producer")
+
+    child_spec = %{
+      id: name,
+      start: {
+        Pulsar.ProducerGroup,
+        :start_link,
+        [name, topic, opts]
+      },
+      restart: :permanent,
+      type: :supervisor
+    }
+
+    DynamicSupervisor.start_child(@producer_supervisor, child_spec)
   end
 
   @doc """
-  Stops a producer.
+  Stops a producer group.
+
+  Accepts either:
+  - A producer group PID (returned by `start_producer/2`)
+  - A producer group ID string (for programmatic access)
+
+  This stops the ProducerGroup supervisor, which automatically stops all producer processes.
+
+  Returns `:ok` if successful, `{:error, :not_found}` if the producer doesn't exist.
 
   ## Examples
 
+      # Stop producer group
+      iex> {:ok, producer_pid} = Pulsar.start_producer(...)
       iex> Pulsar.stop_producer(producer_pid)
       :ok
+
+      # Stop by producer group ID string
+      iex> Pulsar.stop_producer("my-topic-producer")
+      :ok
   """
-  @spec stop_producer(pid()) :: :ok
-  def stop_producer(producer) do
-    Pulsar.Producer.stop(producer)
+  @spec stop_producer(pid() | String.t()) :: :ok | {:error, :not_found}
+  def stop_producer(producer) when is_pid(producer) do
+    Pulsar.ProducerGroup.stop(producer)
+  end
+
+  def stop_producer(producer_id) when is_binary(producer_id) do
+    case Registry.lookup(@producer_registry, producer_id) do
+      [{producer_pid, _value}] ->
+        stop_producer(producer_pid)
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Looks up a producer group by name.
+
+  Returns `{:ok, producer_pid}` if found, `{:error, :not_found}` otherwise.
+
+  ## Examples
+
+      iex> {:ok, producer_pid} = Pulsar.start_producer("my-topic", name: "my-producer")
+      iex> Pulsar.lookup_producer("my-producer")
+      {:ok, producer_pid}
+
+      iex> Pulsar.lookup_producer("nonexistent")
+      {:error, :not_found}
+  """
+  @spec lookup_producer(String.t()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_producer(name) do
+    case Registry.lookup(@producer_registry, name) do
+      [{producer_pid, _value}] -> {:ok, producer_pid}
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Gets all producer processes managed by a producer group.
+
+  Returns a list of producer process PIDs.
+
+  ## Examples
+
+      iex> {:ok, group_pid} = Pulsar.start_producer("my-topic", producer_count: 3)
+      iex> Pulsar.get_producers(group_pid)
+      [#PID<0.123.0>, #PID<0.124.0>, #PID<0.125.0>]
+
+      # By name
+      iex> Pulsar.get_producers("my-topic-producer")
+      [#PID<0.123.0>, #PID<0.124.0>, #PID<0.125.0>]
+  """
+  @spec get_producers(pid() | String.t()) :: [pid()] | {:error, :not_found}
+  def get_producers(group_pid) when is_pid(group_pid) do
+    Pulsar.ProducerGroup.get_producers(group_pid)
+  end
+
+  def get_producers(group_id) when is_binary(group_id) do
+    case Registry.lookup(@producer_registry, group_id) do
+      [{group_pid, _value}] ->
+        get_producers(group_pid)
+
+      [] ->
+        {:error, :not_found}
+    end
   end
 
   @spec check_partitioned_topic(String.t()) :: {:ok, integer()} | {:error, term()}
