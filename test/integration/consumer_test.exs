@@ -372,10 +372,10 @@ defmodule Pulsar.Integration.ConsumerTest do
 
   describe "Flow Control Configuration" do
     @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-    test "consumer with one permit at a time" do
-      topic = @topic_prefix <> "tiny-permits"
+    test "comprehensive flow control behavior" do
+      topic = @topic_prefix <> "flow-control"
 
-      {:ok, [group_pid]} =
+      {:ok, [tiny_permits_group]} =
         Pulsar.start_consumer(
           topic: topic,
           subscription_name: @subscription_prefix <> "tiny-permits",
@@ -388,28 +388,7 @@ defmodule Pulsar.Integration.ConsumerTest do
           ]
         )
 
-      [consumer_pid] = Pulsar.consumers_for_group(group_pid)
-
-      System.produce_messages(topic, @messages)
-
-      Utils.wait_for(fn ->
-        consumer_count = @consumer_callback.count_messages(consumer_pid)
-        Enum.count(@messages) == consumer_count
-      end)
-
-      consumer_id = consumer_pid |> :sys.get_state() |> Map.get(:consumer_id)
-
-      # We expect: 1 initial request + 6 refills (one per message) = 7 total events
-      # Each event requests 1 permit, so requested_total should be 7
-      stats = Utils.collect_flow_stats()
-      assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
-    end
-
-    @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-    test "multiple consumers in same group with shared flow control settings" do
-      topic = @topic_prefix <> "group-shared"
-
-      {:ok, group_pids} =
+      {:ok, group_shared_pids} =
         Pulsar.start_consumer(
           topic: topic,
           subscription_name: @subscription_prefix <> "group-shared",
@@ -423,27 +402,43 @@ defmodule Pulsar.Integration.ConsumerTest do
           ]
         )
 
-      [consumer1_pid, consumer2_pid] = Enum.flat_map(group_pids, &Pulsar.consumers_for_group(&1))
+      [tiny_permits_consumer] = Pulsar.consumers_for_group(tiny_permits_group)
 
+      [shared_consumer1, shared_consumer2] =
+        Enum.flat_map(group_shared_pids, &Pulsar.consumers_for_group(&1))
+
+      # Publish messages to both topics
       System.produce_messages(topic, @messages)
+      expected_count = Enum.count(@messages)
 
+      # Wait for all consumers to process messages
       Utils.wait_for(fn ->
-        consumer1_count = @consumer_callback.count_messages(consumer1_pid)
-        consumer2_count = @consumer_callback.count_messages(consumer2_pid)
-        Enum.count(@messages) == consumer1_count + consumer2_count
+        tiny_permits_count = @consumer_callback.count_messages(tiny_permits_consumer)
+        shared_count1 = @consumer_callback.count_messages(shared_consumer1)
+        shared_count2 = @consumer_callback.count_messages(shared_consumer2)
+
+        tiny_permits_count == expected_count and
+          shared_count1 + shared_count2 == expected_count
       end)
 
-      consumer1_id = consumer1_pid |> :sys.get_state() |> Map.get(:consumer_id)
-      consumer2_id = consumer2_pid |> :sys.get_state() |> Map.get(:consumer_id)
+      # Get consumer IDs for telemetry verification
+      tiny_permits_id = tiny_permits_consumer |> :sys.get_state() |> Map.get(:consumer_id)
+      shared_consumer1_id = shared_consumer1 |> :sys.get_state() |> Map.get(:consumer_id)
+      shared_consumer2_id = shared_consumer2 |> :sys.get_state() |> Map.get(:consumer_id)
 
-      # Each consumer gets initial request of 5 permits
-      # Since messages (6 total) are distributed between 2 consumers (~3 each),
-      # neither should hit threshold so we expect only 2 events total
+      # Collect and verify flow control statistics
       stats = Utils.collect_flow_stats()
 
+      # Tiny permits consumer: 1 initial request + 6 refills (one per message) = 7 total events
+      # Each event requests 1 permit, so requested_total should be 7
+      assert %{^tiny_permits_id => %{event_count: 7, requested_total: 7}} = stats
+
+      # Shared consumers: Each gets initial request of 5 permits
+      # Since messages (6 total) are distributed between 2 consumers (~3 each),
+      # neither should hit threshold so we expect only 1 event each (initial request)
       assert %{
-               ^consumer1_id => %{event_count: 1, requested_total: 5},
-               ^consumer2_id => %{event_count: 1, requested_total: 5}
+               ^shared_consumer1_id => %{event_count: 1, requested_total: 5},
+               ^shared_consumer2_id => %{event_count: 1, requested_total: 5}
              } = stats
     end
   end
