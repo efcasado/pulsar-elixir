@@ -1,0 +1,198 @@
+defmodule Pulsar.Producer do
+  @moduledoc """
+  Pulsar producer process that communicates with broker processes.
+
+  This producer uses service discovery to find the appropriate broker
+  for the topic and then communicates with that broker process.
+
+  Initialization follows a multi-phase pattern using `{:continue, ...}` to
+  avoid blocking the caller during broker discovery and registration.
+  """
+
+  use GenServer
+  require Logger
+
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.ServiceDiscovery
+
+  defstruct [
+    :topic,
+    :producer_id,
+    :producer_name,
+    :broker_pid,
+    :broker_monitor,
+    :sequence_id,
+    :pending_sends,
+    :access_mode
+  ]
+
+  @type t :: %__MODULE__{
+          topic: String.t(),
+          producer_id: integer(),
+          producer_name: String.t() | nil,
+          broker_pid: pid(),
+          broker_monitor: reference(),
+          sequence_id: integer(),
+          pending_sends: %{integer() => {GenServer.from(), map()}},
+          access_mode: atom()
+        }
+
+  ## Public API
+
+  @doc """
+  Starts a producer process.
+
+  ## Parameters
+
+  - `topic` - The topic to publish to
+  - `opts` - Additional options:
+    - `:access_mode` - Producer access mode (default: :Shared)
+    - Other GenServer options
+
+  The producer will automatically use service discovery to find the broker.
+  The broker will assign a unique producer name.
+  """
+  def start_link(topic, opts \\ []) do
+    {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
+
+    producer_config = %{
+      topic: topic,
+      access_mode: access_mode
+    }
+
+    GenServer.start_link(__MODULE__, producer_config, genserver_opts)
+  end
+
+  @doc """
+  Gracefully stops a producer process.
+  """
+  @spec stop(GenServer.server(), term(), timeout()) :: :ok
+  def stop(producer, reason \\ :normal, timeout \\ :infinity) do
+    GenServer.stop(producer, reason, timeout)
+  end
+
+  ## GenServer Callbacks
+
+  @impl true
+  def init(producer_config) do
+    %{
+      topic: topic,
+      access_mode: access_mode
+    } = producer_config
+
+    producer_id = System.unique_integer([:positive, :monotonic])
+
+    state = %__MODULE__{
+      topic: topic,
+      producer_id: producer_id,
+      producer_name: nil,
+      sequence_id: 0,
+      pending_sends: %{},
+      access_mode: access_mode
+    }
+
+    Logger.info("Starting producer for topic #{topic}")
+    {:ok, state, {:continue, :register_producer}}
+  end
+
+  @impl true
+  def handle_continue(:register_producer, state) do
+    case ServiceDiscovery.lookup_topic(state.topic) do
+      {:ok, broker_pid} ->
+        register_with_broker(state, broker_pid)
+
+      {:error, reason} ->
+        Logger.error("Topic lookup failed: #{inspect(reason)}")
+        {:stop, reason, state}
+    end
+  end
+
+  @impl true
+  def handle_continue(:monitor_broker, state) do
+    broker_monitor = Process.monitor(state.broker_pid)
+    {:noreply, %{state | broker_monitor: broker_monitor}}
+  end
+
+  # Handle broker crashes - stop so supervisor can restart us with fresh lookup
+  @impl true
+  def handle_info(
+        {:DOWN, monitor_ref, :process, broker_pid, reason},
+        %__MODULE__{broker_monitor: monitor_ref, broker_pid: broker_pid} = state
+      ) do
+    Logger.info(
+      "Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, producer will restart"
+    )
+
+    {:stop, :broker_crashed, state}
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    Logger.debug("Producer terminating: #{inspect(reason)}")
+
+    :telemetry.execute(
+      [:pulsar, :producer, :closed],
+      %{},
+      %{
+        topic: state.topic,
+        producer_id: state.producer_id
+      }
+    )
+
+    :ok
+  end
+
+  ## Private Functions
+
+  defp register_with_broker(state, broker_pid) do
+    start_metadata = %{
+      topic: state.topic,
+      producer_id: state.producer_id
+    }
+
+    :telemetry.span(
+      [:pulsar, :producer, :opened],
+      start_metadata,
+      fn ->
+        result =
+          with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
+               {:ok, response} <- create_producer(broker_pid, state) do
+            producer_name = response.producer_name
+            {:ok, %{state | broker_pid: broker_pid, producer_name: producer_name}}
+          else
+            {:error, reason} = error ->
+              Logger.error("Producer registration failed: #{inspect(reason)}")
+              error
+          end
+
+        stop_metadata =
+          Map.merge(start_metadata, %{
+            success: match?({:ok, _}, result),
+            producer_name:
+              if(match?({:ok, _}, result), do: elem(result, 1).producer_name, else: nil)
+          })
+
+        {result, stop_metadata}
+      end
+    )
+    |> case do
+      {:ok, new_state} ->
+        {:noreply, new_state, {:continue, :monitor_broker}}
+
+      {:error, reason} ->
+        {:stop, reason, state}
+    end
+  end
+
+  defp create_producer(broker_pid, state) do
+    request_id = System.unique_integer([:positive, :monotonic])
+
+    producer_command = %Binary.CommandProducer{
+      topic: state.topic,
+      producer_id: state.producer_id,
+      request_id: request_id
+    }
+
+    Pulsar.Broker.send_request(broker_pid, producer_command)
+  end
+end

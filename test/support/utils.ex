@@ -36,6 +36,16 @@ defmodule Pulsar.Test.Support.Utils do
     |> aggregate_lookup_stats()
   end
 
+  @doc """
+  Collects producer opened telemetry events and returns aggregated statistics.
+  Returns a map with total, success, and failure counts.
+  """
+  def collect_producer_opened_stats do
+    [:pulsar, :producer, :opened, :stop]
+    |> collect_events()
+    |> aggregate_lookup_stats()
+  end
+
   defp collect_events(event_name) do
     collect_events(event_name, [])
   end

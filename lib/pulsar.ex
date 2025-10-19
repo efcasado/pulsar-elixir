@@ -71,8 +71,10 @@ defmodule Pulsar do
   @app_supervisor Pulsar.Supervisor
   @broker_registry Pulsar.BrokerRegistry
   @consumer_registry Pulsar.ConsumerRegistry
+  @producer_registry Pulsar.ProducerRegistry
   @broker_supervisor Pulsar.BrokerSupervisor
   @consumer_supervisor Pulsar.ConsumerSupervisor
+  @producer_supervisor Pulsar.ProducerSupervisor
 
   @doc """
   Start the Pulsar application with custom configuration.
@@ -118,8 +120,10 @@ defmodule Pulsar do
       [
         {Registry, keys: :unique, name: @broker_registry},
         {Registry, keys: :unique, name: @consumer_registry},
+        {Registry, keys: :unique, name: @producer_registry},
         {DynamicSupervisor, strategy: :one_for_one, name: @broker_supervisor},
-        {DynamicSupervisor, strategy: :one_for_one, name: @consumer_supervisor}
+        {DynamicSupervisor, strategy: :one_for_one, name: @consumer_supervisor},
+        {DynamicSupervisor, strategy: :one_for_one, name: @producer_supervisor}
       ]
 
     opts = [strategy: :one_for_one, name: @app_supervisor]
@@ -458,6 +462,41 @@ defmodule Pulsar do
       [] ->
         {:error, :not_found}
     end
+  end
+
+  @doc """
+  Starts a producer for the given topic.
+
+  The broker will assign a unique producer name automatically.
+
+  ## Parameters
+
+  - `args` - Keyword list with:
+    - `:topic` - The topic to publish to (required)
+    - `:access_mode` - Producer access mode (optional, default: :Shared)
+
+  ## Examples
+
+      iex> Pulsar.start_producer(topic: "persistent://public/default/my-topic")
+      {:ok, #PID<0.789.0>}
+  """
+  @spec start_producer(keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_producer(args) do
+    topic = Keyword.fetch!(args, :topic)
+    Pulsar.Producer.start_link(topic, args)
+  end
+
+  @doc """
+  Stops a producer.
+
+  ## Examples
+
+      iex> Pulsar.stop_producer(producer_pid)
+      :ok
+  """
+  @spec stop_producer(pid()) :: :ok
+  def stop_producer(producer) do
+    Pulsar.Producer.stop(producer)
   end
 
   @spec check_partitioned_topic(String.t()) :: {:ok, integer()} | {:error, term()}

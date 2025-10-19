@@ -109,6 +109,8 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandPing{}), do: :PING
   defp command_to_type(%Binary.CommandPong{}), do: :PONG
   defp command_to_type(%Binary.CommandSubscribe{}), do: :SUBSCRIBE
+  defp command_to_type(%Binary.CommandProducer{}), do: :PRODUCER
+  defp command_to_type(%Binary.CommandSend{}), do: :SEND
   defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
   defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
   defp command_to_type(%Binary.CommandPartitionedTopicMetadata{}), do: :PARTITIONED_METADATA
