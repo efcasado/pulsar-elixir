@@ -13,16 +13,30 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Message Format
 
-  Messages passed to `handle_message/2` have the following structure:
+  `handle_message/2` receives a tuple containing the command, metadata, payload, and broker metadata:
 
-      %{
-        id: {ledger_id, entry_id},
-        metadata: %Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata{},
-        payload: binary(),
-        partition_key: String.t() | nil,
-        producer_name: String.t(),
-        publish_time: integer()
-      }
+      {command, metadata, payload, broker_metadata}
+
+  Where:
+  - `command` - %Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage{}
+  - `metadata` - %Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata{}
+  - `payload` - A tuple {single_metadata, binary} where:
+    - `single_metadata` - Single message metadata (nil for single messages, struct for batch messages)
+    - `binary` - The actual message payload
+  - `broker_metadata` - Additional broker information
+
+  Note: Both single messages and batch messages use the same normalized format.
+  For single messages, single_metadata will be nil.
+  For batch messages, single_metadata contains the individual message metadata.
+
+  You can extract message information like this:
+
+      def handle_message({command, metadata, {single_metadata, payload}, _broker_metadata}, state) do
+        message_id = {command.message_id.ledgerId, command.message_id.entryId}
+        # single_metadata is nil for single messages, struct for batch messages
+        # payload is always the binary message content
+        {:ok, state}
+      end
 
   ## Example Implementation
 
@@ -34,11 +48,11 @@ defmodule Pulsar.Consumer.Callback do
           {:ok, %{count: 0, max_messages: max_messages, messages: []}}
         end
 
-        def handle_message(message, callback_state) do
+        def handle_message({_command, _metadata, {_single_metadata, payload}, _broker_metadata}, callback_state) do
           new_state = %{
             callback_state
             | count: callback_state.count + 1,
-              messages: [message | callback_state.messages]
+              messages: [payload | callback_state.messages]
           }
 
           # Stop processing if we've reached the limit
@@ -48,6 +62,7 @@ defmodule Pulsar.Consumer.Callback do
             {:ok, new_state}
           end
         end
+
 
         def terminate(_reason, callback_state) do
           IO.puts("Processed \#{callback_state.count} messages")
@@ -123,13 +138,11 @@ defmodule Pulsar.Consumer.Callback do
   - Any other value is ignored
   """
 
-  @type message :: %{
-          id: {integer(), integer()},
-          metadata: struct(),
-          payload: binary(),
-          partition_key: String.t() | nil,
-          producer_name: String.t(),
-          publish_time: integer()
+  @type message_args :: {
+          command :: struct(),
+          metadata :: struct(),
+          payload :: {single_metadata :: struct() | nil, binary()},
+          broker_metadata :: term()
         }
 
   @type init_arg :: term()
@@ -137,7 +150,7 @@ defmodule Pulsar.Consumer.Callback do
   @type reason :: term()
 
   @callback init(init_arg) :: {:ok, state} | {:error, reason}
-  @callback handle_message(message, state) ::
+  @callback handle_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}
               | {:stop, state}

@@ -5,7 +5,17 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     {:ok, %{messages: [], count: 0}}
   end
 
-  def handle_message(message, state) do
+  def handle_message({command, metadata, {_single_metadata, payload}, _broker_metadata}, state) do
+    # Build a message structure similar to the old format for compatibility
+    message = %{
+      id: {command.message_id.ledgerId, command.message_id.entryId},
+      metadata: metadata,
+      payload: payload,
+      partition_key: metadata.partition_key,
+      producer_name: metadata.producer_name,
+      publish_time: metadata.publish_time
+    }
+
     new_state = %{
       state
       | messages: [message | state.messages],
