@@ -270,98 +270,53 @@ defmodule Pulsar.Consumer do
         {:broker_message, {command, metadata, payload, broker_metadata}},
         state
       ) do
-    message_id = message_id(command)
+    base_message_id = message_id(command)
     state = decrement_permits(state)
 
-    # Payload is now always a list of {metadata, binary} tuples from protocol normalization
-    messages = payload
-
-    # Process messages with early termination on error or stop
-    {final_callback_state, should_ack, should_stop} =
-      messages
-      |> Enum.reduce_while({state.callback_state, true, false}, fn {msg_metadata, msg_payload},
-                                                                   {callback_state, ack_acc,
-                                                                    _stop_acc} ->
-        # Create args tuple for each normalized message
+    final_callback_state =
+      payload
+      |> Enum.with_index()
+      |> Enum.reduce(state.callback_state, fn {{msg_metadata, msg_payload}, index}, callback_state ->
         msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
 
         result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
 
         case result do
           {:ok, new_callback_state} ->
-            {:cont, {new_callback_state, ack_acc, false}}
+            # ACK this individual message
+            message_id_to_ack = 
+              if msg_metadata != nil do
+                # Batch message - use batch index
+                %{base_message_id | batch_index: index}
+              else
+                # Single message - use original message ID
+                base_message_id
+              end
+
+            ack_command = %Binary.CommandAck{
+              consumer_id: state.consumer_id,
+              ack_type: :Individual,
+              message_id: [message_id_to_ack]
+            }
+            Pulsar.Broker.send_command(state.broker_pid, ack_command)
+            
+            new_callback_state
 
           {:error, reason, new_callback_state} ->
-            Logger.warning("Message processing failed: #{inspect(reason)}")
-            # Continue processing but don't ack the batch
-            {:cont, {new_callback_state, false, false}}
-
-          {:stop, new_callback_state} ->
-            # Stop processing the batch
-            {:halt, {new_callback_state, ack_acc, true}}
+            Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
+            # Don't ACK this message on error
+            new_callback_state
 
           unexpected_result ->
-            Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}")
-            {:cont, {callback_state, false, false}}
+            Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
+            # Don't ACK on unexpected result
+            callback_state
         end
       end)
 
-    # Create result tuple for the rest of the function
-    result =
-      if should_stop do
-        {:stop, final_callback_state}
-      else
-        if should_ack do
-          {:ok, final_callback_state}
-        else
-          {:error, :processing_failed, final_callback_state}
-        end
-      end
-
-    # Handle acknowledgment and state updates based on callback result
-    case result do
-      {:ok, new_callback_state} ->
-        # Auto-acknowledge successful messages
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: [message_id]
-        }
-
-        Pulsar.Broker.send_command(state.broker_pid, ack_command)
-
-        state = check_and_refill_permits(state)
-
-        new_state = %{state | callback_state: new_callback_state}
-        {:noreply, new_state}
-
-      {:error, reason, new_callback_state} ->
-        Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
-        # Update state but don't acknowledge
-        new_state = %{state | callback_state: new_callback_state}
-        {:noreply, new_state}
-
-      {:stop, new_callback_state} ->
-        # Acknowledge the message before stopping
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: [message_id]
-        }
-
-        Pulsar.Broker.send_command(state.broker_pid, ack_command)
-
-        # Update state and stop
-        new_state = %{state | callback_state: new_callback_state}
-        {:stop, :normal, new_state}
-
-      unexpected_result ->
-        Logger.warning(
-          "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
-        )
-
-        {:noreply, state}
-    end
+    state = check_and_refill_permits(state)
+    new_state = %{state | callback_state: final_callback_state}
+    {:noreply, new_state}
   end
 
   # Handle broker crashes - stop so supervisor can restart us with fresh lookup
