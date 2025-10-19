@@ -77,7 +77,7 @@ defmodule Pulsar.Broker do
     args = [
       name,
       broker_url,
-      Keyword.get(opts, :socket_opts, []),
+      Keyword.get(opts, :socket_opts, verify: :verify_peer, cacerts: :public_key.cacerts_get()),
       Keyword.get(opts, :conn_timeout, 5_000),
       Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: []),
       Keyword.get(opts, :actions, [])
@@ -293,7 +293,19 @@ defmodule Pulsar.Broker do
     } = broker
 
     host_charlist = String.to_charlist(host)
-    full_socket_opts = socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true]
+
+    # Filter SSL-specific options for TCP connections
+    filtered_socket_opts =
+      case mod do
+        :gen_tcp ->
+          Keyword.drop(socket_opts, [:verify, :cacerts, :cacertfile, :certfile, :keyfile])
+
+        :ssl ->
+          socket_opts
+      end
+
+    full_socket_opts =
+      filtered_socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true]
 
     case apply(mod, :connect, [host_charlist, port, full_socket_opts, conn_timeout]) do
       {:ok, socket} ->

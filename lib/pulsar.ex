@@ -50,6 +50,12 @@ defmodule Pulsar do
   use Application
   require Logger
 
+  @supported_broker_opts [
+    :auth,
+    :conn_timeout,
+    :socket_opts
+  ]
+
   @app_supervisor Pulsar.Supervisor
   @broker_registry Pulsar.BrokerRegistry
   @consumer_registry Pulsar.ConsumerRegistry
@@ -83,15 +89,6 @@ defmodule Pulsar do
 
   @impl true
   def start(_type, opts) do
-    socket_opts =
-      Keyword.get(opts, :socket_opts, Application.get_env(:pulsar, :socket_opts, []))
-
-    conn_timeout =
-      Keyword.get(opts, :conn_timeout, Application.get_env(:pulsar, :conn_timeout, 5_000))
-
-    auth =
-      Keyword.get(opts, :auth, Application.get_env(:pulsar, :auth, []))
-
     consumers =
       Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
 
@@ -101,11 +98,7 @@ defmodule Pulsar do
     start_delay_ms =
       Keyword.get(opts, :start_delay_ms, 500)
 
-    broker_opts = [
-      socket_opts: socket_opts,
-      conn_timeout: conn_timeout,
-      auth: auth
-    ]
+    broker_opts = broker_opts(opts)
 
     :persistent_term.put({Pulsar, :broker_opts}, broker_opts)
 
@@ -458,5 +451,11 @@ defmodule Pulsar do
       {:ok, %{response: :Failed, error: error}} ->
         {:error, {:partition_metadata_check_failed, error}}
     end
+  end
+
+  defp broker_opts(opts) do
+    opts
+    |> Keyword.take(@supported_broker_opts)
+    |> Enum.reject(fn {_, v} -> is_nil(v) end)
   end
 end
