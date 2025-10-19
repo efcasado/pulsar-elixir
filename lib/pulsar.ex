@@ -2,47 +2,59 @@ defmodule Pulsar do
   @moduledoc """
   Pulsar client for Elixir.
 
-  This module provides a high-level API for interacting with Apache Pulsar,
-  including broker management and consumer group operations.
+  This module provides a high-level API for interacting with the Elixir client for Apache Pulsar.
 
   ## Consumer Architecture
 
-  All consumers are managed as **consumer groups** - supervised collections of
-  consumer processes. Even when you want a single consumer, it's created as a
-  consumer group with `consumer_count: 1` (the default).
+  Consumers are managed through supervised processes:
+  - **Regular topics**: Consumer groups with configurable process count
+  - **Partitioned topics**: PartitionedConsumer supervisor managing consumer groups per partition
 
-  This provides:
-  - Automatic restart on failures
-  - Easy scaling (just increase consumer_count)
-  - Consistent API whether you have 1 or N consumers
+  The `start_consumer/1` function always returns a single PID that can be registered with
+  a name, regardless of whether the topic is partitioned or not; and the consumer count within.
 
   ## Examples
 
       # Start a broker connection (idempotent)
       {:ok, broker_pid} = Pulsar.start_broker("pulsar://localhost:6650")
 
-      # Start a single consumer (creates a consumer group with 1 consumer)
-      {:ok, [group_pid]} = Pulsar.start_consumer(
-        topic: "persistent://public/default/my-topic",
-        subscription_name: "my-subscription",
-        subscription_type: :Exclusive,
-        callback_module: MyApp.MessageHandler
+      # Start a consumer for a regular topic
+      {:ok, consumer_pid} = Pulsar.start_consumer(
+        "persistent://public/default/my-topic",
+        "my-subscription",
+        MyApp.MessageHandler,
+        subscription_type: :Exclusive
       )
 
-      # Start consumers for a partitioned topic (returns one PID per partition)
-      {:ok, group_pids} = Pulsar.start_consumer(
-        topic: "persistent://public/default/my-partitioned-topic",
-        subscription_name: "my-subscription",
+      # Start a consumer for a partitioned topic (single PID returned)
+      {:ok, consumer_pid} = Pulsar.start_consumer(
+        "persistent://public/default/my-partitioned-topic",
+        "my-subscription",
+        MyApp.MessageHandler,
         subscription_type: :Shared,
-        callback_module: MyApp.MessageHandler,
-        opts: [consumer_count: 2]  # 2 consumers per partition
+        consumer_count: 2  # 2 consumers per partition
       )
 
-      # Stop individual consumer groups (one PID at a time)
-      Pulsar.stop_consumer(group_pid)
+      # Register consumer with custom name
+      {:ok, consumer_pid} = Pulsar.start_consumer(
+        "persistent://public/default/my-topic",
+        "my-subscription",
+        MyApp.MessageHandler,
+        subscription_type: :Shared,
+        name: MyApp.MyConsumer
+      )
 
-      # Stop all partitions
-      Enum.each(group_pids, &Pulsar.stop_consumer/1)
+      # Stop consumer (works for both regular and partitioned)
+      Pulsar.stop_consumer(consumer_pid)
+
+      # Or stop by name
+      Pulsar.stop_consumer("my-topic-my-subscription")
+
+      # Lookup consumer by name
+      {:ok, consumer_pid} = Pulsar.lookup_consumer("my-topic-my-subscription")
+
+      # Get all consumer processes by name
+      consumer_pids = Pulsar.get_consumers("my-topic-my-subscription")
 
       # Service discovery via broker
       {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
@@ -74,8 +86,8 @@ defmodule Pulsar do
           {:my_consumer, [
             topic: "my-topic",
             subscription_name: "my-subscription",
-            subscription_type: :Shared,
-            callback: MyConsumerCallback
+            callback_module: MyConsumerCallback,
+            subscription_type: :Shared
           ]}
         ]
       )
@@ -119,7 +131,18 @@ defmodule Pulsar do
     Process.sleep(start_delay_ms)
 
     consumers
-    |> Enum.each(fn {_, consumer_opts} -> Pulsar.start_consumer(consumer_opts) end)
+    |> Enum.each(fn {consumer_name, consumer_opts} ->
+      topic = Keyword.fetch!(consumer_opts, :topic)
+      subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
+      callback_module = Keyword.fetch!(consumer_opts, :callback_module)
+
+      remaining_opts =
+        consumer_opts
+        |> Keyword.drop([:topic, :subscription_name, :callback_module])
+        |> Keyword.put(:name, consumer_name)
+
+      Pulsar.start_consumer(topic, subscription_name, callback_module, remaining_opts)
+    end)
 
     {:ok, pid}
   end
@@ -220,192 +243,149 @@ defmodule Pulsar do
   end
 
   @doc """
-  Starts consumer groups for a topic (regular or partitioned).
+  Starts a consumer for a topic (regular or partitioned).
 
   This is the primary way to consume messages from Pulsar topics. For regular topics,
-  a single consumer group is created. For partitioned topics, individual consumer
-  groups are created for each partition automatically.
+  a single consumer group is created. For partitioned topics, a PartitionedConsumer
+  supervisor is created that manages individual consumer groups for each partition.
 
   ## Parameters
 
   - `topic` - The topic to subscribe to (regular or partitioned)
   - `subscription_name` - Name of the subscription
-  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared)
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
-  - `opts` - Additional options:
+  - `opts` - Optional parameters:
+    - `:subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared, default: :Shared)
+    - `:name` - Custom name for the consumer (default: "topic-subscription_name")
     - `:consumer_count` - Number of consumer processes per topic/partition (default: 1)
     - `:init_args` - Arguments passed to callback module's init/1 function
     - `:flow_initial` - Initial flow permits (default: 100)
     - `:flow_threshold` - Flow permits threshold for refill (default: 50)
     - `:flow_refill` - Flow permits refill amount (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
-  - Other options passed to ConsumerGroup supervisor
+    - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
 
-  Returns:
-  - `{:ok, [pid()]}` - List of consumer group supervisor PIDs when all succeed:
-    - For regular topics: List with one PID
-    - For partitioned topics: List with one PID per partition
-  - `{:error, [reason()]}` - List of error reasons when one or more consumers fail to start
+  - For regular topics: PID of the consumer group supervisor
+  - For partitioned topics: PID of the PartitionedConsumer supervisor that manages all partition groups
 
   ## Partitioned Topics
 
   When you subscribe to a partitioned topic, the function automatically:
   1. Queries the broker for partition metadata
-  2. Creates separate consumer groups for each partition (named `topic-partition-N`)
-  3. Returns a list of consumer group PIDs (one per partition)
+  2. Creates a PartitionedConsumer supervisor
+  3. The PartitionedConsumer creates separate consumer groups for each partition
+  4. Returns a single PID for the PartitionedConsumer supervisor
 
-  Each partition is treated as an independent consumer group, allowing for:
-  - Independent scaling per partition
-  - Fault isolation between partitions
-  - Consistent supervision model
+  ## Consumer Naming and Registry
+
+  All consumers are automatically registered in a registry and can be looked up by name:
+  - **Default naming**: `"<topic>-<subscription_name>"`
+  - **Custom naming**: Provided via the `:name` option
+  - **Partitioned topics**: Individual partition groups are named `"<base_name>-partition-<index>"`
+
+  This allows you to manage consumers by name without keeping track of PIDs.
 
   ## Examples
 
-      # Regular topic - returns list with single PID
-      iex> Pulsar.start_consumer(
-      ...>   topic: "persistent://public/default/my-topic",
-      ...>   subscription_name: "my-subscription",
-      ...>   subscription_type: :Exclusive,
-      ...>   callback_module: MyApp.MessageHandler
-      ...> )
-      {:ok, [#PID<0.456.0>]}
-
-      # Partitioned topic - returns list with one PID per partition
-      iex> Pulsar.start_consumer(
-      ...>   topic: "persistent://public/default/my-partitioned-topic",
-      ...>   subscription_name: "my-subscription",
-      ...>   subscription_type: :Shared,
-      ...>   callback_module: MyApp.MessageHandler
-      ...> )
-      {:ok, [#PID<0.456.0>, #PID<0.457.0>, #PID<0.458.0>]}  # 3 partitions
-
-      # With multiple consumers per partition
-      iex> Pulsar.start_consumer(
-      ...>   topic: "persistent://public/default/my-partitioned-topic",
-      ...>   subscription_name: "my-subscription",
-      ...>   subscription_type: :Key_Shared,
-      ...>   callback_module: MyApp.MessageHandler,
-      ...>   opts: [consumer_count: 2]  # 2 consumers per partition
+      # Regular topic - returns single PID
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer(
+      ...>   "persistent://public/default/my-topic",
+      ...>   "my-subscription",
+      ...>   MyApp.MessageHandler,
+      ...>   subscription_type: :Exclusive
       ...> )
       {:ok, #PID<0.456.0>}
 
-      # With custom flow control settings
-      iex> Pulsar.start_consumer(
-      ...>   topic: "persistent://public/default/my-topic",
-      ...>   subscription_name: "my-subscription",
-      ...>   subscription_type: :Shared,
-      ...>   callback_module: MyApp.MessageHandler,
-      ...>   opts: [
-      ...>     flow_initial: 200,
-      ...>     flow_threshold: 100,
-      ...>     flow_refill: 100
-      ...>   ]
+      # Partitioned topic
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer(
+      ...>   "persistent://public/default/my-partitioned-topic",
+      ...>   "my-subscription",
+      ...>   MyApp.MessageHandler,
+      ...>   subscription_type: :Shared
+      ...> )
+      {:ok, #PID<0.456.0>}
+
+      # Register with custom name
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer(
+      ...>   "persistent://public/default/my-partitioned-topic",
+      ...>   "my-subscription",
+      ...>   MyApp.MessageHandler,
+      ...>   subscription_type: :Key_Shared,
+      ...>   consumer_count: 2,
+      ...>   name: MyApp.MyConsumer
       ...> )
       {:ok, #PID<0.456.0>}
   """
 
-  @spec start_consumer(keyword()) :: {:ok, [pid()]} | {:error, [term()]}
-  def start_consumer(args) do
-    {:ok, topic} = Keyword.fetch(args, :topic)
-    {:ok, subscription_name} = Keyword.fetch(args, :subscription_name)
-    {:ok, subscription_type} = Keyword.fetch(args, :subscription_type)
-    {:ok, callback_module} = Keyword.fetch(args, :callback_module)
-    opts = Keyword.get(args, :opts, [])
+  @spec start_consumer(String.t(), String.t(), module(), keyword()) :: {:ok, pid} | {:error, term}
+  def start_consumer(topic, subscription_name, callback_module, opts \\ []) do
+    subscription_type = Keyword.get(opts, :subscription_type, :Shared)
+    name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
-    topics =
-      case check_partitioned_topic(topic) do
-        {:ok, 0} -> [topic]
-        {:ok, partitions} -> Range.new(0, partitions - 1) |> Enum.map(&"#{topic}-partition-#{&1}")
-      end
-
-    consumers =
-      topics
-      |> Enum.map(fn topic ->
-        {:ok, pid} =
-          do_start_consumer(
-            # TO-DO: we should be able to pass the name from the app configuration
-            topic <> "-" <> subscription_name,
-            topic,
-            subscription_name,
-            subscription_type,
-            callback_module,
-            opts
-          )
-
-        pid
-      end)
-
-    {:ok, consumers}
-  end
-
-  defp do_start_consumer(name, topic, subscription_name, subscription_type, callback_module, opts) do
-    consumer_count = Keyword.get(opts, :consumer_count, 1)
-
-    children =
-      for i <- 1..consumer_count do
-        consumer_id = "#{name}-consumer-#{i}"
-
-        %{
-          id: consumer_id,
+    case check_partitioned_topic(topic) do
+      {:ok, 0} ->
+        # Regular topic - create single consumer group
+        child_spec = %{
+          id: name,
           start: {
-            Pulsar.Consumer,
+            Pulsar.ConsumerGroup,
             :start_link,
-            [topic, subscription_name, subscription_type, callback_module, opts]
+            [name, topic, subscription_name, subscription_type, callback_module, opts]
           },
-          restart: :transient,
-          type: :worker
+          restart: :permanent,
+          type: :supervisor
         }
-      end
 
-    consumer_group_spec = %{
-      id: name,
-      start:
-        {Supervisor, :start_link,
-         [
-           children,
-           [
-             strategy: :one_for_one,
-             # TO-DO: should be configurable
-             max_restarts: 10,
-             name: {:via, Registry, {@consumer_registry, name}}
-           ]
-         ]},
-      # TO-DO: should be transient?
-      restart: :permanent,
-      type: :supervisor
-    }
+        DynamicSupervisor.start_child(@consumer_supervisor, child_spec)
 
-    DynamicSupervisor.start_child(@consumer_supervisor, consumer_group_spec)
+      {:ok, partitions} when partitions > 0 ->
+        # Partitioned topic - create PartitionedConsumer supervisor
+        child_spec = %{
+          id: name,
+          start: {
+            Pulsar.PartitionedConsumer,
+            :start_link,
+            [name, topic, partitions, subscription_name, subscription_type, callback_module, opts]
+          },
+          restart: :permanent,
+          type: :supervisor
+        }
+
+        DynamicSupervisor.start_child(@consumer_supervisor, child_spec)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
-  Stops a single consumer group.
+  Stops a consumer (regular or partitioned).
 
   Accepts either:
-  - A group PID (from the list returned by `start_consumer/1`)
-  - A group ID string (for programmatic access)
+  - A consumer PID (returned by `start_consumer/1`)
+  - A consumer ID string (for programmatic access)
 
-  For partitioned topics, you'll need to call this function for each PID
-  in the list returned by `start_consumer/1`.
+  For partitioned topics, this stops the PartitionedConsumer supervisor,
+  which automatically stops all partition consumer groups.
 
-  Returns `:ok` if successful, `{:error, :not_found}` if the group doesn't exist.
+  Returns `:ok` if successful, `{:error, :not_found}` if the consumer doesn't exist.
 
   ## Examples
 
-      # Stop single consumer group
-      iex> {:ok, [group_pid]} = Pulsar.start_consumer(...)
-      iex> Pulsar.stop_consumer(group_pid)
+      # Stop regular consumer
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer(...)
+      iex> Pulsar.stop_consumer(consumer_pid)
       :ok
 
-      # Stop all partitions of a partitioned topic
-      iex> {:ok, group_pids} = Pulsar.start_consumer(...)  # partitioned topic
-      iex> Enum.each(group_pids, &Pulsar.stop_consumer/1)
+      # Stop partitioned consumer (stops all partitions)
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer(...)  # partitioned topic
+      iex> Pulsar.stop_consumer(consumer_pid)
       :ok
 
-      # Stop by group ID string
-      iex> Pulsar.stop_consumer("my-topic-partition-0-my-subscription-123456")
+      # Stop by consumer ID string
+      iex> Pulsar.stop_consumer("my-topic-my-subscription")
       :ok
   """
   @spec stop_consumer(pid() | String.t()) :: :ok | {:error, :not_found}
@@ -423,17 +403,57 @@ defmodule Pulsar do
     end
   end
 
-  @spec stop_consumer(pid() | String.t()) :: :ok | {:error, :not_found}
-  def consumers_for_group(group_pid) when is_pid(group_pid) do
-    group_pid
-    |> Supervisor.which_children()
-    |> Enum.map(fn {_, child_pid, _, _} -> child_pid end)
+  @doc """
+  Looks up a consumer by name.
+
+  Returns `{:ok, consumer_pid}` if found, `{:error, :not_found}` otherwise.
+
+  ## Examples
+
+      iex> {:ok, consumer_pid} = Pulsar.start_consumer("my-topic", "my-subscription", MyHandler, name: "my-consumer")
+      iex> Pulsar.lookup_consumer("my-consumer")
+      {:ok, consumer_pid}
+
+      iex> Pulsar.lookup_consumer("nonexistent")
+      {:error, :not_found}
+  """
+  @spec lookup_consumer(String.t()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_consumer(name) do
+    case Registry.lookup(@consumer_registry, name) do
+      [{consumer_pid, _value}] -> {:ok, consumer_pid}
+      [] -> {:error, :not_found}
+    end
   end
 
-  def consumers_for_group(group_id) when is_binary(group_id) do
+  @doc """
+  Gets all consumer processes managed by a consumer manager.
+
+  Works with both ConsumerGroup and PartitionedConsumer supervisors.
+  Returns a flat list of consumer process PIDs.
+  """
+  @spec get_consumers(pid() | String.t()) :: [pid()] | {:error, :not_found}
+  def get_consumers(group_pid) when is_pid(group_pid) do
+    case Supervisor.which_children(group_pid) do
+      [] ->
+        []
+
+      [{_id, _child_pid, :worker, [Pulsar.Consumer]} | _] ->
+        # This is a ConsumerGroup - children are Consumer processes
+        Pulsar.ConsumerGroup.get_consumers(group_pid)
+
+      [{_id, _child_pid, :supervisor, _modules} | _] ->
+        # This is a PartitionedConsumer - children are ConsumerGroup supervisors
+        Pulsar.PartitionedConsumer.get_consumers(group_pid)
+
+      _ ->
+        {:error, :unknown_supervisor_type}
+    end
+  end
+
+  def get_consumers(group_id) when is_binary(group_id) do
     case Registry.lookup(@consumer_registry, group_id) do
       [{group_pid, _value}] ->
-        consumers_for_group(group_pid)
+        get_consumers(group_pid)
 
       [] ->
         {:error, :not_found}

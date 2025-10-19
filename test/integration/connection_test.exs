@@ -33,15 +33,15 @@ defmodule Pulsar.Integration.ConnectionTest do
 
   describe "Connection Reliability" do
     test "consumer recovers from broker crash" do
-      {:ok, [group_pid]} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-crash",
-          subscription_type: :Shared,
-          callback_module: @consumer_callback
+          @topic,
+          @subscription <> "-crash",
+          @consumer_callback,
+          subscription_type: :Shared
         )
 
-      [consumer_pid_before_crash] = Pulsar.consumers_for_group(group_pid)
+      [consumer_pid_before_crash] = Pulsar.get_consumers(group_pid)
 
       Utils.wait_for(fn -> System.broker_for_consumer(consumer_pid_before_crash) != nil end)
 
@@ -52,7 +52,7 @@ defmodule Pulsar.Integration.ConnectionTest do
 
       Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
 
-      [consumer_pid_after_crash] = Pulsar.consumers_for_group(group_pid)
+      [consumer_pid_after_crash] = Pulsar.get_consumers(group_pid)
 
       # consumer crashed due to broker link
       assert not Process.alive?(consumer_pid_before_crash)
@@ -65,21 +65,21 @@ defmodule Pulsar.Integration.ConnectionTest do
     end
 
     test "consumer recovers from broker-initiated topic unload" do
-      {:ok, [group_pid]} =
+      {:ok, group_pid} =
         Pulsar.start_consumer(
-          topic: @topic,
-          subscription_name: @subscription <> "-unload",
-          subscription_type: :Shared,
-          callback_module: Pulsar.Test.Support.DummyConsumer
+          @topic,
+          @subscription <> "-unload",
+          Pulsar.Test.Support.DummyConsumer,
+          subscription_type: :Shared
         )
 
-      [consumer_pid_before_unload] = Pulsar.consumers_for_group(group_pid)
+      [consumer_pid_before_unload] = Pulsar.get_consumers(group_pid)
 
       :ok = System.unload_topic(@topic)
 
       Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_unload) end)
 
-      [consumer_pid_after_unload] = Pulsar.consumers_for_group(group_pid)
+      [consumer_pid_after_unload] = Pulsar.get_consumers(group_pid)
 
       # original consumer crashed due to topic unload
       assert not Process.alive?(consumer_pid_before_unload)
