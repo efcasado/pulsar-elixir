@@ -51,10 +51,8 @@ defmodule Pulsar.ProducerGroup do
     )
   end
 
-  @doc """
-  Stops a producer group supervisor and all its child producer processes.
-  """
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
+    Logger.debug("Closing producer group.")
     Supervisor.stop(supervisor_pid, reason, timeout)
   end
 

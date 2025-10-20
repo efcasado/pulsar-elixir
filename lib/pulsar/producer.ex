@@ -75,6 +75,9 @@ defmodule Pulsar.Producer do
 
   @impl true
   def init(producer_config) do
+    # Trap exits so terminate/2 is called on shutdown
+    Process.flag(:trap_exit, true)
+
     %{
       topic: topic,
       access_mode: access_mode
@@ -127,16 +130,41 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
-  def terminate(reason, state) do
-    Logger.debug("Producer terminating: #{inspect(reason)}")
+  def terminate(_reason, nil) do
+    :ok
+  end
 
-    :telemetry.execute(
+  @impl true
+  def terminate(_reason, state) do
+    Logger.debug("Terminating producer: #{inspect(state.producer_name)}")
+
+    start_metadata = %{
+      topic: state.topic,
+      producer_id: state.producer_id
+    }
+
+    :telemetry.span(
       [:pulsar, :producer, :closed],
-      %{},
-      %{
-        topic: state.topic,
-        producer_id: state.producer_id
-      }
+      start_metadata,
+      fn ->
+        result =
+          case close_producer(state.broker_pid, state.producer_id) do
+            {:ok, _response} ->
+              :ok
+
+            {:error, reason} = error ->
+              Logger.error("Producer close failed: #{inspect(reason)}")
+              error
+          end
+
+        stop_metadata =
+          Map.merge(start_metadata, %{
+            success: match?(:ok, result),
+            producer_name: state.producer_name
+          })
+
+        {result, stop_metadata}
+      end
     )
 
     :ok
@@ -194,5 +222,17 @@ defmodule Pulsar.Producer do
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
+  end
+
+  defp close_producer(nil, _producer_id) do
+    {:ok, :skipped}
+  end
+
+  defp close_producer(broker_pid, producer_id) do
+    close_producer_command = %Binary.CommandCloseProducer{
+      producer_id: producer_id
+    }
+
+    Pulsar.Broker.send_request(broker_pid, close_producer_command)
   end
 end

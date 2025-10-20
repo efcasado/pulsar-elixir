@@ -33,7 +33,7 @@ defmodule Pulsar.Test.Support.Utils do
   def collect_lookup_stats do
     [:pulsar, :service_discovery, :lookup_topic, :stop]
     |> collect_events()
-    |> aggregate_lookup_stats()
+    |> aggregate_success_stats()
   end
 
   @doc """
@@ -43,7 +43,13 @@ defmodule Pulsar.Test.Support.Utils do
   def collect_producer_opened_stats do
     [:pulsar, :producer, :opened, :stop]
     |> collect_events()
-    |> aggregate_lookup_stats()
+    |> aggregate_success_stats()
+  end
+
+  def collect_producer_closed_stats do
+    [:pulsar, :producer, :closed, :stop]
+    |> collect_events()
+    |> aggregate_success_stats()
   end
 
   defp collect_events(event_name) do
@@ -65,7 +71,7 @@ defmodule Pulsar.Test.Support.Utils do
     |> Map.new()
   end
 
-  defp aggregate_lookup_stats(events) do
+  defp aggregate_success_stats(events) do
     %{
       total_count: length(events),
       success_count: Enum.count(events, &(&1.success == true)),

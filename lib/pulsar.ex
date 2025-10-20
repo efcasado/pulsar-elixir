@@ -521,7 +521,7 @@ defmodule Pulsar do
         :start_link,
         [name, topic, opts]
       },
-      restart: :permanent,
+      restart: :transient,
       type: :supervisor
     }
 
@@ -551,12 +551,13 @@ defmodule Pulsar do
       :ok
   """
   @spec stop_producer(pid() | String.t()) :: :ok | {:error, :not_found}
-  def stop_producer(producer) when is_pid(producer) do
-    Pulsar.ProducerGroup.stop(producer)
+  def stop_producer(group_pid) when is_pid(group_pid) do
+    Logger.debug("REQUESTED STOP PRODUCER")
+    Pulsar.ProducerGroup.stop(group_pid)
   end
 
-  def stop_producer(producer_id) when is_binary(producer_id) do
-    case Registry.lookup(@producer_registry, producer_id) do
+  def stop_producer(group_pid) when is_binary(group_pid) do
+    case Registry.lookup(@producer_registry, group_pid) do
       [{producer_pid, _value}] ->
         stop_producer(producer_pid)
 

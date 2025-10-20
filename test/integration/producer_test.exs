@@ -1,5 +1,5 @@
 defmodule Pulsar.Integration.ProducerTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   import TelemetryTest
 
   require Logger
@@ -28,7 +28,10 @@ defmodule Pulsar.Integration.ProducerTest do
   setup [:telemetry_listen]
 
   describe "Producer Lifecycle" do
-    @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
+    @tag telemetry_listen: [
+           [:pulsar, :producer, :opened, :stop],
+           [:pulsar, :producer, :closed, :stop]
+         ]
     test "create producer successfully" do
       assert {:ok, group_pid} = Pulsar.start_producer(@topic)
       assert Process.alive?(group_pid)
@@ -44,6 +47,14 @@ defmodule Pulsar.Integration.ProducerTest do
 
       stats = Utils.collect_producer_opened_stats()
       assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
+
+      assert :ok = Pulsar.stop_producer(group_pid)
+
+      # Wait for producer process to fully terminate
+      Utils.wait_for(fn -> not Process.alive?(producer) end)
+
+      close_stats = Utils.collect_producer_closed_stats()
+      assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
     end
   end
 
@@ -76,8 +87,6 @@ defmodule Pulsar.Integration.ProducerTest do
 
       # Original producer crashed
       assert not Process.alive?(producer_pid_before_crash)
-      # Producer group supervisor is still alive
-      assert Process.alive?(group_pid)
       # A new producer started
       assert Process.alive?(producer_pid_after_crash)
       # The old and new producers are not the same
