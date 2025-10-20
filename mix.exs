@@ -27,6 +27,7 @@ defmodule Pulsar.MixProject do
       {:jason, "~> 1.4"},
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.13.0"},
+      {:crc32cer, "~> 1.1"},
       {:telemetry, "~> 1.0"},
       {:telemetry_test, "~> 0.1.0", only: :test}
       # {:dep_from_hexpm, "~> 0.3.0"},
