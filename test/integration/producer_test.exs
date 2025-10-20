@@ -56,6 +56,109 @@ defmodule Pulsar.Integration.ProducerTest do
       close_stats = Utils.collect_producer_closed_stats()
       assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
     end
+
+    @tag telemetry_listen: [
+           [:pulsar, :producer, :opened, :stop],
+           [:pulsar, :producer, :message, :published]
+         ]
+    test "send message successfully" do
+      # Start producer
+      assert {:ok, group_pid} = Pulsar.start_producer(@topic)
+      assert Process.alive?(group_pid)
+
+      [producer] = Pulsar.get_producers(group_pid)
+
+      # Wait for producer to complete registration
+      :ok =
+        Utils.wait_for(fn ->
+          state = :sys.get_state(producer)
+          state.producer_name != nil
+        end)
+
+      # Send a message using the producer group name (default pattern)
+      producer_group_name = "#{@topic}-producer"
+      message_payload = "Hello, Pulsar!"
+
+      Logger.debug("Sending test message")
+      assert {:ok, message_id_data} = Pulsar.send(producer_group_name, message_payload)
+
+      # Verify message_id is returned
+      assert message_id_data.ledgerId != nil
+      assert message_id_data.entryId != nil
+
+      # Verify telemetry event was emitted
+      publish_stats = Utils.collect_message_published_stats()
+      assert %{total_count: 1} = publish_stats
+
+      # Cleanup
+      assert :ok = Pulsar.stop_producer(group_pid)
+      Utils.wait_for(fn -> not Process.alive?(producer) end)
+    end
+
+    test "send returns error when producer not found" do
+      assert {:error, :producer_not_found} = Pulsar.send("non-existent-producer-group", "message")
+    end
+  end
+
+  describe "Producer-Consumer End-to-End interaction" do
+    @subscription "producer-test-subscription"
+
+    test "produce and consume message successfully" do
+      # Start producer
+      assert {:ok, group_pid} = Pulsar.start_producer(@topic)
+      assert Process.alive?(group_pid)
+
+      [producer] = Pulsar.get_producers(group_pid)
+
+      # Wait for producer to complete registration
+      :ok =
+        Utils.wait_for(fn ->
+          state = :sys.get_state(producer)
+          state.producer_name != nil
+        end)
+
+      # Start consumer
+      assert {:ok, [consumer_pid]} =
+               Pulsar.start_consumer(
+                 topic: @topic,
+                 subscription_name: @subscription,
+                 subscription_type: :Exclusive,
+                 callback_module: Pulsar.Test.Support.DummyConsumer
+               )
+
+      # Wait for consumer to be ready and subscribed
+      [consumer] = Pulsar.consumers_for_group(consumer_pid)
+      Utils.wait_for(fn -> Process.alive?(consumer) end)
+
+      # Wait for consumer to complete subscription and be ready to receive messages
+      # This is indicated by flow_outstanding_permits being greater than 0
+      Utils.wait_for(fn ->
+        state = :sys.get_state(consumer)
+        state.flow_outstanding_permits > 0
+      end)
+
+      Logger.debug("Producer and Consumer ready. Sending message.")
+
+      # Send a message
+      producer_group_name = "#{@topic}-producer"
+      message_payload = "Hello from producer to consumer!"
+      assert {:ok, message_id_data} = Pulsar.send(producer_group_name, message_payload)
+      Logger.debug("Message sent #{inspect(message_id_data)}")
+
+      # Wait for consumer to receive the message
+      Utils.wait_for(fn ->
+        Pulsar.Test.Support.DummyConsumer.count_messages(consumer) > 0
+      end)
+
+      # Verify message was received
+      messages = Pulsar.Test.Support.DummyConsumer.get_messages(consumer)
+      assert length(messages) == 1
+      assert hd(messages).payload == message_payload
+
+      # Cleanup
+      assert :ok = Pulsar.stop_consumer(consumer_pid)
+      assert :ok = Pulsar.stop_producer(group_pid)
+    end
   end
 
   describe "Connection Reliability" do

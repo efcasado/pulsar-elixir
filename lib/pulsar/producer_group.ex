@@ -66,6 +66,15 @@ defmodule Pulsar.ProducerGroup do
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
   end
 
+  @doc """
+  Sends a message through the producer in this group.
+  """
+  @spec send_message(pid(), binary(), timeout()) :: {:ok, map()} | {:error, term()}
+  def send_message(group_pid, payload, timeout \\ 5000) do
+    [producer_pid] = get_producers(group_pid)
+    Pulsar.Producer.send_message(producer_pid, payload, timeout)
+  end
+
   @impl true
   def init({name, topic, opts}) do
     producer_count = Keyword.get(opts, :producer_count, 1)

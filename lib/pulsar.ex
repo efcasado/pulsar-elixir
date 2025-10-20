@@ -59,6 +59,7 @@ defmodule Pulsar do
       # Service discovery via broker
       {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
   """
+  alias Pulsar.Protocol.Binary
   use Application
   require Logger
 
@@ -615,6 +616,36 @@ defmodule Pulsar do
 
       [] ->
         {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Sends a message synchronously using a producer group.
+
+  The producer group must be started first using `start_producer/2`.
+
+  ## Parameters
+
+  - `producer_group_name` - Name of the producer group (from start_producer's :name option, or default "topic-producer")
+  - `message` - Binary message payload
+  - `opts` - Optional parameters:
+    - `:timeout` - Timeout in milliseconds (default: 5000)
+
+  ## Return Values
+  Returns `{:ok, message_id_data}` on success or `{:error, reason}` on failure.
+
+  """
+  @spec send(String.t(), binary(), keyword()) ::
+          {:ok, Binary.Pulsar.Proto.MessageIdData.t()} | {:error, term()}
+  def send(producer_group_name, message, opts \\ []) when is_binary(message) do
+    timeout = Keyword.get(opts, :timeout, 5000)
+
+    case lookup_producer(producer_group_name) do
+      {:ok, group_pid} ->
+        Pulsar.ProducerGroup.send_message(group_pid, message, timeout)
+
+      {:error, :not_found} ->
+        {:error, :producer_not_found}
     end
   end
 

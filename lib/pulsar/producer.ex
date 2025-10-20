@@ -71,6 +71,16 @@ defmodule Pulsar.Producer do
     GenServer.stop(producer, reason, timeout)
   end
 
+  @doc """
+  Sends a message through this producer.
+  Waits for acknowledgment from the broker.
+  Returns `{:ok, message_id}` on success or `{:error, reason}` on failure.
+  """
+  @spec send_message(pid(), binary(), timeout()) :: {:ok, map()} | {:error, term()}
+  def send_message(producer_pid, payload, timeout \\ 5000) do
+    GenServer.call(producer_pid, {:send_message, payload}, timeout)
+  end
+
   ## GenServer Callbacks
 
   @impl true
@@ -116,6 +126,50 @@ defmodule Pulsar.Producer do
     {:noreply, %{state | broker_monitor: broker_monitor}}
   end
 
+  @impl true
+  def handle_call({:send_message, payload}, from, state) do
+    sequence_id = state.sequence_id + 1
+
+    # Create CommandSend
+    command_send = %Binary.CommandSend{
+      producer_id: state.producer_id,
+      sequence_id: sequence_id
+    }
+
+    # Create MessageMetadata
+    message_metadata = %Binary.MessageMetadata{
+      producer_name: state.producer_name,
+      sequence_id: sequence_id,
+      publish_time: System.system_time(:millisecond)
+    }
+
+    Logger.debug("Prepared command #{inspect(command_send)}")
+    Logger.debug("Prepared metadata #{inspect(message_metadata)}")
+
+    case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, payload) do
+      :ok ->
+        # Emit telemetry event for message published
+        :telemetry.execute(
+          [:pulsar, :producer, :message, :published],
+          %{count: 1},
+          %{
+            topic: state.topic,
+            producer_name: state.producer_name,
+            producer_id: state.producer_id,
+            sequence_id: sequence_id
+          }
+        )
+
+        # Store pending send to correlate with receipt
+        new_pending = Map.put(state.pending_sends, sequence_id, {from, %{}})
+        new_state = %{state | sequence_id: sequence_id, pending_sends: new_pending}
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   # Handle broker crashes - stop so supervisor can restart us with fresh lookup
   @impl true
   def handle_info(
@@ -127,6 +181,43 @@ defmodule Pulsar.Producer do
     )
 
     {:stop, :broker_crashed, state}
+  end
+
+  @impl true
+  def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
+    Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, producer will restart")
+
+    {:stop, :broker_exited, state}
+  end
+
+  @impl true
+  def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
+    Logger.debug("Received send receipt for sequence_id #{receipt.sequence_id}")
+
+    case Map.pop(state.pending_sends, receipt.sequence_id) do
+      {{from, _metadata}, new_pending} ->
+        GenServer.reply(from, {:ok, receipt.message_id})
+        {:noreply, %{state | pending_sends: new_pending}}
+
+      {nil, _} ->
+        Logger.warning("Received receipt for unknown sequence_id #{receipt.sequence_id}")
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:send_error, %Binary.CommandSendError{} = error}, state) do
+    Logger.debug("Received send error for sequence_id #{error.sequence_id}")
+
+    case Map.pop(state.pending_sends, error.sequence_id) do
+      {{from, _metadata}, new_pending} ->
+        GenServer.reply(from, {:error, {error.error, error.message}})
+        {:noreply, %{state | pending_sends: new_pending}}
+
+      {nil, _} ->
+        Logger.warning("Received error for unknown sequence_id #{error.sequence_id}")
+        {:noreply, state}
+    end
   end
 
   @impl true

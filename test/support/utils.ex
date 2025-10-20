@@ -52,6 +52,16 @@ defmodule Pulsar.Test.Support.Utils do
     |> aggregate_success_stats()
   end
 
+  @doc """
+  Collects message published telemetry events and returns aggregated statistics.
+  Returns a map with total count.
+  """
+  def collect_message_published_stats do
+    [:pulsar, :producer, :message, :published]
+    |> collect_events()
+    |> then(fn events -> %{total_count: length(events)} end)
+  end
+
   defp collect_events(event_name) do
     collect_events(event_name, [])
   end

@@ -128,6 +128,16 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
+  Publishes a message to the broker.
+  Takes CommandSend, MessageMetadata, and the payload.
+  """
+  @spec publish_message(GenServer.server(), struct(), struct(), binary()) ::
+          :ok | {:error, term()}
+  def publish_message(broker, command_send, message_metadata, payload) do
+    :gen_statem.call(broker, {:publish_message, command_send, message_metadata, payload})
+  end
+
+  @doc """
   Service discovery: lookup topic.
   """
   @spec lookup_topic(GenServer.server(), String.t(), boolean(), timeout()) ::
@@ -475,6 +485,27 @@ defmodule Pulsar.Broker do
     end
   end
 
+  def connected(
+        {:call, from},
+        {:publish_message, command_send, message_metadata, payload},
+        broker
+      ) do
+    %__MODULE__{socket_module: mod, socket: socket} = broker
+
+    # Encode the message with payload
+    encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
+
+    case apply(mod, :send, [socket, encoded_message]) do
+      :ok ->
+        actions = [{:reply, from, :ok}]
+        {:keep_state, broker, actions}
+
+      {:error, reason} ->
+        actions = [{:reply, from, {:error, reason}}]
+        {:keep_state, broker, actions}
+    end
+  end
+
   def connected({:call, from}, {:send_request, command}, broker) do
     request_id = System.unique_integer([:positive, :monotonic])
     command_with_id = Map.put(command, :request_id, request_id)
@@ -661,6 +692,30 @@ defmodule Pulsar.Broker do
     end
   end
 
+  defp handle_command(%Binary.CommandSendReceipt{producer_id: producer_id} = receipt, broker) do
+    case Map.get(broker.producers, producer_id) do
+      {producer_pid, _ref} ->
+        send(producer_pid, {:send_receipt, receipt})
+        :keep_state_and_data
+
+      nil ->
+        Logger.warning("Received send receipt for unknown producer #{producer_id}")
+        :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandSendError{producer_id: producer_id} = error, broker) do
+    case Map.get(broker.producers, producer_id) do
+      {producer_pid, _ref} ->
+        send(producer_pid, {:send_error, error})
+        :keep_state_and_data
+
+      nil ->
+        Logger.warning("Received send error for unknown producer #{producer_id}")
+        :keep_state_and_data
+    end
+  end
+
   defp handle_command(command, broker) when is_map(command) do
     # Handle responses with request_id
     case Map.get(command, :request_id) do
@@ -691,7 +746,7 @@ defmodule Pulsar.Broker do
       end
     end)
 
-    # Exit all producer processes - supervision trees will restart them  
+    # Exit all producer processes - supervision trees will restart them
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Restarting producer #{producer_id}")
