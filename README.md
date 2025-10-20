@@ -7,6 +7,54 @@
 An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 
 
+## Architecture
+
+```mermaid
+flowchart TD
+    P[Pulsar.Supervisor] --> BR[BrokerRegistry]
+    P --> CR[ConsumerRegistry]
+    P --> BS[BrokerSupervisor]
+    P --> CS[ConsumerSupervisor]
+
+    BS -.->|DynamicSupervisor| B1[Broker 1]
+    BS -.->|DynamicSupervisor| B2[Broker 2]
+
+    CS -.->|DynamicSupervisor| CG1["<b>ConsumerGroup</b><br/>my-topic"]
+    CS -.->|DynamicSupervisor| PC1["<b>PartitionedConsumer</b><br/>my-partitioned-topic"]
+
+    CG1 -.->|DynamicSupervisor| C1[Consumer 1]
+
+    PC1 -.->|DynamicSupervisor| CG2["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-0"]
+    PC1 -.->|DynamicSupervisor| CG3["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-1"]
+    PC1 -.->|DynamicSupervisor| CG4["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-2"]
+
+    CG2 -.->|DynamicSupervisor| C2[Consumer 2]
+    CG2 -.->|DynamicSupervisor| C3[Consumer 3]
+    CG3 -.->|DynamicSupervisor| C4[Consumer 4]
+    CG3 -.->|DynamicSupervisor| C5[Consumer 5]
+    CG4 -.->|DynamicSupervisor| C6[Consumer 6]
+    CG4 -.->|DynamicSupervisor| C7[Consumer 7]
+
+    %% Broker ownership and monitoring
+    B1 <===>|monitor| C1
+    B1 <===>|monitor| C2
+    B1 <===>|monitor| C3
+
+    B2 <===>|monitor| C4
+    B2 <===>|monitor| C5
+    B2 <===>|monitor| C6
+    B2 <===>|monitor| C7
+
+    classDef supervisor fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef registry fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef worker fill:#fff3e0,stroke:#e65100,stroke-width:2px
+
+    class P,BS,CS,CG1,CG2,CG3,CG4,PC1 supervisor
+    class BR,CR registry
+    class C1,C2,C3,C4,C5,C6,C7,B1,B2 worker
+```
+
+
 ## Usage
 
 The package can be installed by adding `pulsar` to your list of dependencies in `mix.exs`:
@@ -22,7 +70,7 @@ You can configure the client by adding the following configuration to your `conf
 ```elixir
 config :pulsar,
   host: "pulsar://localhost:6650",
-  socket_opts: [verify: :none],
+  socket_opts: [verify: :verify_none],
   auth: [
     type: Pulsar.Auth.OAuth2
     settings: [
@@ -34,7 +82,7 @@ config :pulsar,
   ],
   consumers: [
     my_consumer: [
-		topic: "persistent://my-tenant/my-namespace/my-topic",
+        topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-app-my-consumer-subscription",
         subscription_type: "Exclusive",
         callback_module: MyApp.MyConsumer,
@@ -42,9 +90,9 @@ config :pulsar,
           flow_initial: 100,
           flow_threshold: 50,
           flow_refill: 50,
-		  initial_position: :earliest
-		  durable: true,
-		  force_create_topic: true
+          initial_position: :earliest
+          durable: true,
+          force_create_topic: true
         ]
     ]
   ]
@@ -57,11 +105,11 @@ by calling `Pulsar.start/1` directly, as follows:
   host: "pulsar://localhost:6650",
   consumers: [
     {:my_consumer, [
-	  topic: "my-topic",
-	  subscription_name: "my-subscription",
-	  subscription_type: :Shared,
-	  callback: MyConsumerCallback
-	]}
+        topic: "my-topic",
+        subscription_name: "my-subscription",
+        subscription_type: :Shared,
+        callback: MyConsumerCallback
+    ]}
   ]
 )
 ```
