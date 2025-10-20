@@ -118,16 +118,11 @@ defmodule Pulsar.Integration.ProducerTest do
         end)
 
       # Start consumer
-      assert {:ok, [consumer_pid]} =
-               Pulsar.start_consumer(
-                 topic: @topic,
-                 subscription_name: @subscription,
-                 subscription_type: :Exclusive,
-                 callback_module: Pulsar.Test.Support.DummyConsumer
-               )
+      assert {:ok, consumer_pid} =
+               Pulsar.start_consumer(@topic, @subscription, Pulsar.Test.Support.DummyConsumer)
 
       # Wait for consumer to be ready and subscribed
-      [consumer] = Pulsar.consumers_for_group(consumer_pid)
+      [consumer] = Pulsar.get_consumers(consumer_pid)
       Utils.wait_for(fn -> Process.alive?(consumer) end)
 
       # Wait for consumer to complete subscription and be ready to receive messages
