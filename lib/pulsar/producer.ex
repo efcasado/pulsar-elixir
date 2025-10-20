@@ -143,9 +143,6 @@ defmodule Pulsar.Producer do
       publish_time: System.system_time(:millisecond)
     }
 
-    Logger.debug("Prepared command #{inspect(command_send)}")
-    Logger.debug("Prepared metadata #{inspect(message_metadata)}")
-
     case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, payload) do
       :ok ->
         # Emit telemetry event for message published
@@ -192,8 +189,6 @@ defmodule Pulsar.Producer do
 
   @impl true
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
-    Logger.debug("Received send receipt for sequence_id #{receipt.sequence_id}")
-
     case Map.pop(state.pending_sends, receipt.sequence_id) do
       {{from, _metadata}, new_pending} ->
         GenServer.reply(from, {:ok, receipt.message_id})
@@ -207,8 +202,6 @@ defmodule Pulsar.Producer do
 
   @impl true
   def handle_info({:send_error, %Binary.CommandSendError{} = error}, state) do
-    Logger.debug("Received send error for sequence_id #{error.sequence_id}")
-
     case Map.pop(state.pending_sends, error.sequence_id) do
       {{from, _metadata}, new_pending} ->
         GenServer.reply(from, {:error, {error.error, error.message}})

@@ -553,7 +553,6 @@ defmodule Pulsar do
   """
   @spec stop_producer(pid() | String.t()) :: :ok | {:error, :not_found}
   def stop_producer(group_pid) when is_pid(group_pid) do
-    Logger.debug("REQUESTED STOP PRODUCER")
     Pulsar.ProducerGroup.stop(group_pid)
   end
 
