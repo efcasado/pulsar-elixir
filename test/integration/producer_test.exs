@@ -179,8 +179,12 @@ defmodule Pulsar.Integration.ProducerTest do
     test "multiple producers can publish with :Shared access mode" do
       # Start two separate producer groups with :Shared mode on same topic
       assert {:ok, group_pid_1} = Pulsar.start_producer(@shared_topic, access_mode: :Shared)
+
       assert {:ok, group_pid_2} =
-               Pulsar.start_producer(@shared_topic, access_mode: :Shared, name: "shared-producer-2")
+               Pulsar.start_producer(@shared_topic,
+                 access_mode: :Shared,
+                 name: "shared-producer-2"
+               )
 
       [producer_1] = Pulsar.get_producers(group_pid_1)
       [producer_2] = Pulsar.get_producers(group_pid_2)
@@ -241,7 +245,10 @@ defmodule Pulsar.Integration.ProducerTest do
 
       # Second exclusive producer should now succeed
       assert {:ok, group_pid_2} =
-               Pulsar.start_producer(@exclusive_topic, access_mode: :Exclusive, name: "exclusive-2")
+               Pulsar.start_producer(@exclusive_topic,
+                 access_mode: :Exclusive,
+                 name: "exclusive-2"
+               )
 
       [producer_2] = Pulsar.get_producers(group_pid_2)
       Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
