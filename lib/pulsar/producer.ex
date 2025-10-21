@@ -46,11 +46,28 @@ defmodule Pulsar.Producer do
 
   - `topic` - The topic to publish to
   - `opts` - Additional options:
-    - `:access_mode` - Producer access mode (default: :Shared)
+    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
+      - `:Shared` - Multiple producers can publish on the topic (default)
+      - `:Exclusive` - Only one producer can publish. If another producer tries to connect,
+        it will receive an error immediately. The old producer is evicted if it experiences
+        a network partition with the broker.
+      - `:WaitForExclusive` - If there is already a producer, wait until exclusive access is granted
+      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed immediately
     - Other GenServer options
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
+
+  ## Examples
+
+      # Default shared mode
+      {:ok, producer} = Producer.start_link("persistent://public/default/my-topic")
+
+      # Exclusive mode - only this producer can publish to the topic
+      {:ok, producer} = Producer.start_link(
+        "persistent://public/default/my-topic",
+        access_mode: :Exclusive
+      )
   """
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
@@ -302,7 +319,8 @@ defmodule Pulsar.Producer do
     producer_command = %Binary.CommandProducer{
       topic: state.topic,
       producer_id: state.producer_id,
-      request_id: request_id
+      request_id: request_id,
+      producer_access_mode: state.access_mode
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
