@@ -107,6 +107,9 @@ defmodule Pulsar do
     consumers =
       Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
 
+    producers =
+      Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
+
     bootstrap_host =
       Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
@@ -147,6 +150,18 @@ defmodule Pulsar do
         |> Keyword.put(:name, consumer_name)
 
       Pulsar.start_consumer(topic, subscription_name, callback_module, remaining_opts)
+    end)
+
+    producers
+    |> Enum.each(fn {producer_name, producer_opts} ->
+      topic = Keyword.fetch!(producer_opts, :topic)
+
+      remaining_opts =
+        producer_opts
+        |> Keyword.drop([:topic])
+        |> Keyword.put(:name, producer_name)
+
+      Pulsar.start_producer(topic, remaining_opts)
     end)
 
     {:ok, pid}
