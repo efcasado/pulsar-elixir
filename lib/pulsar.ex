@@ -144,24 +144,24 @@ defmodule Pulsar do
       subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
       callback_module = Keyword.fetch!(consumer_opts, :callback_module)
 
-      remaining_opts =
+      opts =
         consumer_opts
-        |> Keyword.drop([:topic, :subscription_name, :callback_module])
+        |> Keyword.get(:opts, [])
         |> Keyword.put(:name, consumer_name)
 
-      Pulsar.start_consumer(topic, subscription_name, callback_module, remaining_opts)
+      Pulsar.start_consumer(topic, subscription_name, callback_module, opts)
     end)
 
     producers
     |> Enum.each(fn {producer_name, producer_opts} ->
       topic = Keyword.fetch!(producer_opts, :topic)
 
-      remaining_opts =
+      opts =
         producer_opts
-        |> Keyword.drop([:topic])
+        |> Keyword.get(:opts, [])
         |> Keyword.put(:name, producer_name)
 
-      Pulsar.start_producer(topic, remaining_opts)
+      Pulsar.start_producer(topic, opts)
     end)
 
     {:ok, pid}
