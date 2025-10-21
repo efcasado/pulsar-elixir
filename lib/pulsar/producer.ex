@@ -51,7 +51,13 @@ defmodule Pulsar.Producer do
 
   - `topic` - The topic to publish to
   - `opts` - Additional options:
-    - `:access_mode` - Producer access mode (default: :Shared)
+    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
+      - `:Shared` - Multiple producers can publish on the topic (default)
+      - `:Exclusive` - Only one producer can publish. If another producer tries to connect,
+        it will receive an error immediately. The old producer is evicted if it experiences
+        a network partition with the broker.
+      - `:WaitForExclusive` - If there is already a producer, wait until exclusive access is granted
+      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed immediately
     - `:compression` - Compression algorithm (default: :NONE)
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before producer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
@@ -62,6 +68,17 @@ defmodule Pulsar.Producer do
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
+
+  ## Examples
+
+      # Default shared mode
+      {:ok, producer} = Producer.start_link("persistent://public/default/my-topic")
+
+      # Exclusive mode - only this producer can publish to the topic
+      {:ok, producer} = Producer.start_link(
+        "persistent://public/default/my-topic",
+        access_mode: :Exclusive
+      )
   """
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
@@ -343,7 +360,8 @@ defmodule Pulsar.Producer do
     producer_command = %Binary.CommandProducer{
       topic: state.topic,
       producer_id: state.producer_id,
-      request_id: request_id
+      request_id: request_id,
+      producer_access_mode: state.access_mode
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)

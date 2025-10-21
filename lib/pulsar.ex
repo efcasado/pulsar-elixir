@@ -449,7 +449,11 @@ defmodule Pulsar do
   - `opts` - Optional parameters:
     - `:name` - Custom name for the producer group (default: "<topic>-producer")
     - `:producer_count` - Number of producer processes in the group (default: 1)
-    - `:access_mode` - Producer access mode (default: :Shared)
+    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
+      - `:Shared` - Multiple producers can publish on the topic
+      - `:Exclusive` - Only one producer can publish. Other producers get errors immediately.
+      - `:WaitForExclusive` - Wait for exclusive access if another producer is connected
+      - `:ExclusiveWithFencing` - Immediately remove any existing producer
     - Other options passed to individual producer processes
 
   ## Producer Naming and Registry
@@ -460,18 +464,26 @@ defmodule Pulsar do
 
   This allows you to manage producers by name without keeping track of PIDs.
 
+  ## Producer Access Modes
+
+  Access modes control how many producers can publish to a topic simultaneously:
+
+  - **`:Shared`** (default) - Multiple producers can publish to the same topic
+  - **`:Exclusive`** - Only one producer can be connected. If another tries to connect, it fails immediately
+  - **`:WaitForExclusive`** - Waits for exclusive access instead of failing
+  - **`:ExclusiveWithFencing`** - Takes over by immediately disconnecting the existing producer
+
   ## Examples
 
-      # Start producer with default settings (1 producer)
+      # Start producer with default settings (1 producer, shared mode)
       iex> {:ok, producer_pid} = Pulsar.start_producer(
       ...>   "persistent://public/default/my-topic"
       ...> )
       {:ok, #PID<0.789.0>}
 
-      # Start producer group with multiple producers
+      # Start producer with exclusive access
       iex> {:ok, producer_pid} = Pulsar.start_producer(
       ...>   "persistent://public/default/my-topic",
-      ...>   producer_count: 3,
       ...>   access_mode: :Exclusive
       ...> )
       {:ok, #PID<0.789.0>}
@@ -479,7 +491,7 @@ defmodule Pulsar do
       # Register with custom name
       iex> {:ok, producer_pid} = Pulsar.start_producer(
       ...>   "persistent://public/default/my-topic",
-      ...>   name: MyApp.MyProducer
+      ...>   name: "my-producer",
       ...> )
       {:ok, #PID<0.789.0>}
   """
@@ -487,14 +499,14 @@ defmodule Pulsar do
   def start_producer(topic, opts \\ []) do
     client = Keyword.get(opts, :client, @default_client)
     producer_supervisor = Pulsar.Client.producer_supervisor(client)
-    name = Keyword.get(opts, :name, "#{topic}-producer")
+    {name, producer_opts} = Keyword.pop(opts, :name, "#{topic}-producer")
 
     child_spec = %{
       id: name,
       start: {
         Pulsar.ProducerGroup,
         :start_link,
-        [name, topic, opts]
+        [name, topic, producer_opts]
       },
       restart: :transient,
       type: :supervisor
