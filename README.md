@@ -93,10 +93,10 @@ config :pulsar,
   consumers: [
     my_consumer: [
         topic: "persistent://my-tenant/my-namespace/my-topic",
-        subscription_name: "my-app-my-consumer-subscription",
-        subscription_type: "Exclusive",
+        subscription_name: "my-subscription",
         callback_module: MyApp.MyConsumer,
         opts: [
+          subscription_type: "Exclusive",
           flow_initial: 100,
           flow_threshold: 50,
           flow_refill: 50,
@@ -111,45 +111,45 @@ Alternatively, you can start the Pulsar client on demand and add it to your appl
 by calling `Pulsar.start/1` directly, as follows:
 
 ```elixir
-{:ok, pid} = Pulsar.Application.start(
+{:ok, pid} = Pulsar.start(
   host: "pulsar://localhost:6650",
+  socket_opts: [verify: :verify_none],
+  auth: [
+    type: Pulsar.Auth.OAuth2
+    settings: [
+        client_id: "<YOUR-OAUTH2-CLIENT-ID>",
+        client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
+        site: "<YOUR-OAUTH2-ISSUER-URL>",
+        audience: "<YOUR-OAUTH2-AUDIENCE>"
+    ]
+  ],
   consumers: [
-    {:my_consumer, [
-        topic: "my-topic",
+    my_consumer: [
+        topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-subscription",
-        subscription_type: :Shared,
-        callback: MyConsumerCallback
-    ]}
+        callback_module: MyApp.MyConsumer,
+        opts: [
+          subscription_type: "Exclusive",
+          flow_initial: 100,
+          flow_threshold: 50,
+          flow_refill: 50,
+          initial_position: :earliest
+          durable: true,
+          force_create_topic: true
+        ]
+    ]
+  ],
+  producers: [
+    my_producer: [
+        topic: "persistent://my-tenant/my-namespace/my-topic"
+    ]
   ]
 )
 ```
 
-### Producing Messages
-
-To produce messages to a topic, start a producer and send messages:
+Then, to produce message to a topic you can do as follows:
 
 ```elixir
-# Start a producer
-{:ok, producer_pid} = Pulsar.start_producer(
-  "persistent://my-tenant/my-namespace/my-topic"
-)
-
-# The producer group gets a default name: "<topic>-producer"
-# Send a message using the default name
-topic = "persistent://my-tenant/my-namespace/my-topic"
-producer_group_name = "#{topic}-producer"
-{:ok, message_id} = Pulsar.send(producer_group_name, "Hello, Pulsar!")
-
-# Or send directly using the producer PID
-{:ok, message_id} = Pulsar.send(producer_pid, "Hello, Pulsar!")
-
-# You can also start a producer with a custom name and multiple producers
-{:ok, producer_pid} = Pulsar.start_producer(
-  "persistent://my-tenant/my-namespace/my-topic",
-  name: "my-producer",
-  producer_count: 3
-)
-
 {:ok, message_id} = Pulsar.send("my-producer", "Hello, Pulsar!")
 ```
 
