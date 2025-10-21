@@ -105,6 +105,11 @@ config :pulsar,
           force_create_topic: true
         ]
     ]
+  ],
+  producers: [
+    my_producer: [
+        topic: "persistent://my-tenant/my-namespace/my-topic"
+    ]
   ]
 ```
 Alternatively, you can start the Pulsar client on demand and add it to your application's supervisor
@@ -150,7 +155,7 @@ by calling `Pulsar.start/1` directly, as follows:
 Then, to produce message to a topic you can do as follows:
 
 ```elixir
-{:ok, message_id} = Pulsar.send("my-producer", "Hello, Pulsar!")
+{:ok, message_id} = Pulsar.send(:my-producer, "Hello, Pulsar!")
 ```
 
 
