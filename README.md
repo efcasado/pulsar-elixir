@@ -182,6 +182,27 @@ mix test test/integration/consumer_test.exs:43
 ```
 
 
+## Examples
+
+> [!IMPORTANT]
+> Do not forget to add the following line to your `/etc/hosts` file before running the tests:
+>
+> ```
+> 127.0.0.1 broker1 broker2
+> ```
+>
+> You also need to run `docker compose up -d` manually before running the examples.
+
+See the `examples` directory if you are interested in seeing how to use the Pulsar client to
+build an end-to-end Pulsar application.
+
+You can run the examples using the following command:
+
+```
+mix run --no-start examples/bingo.exs
+```
+
+
 ## Features
 
 The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apache.org/client-feature-matrix/).
