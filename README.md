@@ -13,14 +13,18 @@ An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 flowchart TD
     P[Pulsar.Supervisor] --> BR[BrokerRegistry]
     P --> CR[ConsumerRegistry]
+    P --> PR[ProducerRegistry]
     P --> BS[BrokerSupervisor]
     P --> CS[ConsumerSupervisor]
+    P --> PS[ProducerSupervisor]
 
     BS -.->|DynamicSupervisor| B1[Broker 1]
     BS -.->|DynamicSupervisor| B2[Broker 2]
 
     CS -.->|DynamicSupervisor| CG1["<b>ConsumerGroup</b><br/>my-topic"]
     CS -.->|DynamicSupervisor| PC1["<b>PartitionedConsumer</b><br/>my-partitioned-topic"]
+
+    PS -.->|DynamicSupervisor| PG1["<b>ProducerGroup</b><br/>my-topic"]
 
     CG1 -.->|DynamicSupervisor| C1[Consumer 1]
 
@@ -35,6 +39,9 @@ flowchart TD
     CG4 -.->|DynamicSupervisor| C6[Consumer 6]
     CG4 -.->|DynamicSupervisor| C7[Consumer 7]
 
+    PG1 -.->|DynamicSupervisor| P1[Producer 1]
+    PG1 -.->|DynamicSupervisor| P2[Producer 2]
+
     %% Broker ownership and monitoring
     B1 <===>|monitor| C1
     B1 <===>|monitor| C2
@@ -45,13 +52,16 @@ flowchart TD
     B2 <===>|monitor| C6
     B2 <===>|monitor| C7
 
+    B1 <===>|monitor| P1
+    B2 <===>|monitor| P2
+
     classDef supervisor fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef registry fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
     classDef worker fill:#fff3e0,stroke:#e65100,stroke-width:2px
 
-    class P,BS,CS,CG1,CG2,CG3,CG4,PC1 supervisor
-    class BR,CR registry
-    class C1,C2,C3,C4,C5,C6,C7,B1,B2 worker
+    class P,BS,CS,PS,CG1,CG2,CG3,CG4,PC1,PG1 supervisor
+    class BR,CR,PR registry
+    class C1,C2,C3,C4,C5,C6,C7,P1,P2,B1,B2 worker
 ```
 
 
@@ -114,6 +124,35 @@ by calling `Pulsar.start/1` directly, as follows:
 )
 ```
 
+### Producing Messages
+
+To produce messages to a topic, start a producer and send messages:
+
+```elixir
+# Start a producer
+{:ok, producer_pid} = Pulsar.start_producer(
+  "persistent://my-tenant/my-namespace/my-topic"
+)
+
+# The producer group gets a default name: "<topic>-producer"
+# Send a message using the default name
+topic = "persistent://my-tenant/my-namespace/my-topic"
+producer_group_name = "#{topic}-producer"
+{:ok, message_id} = Pulsar.send(producer_group_name, "Hello, Pulsar!")
+
+# Or send directly using the producer PID
+{:ok, message_id} = Pulsar.send(producer_pid, "Hello, Pulsar!")
+
+# You can also start a producer with a custom name and multiple producers
+{:ok, producer_pid} = Pulsar.start_producer(
+  "persistent://my-tenant/my-namespace/my-topic",
+  name: "my-producer",
+  producer_count: 3
+)
+
+{:ok, message_id} = Pulsar.send("my-producer", "Hello, Pulsar!")
+```
+
 
 ## Testing
 
@@ -153,7 +192,14 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Client    | Authentication                     | ⚠️        |
 | Client    | Transaction                        | ❌        |
 | Client    | Statistics                         | ❌        |
-| Producer  |                                    | ❌        |
+| Producer  | Sync send                          | ✅        |
+| Producer  | Async send                         | ❌        |
+| Producer  | Batching                           | ❌        |
+| Producer  | Chunking                           | ❌        |
+| Producer  | Compression                        | ❌        |
+| Producer  | Schema                             | ❌        |
+| Producer  | Partitioned topics                 | ❌        |
+| Producer  | Access modes                       | ❌        |
 | Consumer  | ACK                                | ✅        |
 | Consumer  | Batch-index ACK                    | ✅        |
 | Consumer  | NACK                               | ❌        |
