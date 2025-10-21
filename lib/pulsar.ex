@@ -631,12 +631,20 @@ defmodule Pulsar do
     - `:timeout` - Timeout in milliseconds (default: 5000)
 
   ## Return Values
+
   Returns `{:ok, message_id_data}` on success or `{:error, reason}` on failure.
 
   """
-  @spec send(String.t(), binary(), keyword()) ::
+  @spec send(String.t() | pid(), binary(), keyword()) ::
           {:ok, Binary.Pulsar.Proto.MessageIdData.t()} | {:error, term()}
-  def send(producer_group_name, message, opts \\ []) when is_binary(message) do
+  def send(producer_group_pid_or_name, message, opts \\ [])
+
+  def send(producer_group_pid, message, opts) when is_pid(producer_group_pid) do
+    timeout = Keyword.get(opts, :timeout, 5000)
+    Pulsar.ProducerGroup.send_message(producer_group_pid, message, timeout)
+  end
+
+  def send(producer_group_name, message, opts) when is_binary(message) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
     case lookup_producer(producer_group_name) do

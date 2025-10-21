@@ -30,38 +30,10 @@ defmodule Pulsar.Integration.ProducerTest do
   describe "Producer Lifecycle" do
     @tag telemetry_listen: [
            [:pulsar, :producer, :opened, :stop],
-           [:pulsar, :producer, :closed, :stop]
-         ]
-    test "create producer successfully" do
-      assert {:ok, group_pid} = Pulsar.start_producer(@topic)
-      assert Process.alive?(group_pid)
-
-      [producer] = Pulsar.get_producers(group_pid)
-
-      # Wait for producer to complete registration (producer_name assigned by broker)
-      :ok =
-        Utils.wait_for(fn ->
-          state = :sys.get_state(producer)
-          state.producer_name != nil
-        end)
-
-      stats = Utils.collect_producer_opened_stats()
-      assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
-
-      assert :ok = Pulsar.stop_producer(group_pid)
-
-      # Wait for producer process to fully terminate
-      Utils.wait_for(fn -> not Process.alive?(producer) end)
-
-      close_stats = Utils.collect_producer_closed_stats()
-      assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
-    end
-
-    @tag telemetry_listen: [
-           [:pulsar, :producer, :opened, :stop],
+           [:pulsar, :producer, :closed, :stop],
            [:pulsar, :producer, :message, :published]
          ]
-    test "send message successfully" do
+    test "create and send message" do
       # Start producer
       assert {:ok, group_pid} = Pulsar.start_producer(@topic)
       assert Process.alive?(group_pid)
@@ -75,24 +47,32 @@ defmodule Pulsar.Integration.ProducerTest do
           state.producer_name != nil
         end)
 
+      stats = Utils.collect_producer_opened_stats()
+      assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
+
       # Send a message using the producer group name (default pattern)
       producer_group_name = "#{@topic}-producer"
       message_payload = "Hello, Pulsar!"
 
-      Logger.debug("Sending test message")
       assert {:ok, message_id_data} = Pulsar.send(producer_group_name, message_payload)
 
       # Verify message_id is returned
       assert message_id_data.ledgerId != nil
       assert message_id_data.entryId != nil
 
+      # Send another message using the producer PID
+      assert {:ok, _message_id_data2} = Pulsar.send(group_pid, "Another message")
+
       # Verify telemetry event was emitted
       publish_stats = Utils.collect_message_published_stats()
-      assert %{total_count: 1} = publish_stats
+      assert %{total_count: 2} = publish_stats
 
       # Cleanup
       assert :ok = Pulsar.stop_producer(group_pid)
       Utils.wait_for(fn -> not Process.alive?(producer) end)
+
+      close_stats = Utils.collect_producer_closed_stats()
+      assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
     end
 
     test "send returns error when producer not found" do
