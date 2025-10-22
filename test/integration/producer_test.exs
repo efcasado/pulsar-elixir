@@ -218,30 +218,11 @@ defmodule Pulsar.Integration.ProducerTest do
                  name: "exclusive-2"
                )
 
-      [producer_2] = Pulsar.get_producers(group_pid_2)
-      Process.sleep(500)
+      Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
 
-      # Producer 2 should have failed and been stopped
-      assert not Process.alive?(producer_2)
-      # The group supervisor should also be stopped due to transient restart strategy
-      assert not Process.alive?(group_pid_2)
-
-      # Only stop the first producer (second is already dead)
-      Pulsar.stop_producer(group_pid_1)
-    end
-
-    test "new exclusive producer can connect after previous one disconnects" do
-      # First exclusive producer
-      assert {:ok, group_pid_1} =
-               Pulsar.start_producer(@exclusive_topic, access_mode: :Exclusive)
-
-      [producer_1] = Pulsar.get_producers(group_pid_1)
-      Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
-
-      # Stop it
+      # Stop the first producer to release exclusive lock
       Pulsar.stop_producer(group_pid_1)
       Utils.wait_for(fn -> not Process.alive?(producer_1) end)
-      Process.sleep(200)
 
       # Second exclusive producer should now succeed
       assert {:ok, group_pid_2} =
