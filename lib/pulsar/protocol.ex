@@ -107,6 +107,8 @@ defmodule Pulsar.Protocol do
       Binary.BaseCommand.decode(command)
       |> do_decode
 
+    payload = maybe_uncompress(message_metadata, payload)
+
     # Handle batch messages
     payload = unwrap_messages(message_metadata, payload)
 
@@ -214,6 +216,28 @@ defmodule Pulsar.Protocol do
     |> Atom.to_string()
     |> String.downcase()
     |> String.to_existing_atom()
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload) do
+    payload
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+    :zlib.uncompress(compressed_payload)
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
+    {:ok, payload} = NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
+    payload
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
+    :ezstd.decompress(compressed_payload)
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+    {:ok, payload} = :snappyer.decompress(compressed_payload)
+    payload
   end
 
   defp unwrap_messages(metadata, payload) do

@@ -222,7 +222,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Async send                         | ❌        |
 | Producer  | Batching                           | ❌        |
 | Producer  | Chunking                           | ❌        |
-| Producer  | Compression                        | ❌        |
+| Producer  | Compression                        | ✅        |
 | Producer  | Schema                             | ❌        |
 | Producer  | Partitioned topics                 | ❌        |
 | Producer  | Access modes                       | ❌        |
@@ -238,7 +238,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Subscription modes                 | ✅        |
 | Consumer  | Retry letter topic                 | ❌        |
 | Consumer  | Dead letter topic                  | ❌        |
-| Consumer  | Compression                        | ❌        |
+| Consumer  | Compression                        | ✅        |
 | Consumer  | Compaction                         | ❌        |
 | Consumer  | Schema                             | ❌        |
 | Consumer  | Configurable flow control settings | ✅        |

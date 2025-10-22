@@ -134,6 +134,70 @@ defmodule Pulsar.Integration.ProducerTest do
       assert :ok = Pulsar.stop_consumer(consumer_pid)
       assert :ok = Pulsar.stop_producer(group_pid)
     end
+
+    test "produce and consume compressed message successfully" do
+      {:ok, _} =
+        Pulsar.start_producer(
+          @topic <> "-compression",
+          name: "p-none",
+          compression: :NONE
+        )
+
+      {:ok, _} =
+        Pulsar.start_producer(
+          @topic <> "-compression",
+          name: "p-lz4",
+          compression: :LZ4
+        )
+
+      {:ok, _} =
+        Pulsar.start_producer(
+          @topic <> "-compression",
+          name: "p-zlib",
+          compression: :ZLIB
+        )
+
+      {:ok, _} =
+        Pulsar.start_producer(
+          @topic <> "-compression",
+          name: "p-zstd",
+          compression: :ZSTD
+        )
+
+      {:ok, _} =
+        Pulsar.start_producer(
+          @topic <> "-compression",
+          name: "p-snappy",
+          compression: :SNAPPY
+        )
+
+      {:ok, consumer_pid} =
+        Pulsar.start_consumer(
+          @topic,
+          @subscription,
+          Pulsar.Test.Support.DummyConsumer
+        )
+
+      [consumer] = Pulsar.get_consumers(consumer_pid)
+      Utils.wait_for(fn -> Process.alive?(consumer) end)
+
+      {:ok, _} = Pulsar.send("p-none", "Hello, world!")
+      {:ok, _} = Pulsar.send("p-lz4", "Hello, world!")
+      {:ok, _} = Pulsar.send("p-zstd", "Hello, world!")
+      {:ok, _} = Pulsar.send("p-zlib", "Hello, world!")
+      {:ok, _} = Pulsar.send("p-snappy", "Hello, world!")
+
+      Utils.wait_for(fn ->
+        Pulsar.Test.Support.DummyConsumer.count_messages(consumer) == 5
+      end)
+
+      all_decoded? =
+        consumer
+        |> Pulsar.Test.Support.DummyConsumer.get_messages()
+        |> Enum.all?(fn message -> message == "Hello, world!" end)
+
+      assert all_decoded?
+    end
   end
 
   describe "Connection Reliability" do

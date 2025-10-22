@@ -23,7 +23,8 @@ defmodule Pulsar.Producer do
     :broker_monitor,
     :sequence_id,
     :pending_sends,
-    :access_mode
+    :access_mode,
+    :compression
   ]
 
   @type t :: %__MODULE__{
@@ -34,7 +35,8 @@ defmodule Pulsar.Producer do
           broker_monitor: reference(),
           sequence_id: integer(),
           pending_sends: %{integer() => {GenServer.from(), map()}},
-          access_mode: atom()
+          access_mode: atom(),
+          compression: :NONE | :LZ4 | :ZLIB | :SNAPPY | :ZSTD
         }
 
   ## Public API
@@ -47,20 +49,22 @@ defmodule Pulsar.Producer do
   - `topic` - The topic to publish to
   - `opts` - Additional options:
     - `:access_mode` - Producer access mode (default: :Shared)
-    - Other GenServer options
+    - `:compression` - Compression algorithm (default: :NONE)
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
   """
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
+    {compression, _genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
 
     producer_config = %{
       topic: topic,
-      access_mode: access_mode
+      access_mode: access_mode,
+      compression: compression
     }
 
-    GenServer.start_link(__MODULE__, producer_config, genserver_opts)
+    GenServer.start_link(__MODULE__, producer_config, [])
   end
 
   @doc """
@@ -90,7 +94,8 @@ defmodule Pulsar.Producer do
 
     %{
       topic: topic,
-      access_mode: access_mode
+      access_mode: access_mode,
+      compression: compression
     } = producer_config
 
     producer_id = System.unique_integer([:positive, :monotonic])
@@ -101,7 +106,8 @@ defmodule Pulsar.Producer do
       producer_name: nil,
       sequence_id: 0,
       pending_sends: %{},
-      access_mode: access_mode
+      access_mode: access_mode,
+      compression: compression
     }
 
     Logger.info("Starting producer for topic #{topic}")
@@ -140,8 +146,12 @@ defmodule Pulsar.Producer do
     message_metadata = %Binary.MessageMetadata{
       producer_name: state.producer_name,
       sequence_id: sequence_id,
-      publish_time: System.system_time(:millisecond)
+      publish_time: System.system_time(:millisecond),
+      uncompressed_size: byte_size(payload),
+      compression: state.compression
     }
+
+    payload = maybe_compress(message_metadata, payload)
 
     case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, payload) do
       :ok ->
@@ -318,5 +328,26 @@ defmodule Pulsar.Producer do
     }
 
     Pulsar.Broker.send_request(broker_pid, close_producer_command)
+  end
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :NONE}, payload) do
+    payload
+  end
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+    :zlib.compress(compressed_payload)
+  end
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :LZ4}, compressed_payload) do
+    NimbleLZ4.compress(compressed_payload)
+  end
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
+    :ezstd.compress(compressed_payload)
+  end
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+    {:ok, payload} = :snappyer.compress(compressed_payload)
+    payload
   end
 end

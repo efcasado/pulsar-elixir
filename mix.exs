@@ -24,10 +24,13 @@ defmodule Pulsar.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:crc32cer, "~> 1.1"},
+      {:ezstd, "~> 1.2"},
       {:jason, "~> 1.4"},
+      {:nimble_lz4, "~> 1.1"},
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.13.0"},
-      {:crc32cer, "~> 1.1"},
+      {:snappyer, "~> 1.2"},
       {:telemetry, "~> 1.0"},
       {:telemetry_test, "~> 0.1.0", only: :test}
       # {:dep_from_hexpm, "~> 0.3.0"},
