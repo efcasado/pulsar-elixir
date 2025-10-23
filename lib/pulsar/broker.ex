@@ -223,10 +223,11 @@ defmodule Pulsar.Broker do
       end
     end)
 
-    # Gracefully stop all producer processes (when we add Producer.stop/1)
+    # Gracefully stop all producer processes
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
+        Pulsar.Producer.stop(producer_pid)
       end
     end)
 
@@ -352,7 +353,9 @@ defmodule Pulsar.Broker do
   end
 
   def disconnected(event_type, event_data, _broker) do
-    Logger.warning("Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state")
+    Logger.warning(
+      "Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state"
+    )
 
     :keep_state_and_data
   end
@@ -471,7 +474,9 @@ defmodule Pulsar.Broker do
 
     updated_broker =
       if consumer_id do
-        Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server")
+        Logger.info(
+          "Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server"
+        )
 
         close_consumer_command = %Binary.CommandCloseConsumer{
           consumer_id: consumer_id,
@@ -483,7 +488,9 @@ defmodule Pulsar.Broker do
             updated_broker
 
           {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}")
+            Logger.warning(
+              "Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}"
+            )
 
             updated_broker
         end
@@ -523,7 +530,11 @@ defmodule Pulsar.Broker do
     end
   end
 
-  def connected({:call, from}, {:publish_message, command_send, message_metadata, payload}, broker) do
+  def connected(
+        {:call, from},
+        {:publish_message, command_send, message_metadata, payload},
+        broker
+      ) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
     encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
@@ -658,13 +669,19 @@ defmodule Pulsar.Broker do
     :keep_state_and_data
   end
 
-  defp handle_command(%Binary.CommandLookupTopicResponse{request_id: request_id} = command, broker) do
+  defp handle_command(
+         %Binary.CommandLookupTopicResponse{request_id: request_id} = command,
+         broker
+       ) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
   end
 
-  defp handle_command(%Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command, broker) do
+  defp handle_command(
+         %Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command,
+         broker
+       ) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
@@ -683,7 +700,8 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_command(
-         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload, broker_metadata},
+         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload,
+          broker_metadata},
          broker
        ) do
     case Map.get(broker.consumers, consumer_id) do
@@ -719,7 +737,9 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {producer_pid, _monitor_ref} ->
-        Logger.info("Broker requested producer #{producer_id} closure, will restart with fresh lookup")
+        Logger.info(
+          "Broker requested producer #{producer_id} closure, will restart with fresh lookup"
+        )
 
         Process.exit(producer_pid, :broker_close_requested)
         :keep_state_and_data
