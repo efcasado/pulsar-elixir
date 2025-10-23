@@ -75,7 +75,6 @@ defmodule Pulsar.Consumer do
     - `:flow_threshold` - Flow permits threshold (default: 50)
     - `:flow_refill` - Flow permits refill (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
-    - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -107,7 +106,7 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp
     }
 
-    GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
+    GenServer.start_link(__MODULE__, consumer_config, [])
   end
 
   @doc """
