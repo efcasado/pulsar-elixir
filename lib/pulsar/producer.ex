@@ -23,7 +23,8 @@ defmodule Pulsar.Producer do
     :broker_monitor,
     :sequence_id,
     :pending_sends,
-    :access_mode
+    :access_mode,
+    :waiting?
   ]
 
   @type t :: %__MODULE__{
@@ -34,7 +35,8 @@ defmodule Pulsar.Producer do
           broker_monitor: reference(),
           sequence_id: integer(),
           pending_sends: %{integer() => {GenServer.from(), map()}},
-          access_mode: atom()
+          access_mode: atom(),
+          waiting?: boolean() | nil
         }
 
   ## Public API
@@ -46,11 +48,28 @@ defmodule Pulsar.Producer do
 
   - `topic` - The topic to publish to
   - `opts` - Additional options:
-    - `:access_mode` - Producer access mode (default: :Shared)
+    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
+      - `:Shared` - Multiple producers can publish on the topic (default)
+      - `:Exclusive` - Only one producer can publish. If another producer tries to connect,
+        it will receive an error immediately. The old producer is evicted if it experiences
+        a network partition with the broker.
+      - `:WaitForExclusive` - If there is already a producer, wait until exclusive access is granted
+      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed immediately
     - Other GenServer options
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
+
+  ## Examples
+
+      # Default shared mode
+      {:ok, producer} = Producer.start_link("persistent://public/default/my-topic")
+
+      # Exclusive mode - only this producer can publish to the topic
+      {:ok, producer} = Producer.start_link(
+        "persistent://public/default/my-topic",
+        access_mode: :Exclusive
+      )
   """
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
@@ -101,7 +120,8 @@ defmodule Pulsar.Producer do
       producer_name: nil,
       sequence_id: 0,
       pending_sends: %{},
-      access_mode: access_mode
+      access_mode: access_mode,
+      waiting?: nil
     }
 
     Logger.info("Starting producer for topic #{topic}")
@@ -127,6 +147,12 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
+  def handle_call({:send_message, _}, _from, %{waiting?: true} = state) do
+    # If we send while Producer has no access, Pulsar closes the connection
+    Logger.warning("Producer #{inspect(state.producer_id)} is waiting, cannot send message")
+    {:reply, {:error, :producer_waiting}, state}
+  end
+
   def handle_call({:send_message, payload}, from, state) do
     sequence_id = state.sequence_id + 1
 
@@ -158,8 +184,8 @@ defmodule Pulsar.Producer do
         )
 
         # Store pending send to correlate with receipt
-        new_pending = Map.put(state.pending_sends, sequence_id, {from, %{}})
-        new_state = %{state | sequence_id: sequence_id, pending_sends: new_pending}
+        new_waiting = Map.put(state.pending_sends, sequence_id, {from, %{}})
+        new_state = %{state | sequence_id: sequence_id, pending_sends: new_waiting}
         {:noreply, new_state}
 
       {:error, reason} ->
@@ -211,6 +237,25 @@ defmodule Pulsar.Producer do
         Logger.warning("Received error for unknown sequence_id #{error.sequence_id}")
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
+    producer_ready = Map.get(command, :producer_ready, true)
+
+    if state.waiting? && producer_ready do
+      Logger.info("Producer #{state.producer_name} granted exclusive access")
+      new_state = %{state | waiting?: false}
+      {:noreply, new_state}
+    else
+      Logger.debug("Received CommandProducerSuccess but not in waiting state or not ready")
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:broker_message, %Binary.CommandCloseProducer{}}, state) do
+    {:stop, :broker_close_requested, state}
   end
 
   @impl true
@@ -268,9 +313,21 @@ defmodule Pulsar.Producer do
       fn ->
         result =
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
-               {:ok, response} <- create_producer(broker_pid, state) do
-            producer_name = response.producer_name
-            {:ok, %{state | broker_pid: broker_pid, producer_name: producer_name}}
+               {:ok, response} <- create_producer(broker_pid, state),
+               producer_ready? <- Map.get(response, :producer_ready, true) do
+            state =
+              state
+              |> Map.put(:broker_pid, broker_pid)
+              |> Map.put(:producer_name, response.producer_name)
+
+            # Check if producer is ready or if we need to wait for WaitForExclusive
+            if producer_ready? do
+              Logger.info("Producer #{response.producer_name} registered and ready")
+              {:ok, Map.put(state, :waiting?, false)}
+            else
+              Logger.info("Producer #{response.producer_name} created but waiting for access")
+              {:ok, Map.put(state, :waiting?, true)}
+            end
           else
             {:error, reason} = error ->
               Logger.error("Producer registration failed: #{inspect(reason)}")
@@ -297,12 +354,10 @@ defmodule Pulsar.Producer do
   end
 
   defp create_producer(broker_pid, state) do
-    request_id = System.unique_integer([:positive, :monotonic])
-
     producer_command = %Binary.CommandProducer{
       topic: state.topic,
       producer_id: state.producer_id,
-      request_id: request_id
+      producer_access_mode: state.access_mode
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
