@@ -41,7 +41,8 @@ defmodule Pulsar.Broker do
     :actions,
     # Broker-specific state
     :consumers,
-    :producers
+    :producers,
+    :producer_names
   ]
 
   @type t :: %__MODULE__{
@@ -59,7 +60,8 @@ defmodule Pulsar.Broker do
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
-          producers: %{integer() => {pid(), reference()}}
+          producers: %{integer() => {pid(), reference()}},
+          producer_names: %{String.t() => integer()}
         }
 
   ## Public API
@@ -260,6 +262,7 @@ defmodule Pulsar.Broker do
       requests: %{},
       consumers: %{},
       producers: %{},
+      producer_names: %{},
       prev_backoff: 0
     }
 
@@ -288,7 +291,8 @@ defmodule Pulsar.Broker do
       | socket: nil,
         prev_backoff: wait,
         consumers: %{},
-        producers: %{}
+        producers: %{},
+        producer_names: %{}
     }
 
     {:keep_state, cleared_broker, actions}
@@ -502,7 +506,13 @@ defmodule Pulsar.Broker do
       Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
     end
 
-    new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
+    new_broker = %{
+      broker
+      | consumers: new_consumers,
+        producers: new_producers,
+        producer_names: new_producer_names
+    }
+
     {:keep_state, new_broker}
   end
 
@@ -730,7 +740,7 @@ defmodule Pulsar.Broker do
     end
   end
 
-  defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id}, broker) do
+  defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id} = command, broker) do
     case Map.get(broker.producers, producer_id) do
       nil ->
         Logger.warning("Received close command for unknown producer #{producer_id}")
@@ -741,7 +751,8 @@ defmodule Pulsar.Broker do
           "Broker requested producer #{producer_id} closure, will restart with fresh lookup"
         )
 
-        Process.exit(producer_pid, :broker_close_requested)
+        # Send the CommandCloseProducer to the producer to handle gracefully
+        send(producer_pid, {:broker_message, command})
         :keep_state_and_data
     end
   end
@@ -767,6 +778,22 @@ defmodule Pulsar.Broker do
       nil ->
         Logger.warning("Received send error for unknown producer #{producer_id}")
         :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandProducerSuccess{} = command, broker) do
+    # CommandProducerSuccess can arrive twice for WaitForExclusive mode:
+    # 1. First with producer_ready: false (pending state) - request_id in broker.requests
+    # 2. Second with producer_ready: true (final state) - request_id NOT in broker.requests (already cleaned up)
+    request_id = command.request_id
+
+    # Check if this request_id is still pending in broker.requests
+    if Map.has_key?(broker.requests, request_id) do
+      # Initial registration response - request is still pending
+      handle_producer_registration_response(command, broker, request_id)
+    else
+      # Subsequent notification - request was already completed
+      handle_producer_ready_notification(command, broker)
     end
   end
 
@@ -975,5 +1002,56 @@ defmodule Pulsar.Broker do
           {found_id, acc_map}
         end
     end)
+  end
+
+  # Handle initial producer registration response (request_id present)
+  defp handle_producer_registration_response(command, broker, request_id) do
+    producer_name = command.producer_name
+    {{producer_pid, _ref}, _timestamp} = Map.get(broker.requests, request_id)
+
+    # Find the producer_id for the producer that made this request
+    producer_id =
+      Enum.find_value(broker.producers, fn
+        {producer_id, {pid, _ref}} when pid == producer_pid -> producer_id
+        _ -> nil
+      end)
+
+    updated_broker =
+      if producer_id do
+        # Store the producer_name -> producer_id mapping for lookups
+        new_producer_names = Map.put(broker.producer_names, producer_name, producer_id)
+        %{broker | producer_names: new_producer_names}
+      else
+        Logger.warning("Could not find producer_id for request #{request_id}")
+        broker
+      end
+
+    new_broker = reply_to_request(updated_broker, request_id, {:ok, command})
+    {:keep_state, new_broker}
+  end
+
+  # Handle subsequent producer ready notification
+  defp handle_producer_ready_notification(command, broker) do
+    producer_name = command.producer_name
+
+    case Map.get(broker.producer_names, producer_name) do
+      nil ->
+        Logger.warning(
+          "Received CommandProducerSuccess for unknown producer_name: #{producer_name}"
+        )
+
+        :keep_state_and_data
+
+      producer_id ->
+        case Map.get(broker.producers, producer_id) do
+          {producer_pid, _ref} ->
+            send(producer_pid, {:broker_message, command})
+            :keep_state_and_data
+
+          nil ->
+            Logger.warning("Producer #{producer_id} not found for producer_name #{producer_name}")
+            :keep_state_and_data
+        end
+    end
   end
 end
