@@ -80,7 +80,7 @@ defmodule Pulsar.ProducerGroup do
     producer_count = Keyword.get(opts, :producer_count, 1)
 
     Logger.info(
-      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers"
+      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
     )
 
     # Create child specs for each producer in the group
