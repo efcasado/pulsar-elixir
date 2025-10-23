@@ -217,11 +217,11 @@ defmodule Pulsar.Broker do
       end
     end)
 
-    # Gracefully stop all producer processes (when we add Producer.stop/1)
+    # Gracefully stop all producer processes
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
-        # TODO: Add Pulsar.Producer.stop(producer_pid) when we implement producers
+        Pulsar.Producer.stop(producer_pid)
       end
     end)
 
