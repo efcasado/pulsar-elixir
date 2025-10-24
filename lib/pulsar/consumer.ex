@@ -270,7 +270,9 @@ defmodule Pulsar.Consumer do
         state
       ) do
     base_message_id = message_id(command)
-    state = decrement_permits(state)
+
+    num_messages = length(payload)
+    state = decrement_permits(state, num_messages)
 
     final_callback_state =
       payload
@@ -490,8 +492,8 @@ defmodule Pulsar.Consumer do
     Pulsar.Broker.send_request(broker_pid, seek_command)
   end
 
-  defp decrement_permits(state) do
-    new_permits = max(state.flow_outstanding_permits - 1, 0)
+  defp decrement_permits(state, count \\ 1) do
+    new_permits = max(state.flow_outstanding_permits - count, 0)
     %{state | flow_outstanding_permits: new_permits}
   end
 
@@ -508,7 +510,8 @@ defmodule Pulsar.Consumer do
     if current_permits <= refill_threshold do
       case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
         :ok ->
-          %{state | flow_outstanding_permits: current_permits + refill_amount}
+          new_permits = current_permits + refill_amount
+          %{state | flow_outstanding_permits: new_permits}
 
         error ->
           Logger.error("Failed to send flow command: #{inspect(error)}")
@@ -559,7 +562,7 @@ defmodule Pulsar.Consumer do
       consumer_id: consumer_id
     }
 
-    Pulsar.Broker.send_request(broker_pid, close_consumer_command)
+    :ok = Pulsar.Broker.send_command(broker_pid, close_consumer_command)
   end
 
   defp maybe_add_message_id(command, nil), do: command
