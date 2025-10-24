@@ -431,7 +431,6 @@ defmodule Pulsar.Broker do
 
   # Consumer/Producer registration with monitoring
   def connected({:call, from}, {:register_consumer, consumer_id, consumer_pid}, broker) do
-    Logger.debug("XXX :register_consumer")
     # Monitor the consumer process
     monitor_ref = Process.monitor(consumer_pid)
 
@@ -481,7 +480,7 @@ defmodule Pulsar.Broker do
       {:ok, new_broker} ->
         {:keep_state, new_broker}
 
-      {{:error, reason}, new_broker} ->
+      {{:error, _reason}, new_broker} ->
         {:keep_state, new_broker}
     end
   end
