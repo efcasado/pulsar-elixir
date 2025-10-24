@@ -87,7 +87,7 @@ defmodule Pulsar.Consumer do
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
-    {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
+    {start_timestamp, _genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -492,7 +492,7 @@ defmodule Pulsar.Consumer do
     Pulsar.Broker.send_request(broker_pid, seek_command)
   end
 
-  defp decrement_permits(state, count \\ 1) do
+  defp decrement_permits(state, count) do
     new_permits = max(state.flow_outstanding_permits - count, 0)
     %{state | flow_outstanding_permits: new_permits}
   end
@@ -562,7 +562,7 @@ defmodule Pulsar.Consumer do
       consumer_id: consumer_id
     }
 
-    :ok = Pulsar.Broker.send_command(broker_pid, close_consumer_command)
+    Pulsar.Broker.send_request(broker_pid, close_consumer_command)
   end
 
   defp maybe_add_message_id(command, nil), do: command

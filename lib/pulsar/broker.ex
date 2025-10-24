@@ -115,7 +115,7 @@ defmodule Pulsar.Broker do
   """
   @spec send_command(GenServer.server(), struct()) :: :ok | {:error, term()}
   def send_command(broker, command) do
-    :gen_statem.call(broker, {:send_command, command})
+    :gen_statem.cast(broker, {:send_command, command})
   end
 
   @doc """
@@ -473,15 +473,14 @@ defmodule Pulsar.Broker do
   end
 
   # Command sending
-  def connected({:call, from}, {:send_command, command}, broker) do
+  def connected(:cast, {:send_command, command}, broker) do
     case send_command_internal(command, broker) do
       {:ok, new_broker} ->
-        actions = [{:reply, from, :ok}]
-        {:keep_state, new_broker, actions}
+        {:keep_state, new_broker}
 
       {{:error, reason}, new_broker} ->
-        actions = [{:reply, from, {:error, reason}}]
-        {:keep_state, new_broker, actions}
+        Logger.error("Failed to send command #{inspect(command)}: #{inspect(reason)}")
+        {:keep_state, new_broker}
     end
   end
 
