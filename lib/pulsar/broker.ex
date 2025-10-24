@@ -838,17 +838,23 @@ defmodule Pulsar.Broker do
     end
   end
 
-  defp parse_data(<<total_size::32, _rest::binary>> = data, buffer, 0, broker, commands)
+  defp parse_data(data, buffer, 0, broker, commands) when byte_size(buffer) > 0 do
+    parse_data(buffer <> data, <<>>, 0, broker, commands)
+  end
+
+  defp parse_data(data, <<>>, 0, broker, commands) when byte_size(data) < 4 do
+    parse_data(<<>>, data, 0, broker, commands)
+  end
+
+  defp parse_data(<<total_size::32, _rest::binary>> = data, <<>>, 0, broker, commands)
        when total_size + 4 > byte_size(data) do
-    # Incomplete message
-    new_buffer = buffer <> data
     new_pending = total_size + 4 - byte_size(data)
-    parse_data(<<>>, new_buffer, new_pending, broker, commands)
+    parse_data(<<>>, data, new_pending, broker, commands)
   end
 
   defp parse_data(
          <<total_size::32, size::32, command_data::bytes-size(total_size - 4), rest::binary>>,
-         _buffer,
+         <<>>,
          0,
          broker,
          commands
