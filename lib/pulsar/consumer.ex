@@ -562,7 +562,7 @@ defmodule Pulsar.Consumer do
       consumer_id: consumer_id
     }
 
-    :ok = Pulsar.Broker.send_command(broker_pid, close_consumer_command)
+    Pulsar.Broker.send_request(broker_pid, close_consumer_command)
   end
 
   defp maybe_add_message_id(command, nil), do: command
