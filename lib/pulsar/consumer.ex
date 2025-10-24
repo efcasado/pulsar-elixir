@@ -296,7 +296,7 @@ defmodule Pulsar.Consumer do
               message_id: [message_id_to_ack]
             }
 
-            {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+            :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
 
             new_callback_state
 
@@ -366,7 +366,7 @@ defmodule Pulsar.Consumer do
   end
 
   def terminate(reason, state) do
-    {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
+    close_consumer(state.broker_pid, state.consumer_id)
 
     # Call callback module's terminate function if it exists
     if function_exported?(state.callback_module, :terminate, 2) do
