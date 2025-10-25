@@ -216,6 +216,15 @@ defmodule Pulsar.Protocol do
     |> String.to_existing_atom()
   end
 
+  defp unwrap_messages(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
+    {:ok, payload} = NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
+
+    case metadata.num_messages_in_batch > 0 do
+      true -> parse_batch_messages(payload, metadata.num_messages_in_batch, [])
+      false -> [{nil, payload}]
+    end
+  end
+
   defp unwrap_messages(metadata, payload) do
     case metadata.num_messages_in_batch > 0 do
       true -> parse_batch_messages(payload, metadata.num_messages_in_batch, [])

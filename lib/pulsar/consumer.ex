@@ -75,7 +75,6 @@ defmodule Pulsar.Consumer do
     - `:flow_threshold` - Flow permits threshold (default: 50)
     - `:flow_refill` - Flow permits refill (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
-    - Other GenServer options
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -88,7 +87,7 @@ defmodule Pulsar.Consumer do
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
-    {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
+    {start_timestamp, _genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -107,7 +106,7 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp
     }
 
-    GenServer.start_link(__MODULE__, consumer_config, genserver_opts)
+    GenServer.start_link(__MODULE__, consumer_config, [])
   end
 
   @doc """
@@ -271,7 +270,9 @@ defmodule Pulsar.Consumer do
         state
       ) do
     base_message_id = message_id(command)
-    state = decrement_permits(state)
+
+    num_messages = length(payload)
+    state = decrement_permits(state, num_messages)
 
     final_callback_state =
       payload
@@ -491,8 +492,8 @@ defmodule Pulsar.Consumer do
     Pulsar.Broker.send_request(broker_pid, seek_command)
   end
 
-  defp decrement_permits(state) do
-    new_permits = max(state.flow_outstanding_permits - 1, 0)
+  defp decrement_permits(state, count) do
+    new_permits = max(state.flow_outstanding_permits - count, 0)
     %{state | flow_outstanding_permits: new_permits}
   end
 
@@ -509,7 +510,8 @@ defmodule Pulsar.Consumer do
     if current_permits <= refill_threshold do
       case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
         :ok ->
-          %{state | flow_outstanding_permits: current_permits + refill_amount}
+          new_permits = current_permits + refill_amount
+          %{state | flow_outstanding_permits: new_permits}
 
         error ->
           Logger.error("Failed to send flow command: #{inspect(error)}")
