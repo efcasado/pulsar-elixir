@@ -685,8 +685,16 @@ defmodule Pulsar do
   end
 
   defp broker_opts(opts) do
-    opts
-    |> Keyword.take(@supported_broker_opts)
-    |> Enum.reject(fn {_, v} -> is_nil(v) end)
+    app_opts =
+      @supported_broker_opts
+      |> Enum.map(fn key -> {key, Application.get_env(:pulsar, key)} end)
+      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+
+    passed_opts =
+      opts
+      |> Keyword.take(@supported_broker_opts)
+      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+
+    Keyword.merge(app_opts, passed_opts)
   end
 end
