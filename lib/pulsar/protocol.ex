@@ -133,6 +133,8 @@ defmodule Pulsar.Protocol do
       Binary.BaseCommand.decode(command)
       |> do_decode
 
+    payload = maybe_uncompress(metadata, payload)
+
     # Handle batch messages
     payload = unwrap_messages(metadata, payload)
 
