@@ -102,7 +102,13 @@ config :pulsar,
           flow_refill: 50,
           initial_position: :earliest
           durable: true,
-          force_create_topic: true
+          force_create_topic: true,
+          dead_letter_policy: [
+            max_redelivery: 3,
+            topic: "persistent://my-tenant/my-namespace/my-topic-my-subscription-DLQ"
+            producer: "my-topic-my-subscription-my-consumer-13243-DLQ"
+          ],
+          redelivery_interval: 1000
         ]
     ]
   ],

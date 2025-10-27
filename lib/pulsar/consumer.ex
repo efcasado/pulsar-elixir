@@ -36,7 +36,9 @@ defmodule Pulsar.Consumer do
     :durable,
     :force_create_topic,
     :start_message_id,
-    :start_timestamp
+    :start_timestamp,
+    :nacked_messages,
+    :redelivery_interval
   ]
 
   @type t :: %__MODULE__{
@@ -55,7 +57,9 @@ defmodule Pulsar.Consumer do
           initial_position: atom(),
           force_create_topic: boolean(),
           start_message_id: {non_neg_integer(), non_neg_integer()},
-          start_timestamp: non_neg_integer()
+          start_timestamp: non_neg_integer(),
+          nacked_messages: MapSet.t(),
+          redelivery_interval: non_neg_integer() | nil
         }
 
   ## Public API
@@ -75,6 +79,7 @@ defmodule Pulsar.Consumer do
     - `:flow_threshold` - Flow permits threshold (default: 50)
     - `:flow_refill` - Flow permits refill (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
+    - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -87,7 +92,10 @@ defmodule Pulsar.Consumer do
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
-    {start_timestamp, _genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
+    {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
+
+    {redelivery_interval, _genserver_opts} =
+      Keyword.pop(genserver_opts, :redelivery_interval, nil)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -103,7 +111,8 @@ defmodule Pulsar.Consumer do
       durable: durable,
       force_create_topic: force_create_topic,
       start_message_id: start_message_id,
-      start_timestamp: start_timestamp
+      start_timestamp: start_timestamp,
+      redelivery_interval: redelivery_interval
     }
 
     GenServer.start_link(__MODULE__, consumer_config, [])
@@ -134,7 +143,8 @@ defmodule Pulsar.Consumer do
       durable: durable,
       force_create_topic: force_create_topic,
       start_message_id: start_message_id,
-      start_timestamp: start_timestamp
+      start_timestamp: start_timestamp,
+      redelivery_interval: redelivery_interval
     } = consumer_config
 
     state = %__MODULE__{
@@ -151,7 +161,9 @@ defmodule Pulsar.Consumer do
       durable: durable,
       force_create_topic: force_create_topic,
       start_message_id: start_message_id,
-      start_timestamp: start_timestamp
+      start_timestamp: start_timestamp,
+      nacked_messages: MapSet.new(),
+      redelivery_interval: redelivery_interval
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -240,6 +252,7 @@ defmodule Pulsar.Consumer do
     case send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial) do
       :ok ->
         broker_monitor = Process.monitor(state.broker_pid)
+        schedule_redelivery(state.redelivery_interval)
 
         {:noreply,
          %__MODULE__{
@@ -274,11 +287,11 @@ defmodule Pulsar.Consumer do
     num_messages = length(payload)
     state = decrement_permits(state, num_messages)
 
-    final_callback_state =
+    {final_callback_state, nacked_ids} =
       payload
       |> Enum.with_index()
-      |> Enum.reduce(state.callback_state, fn {{msg_metadata, msg_payload}, index},
-                                              callback_state ->
+      |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index},
+                                                    {callback_state, nacked_acc} ->
         msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
 
         message_id_to_ack =
@@ -300,28 +313,68 @@ defmodule Pulsar.Consumer do
 
             {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
 
-            new_callback_state
+            {new_callback_state, nacked_acc}
 
           {:error, reason, new_callback_state} ->
-            Logger.warning("Message processing failed: #{inspect(reason)}, not acknowledging")
+            Logger.warning(
+              "Message processing failed: #{inspect(reason)}, tracking for redelivery"
+            )
 
-            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
-            # this feature in the Elixir client.
-            new_callback_state
+            {new_callback_state, [message_id_to_ack | nacked_acc]}
 
           unexpected_result ->
             Logger.warning(
               "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
             )
 
-            # TO-DO: Implement NACK-ing. Not supported by binary protocol. Requires implementing
-            # this feature in the Elixir client.
-            callback_state
+            {callback_state, nacked_acc}
         end
       end)
 
     state = check_and_refill_permits(state)
-    new_state = %{state | callback_state: final_callback_state}
+
+    new_nacked_messages =
+      if state.redelivery_interval do
+        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
+      else
+        state.nacked_messages
+      end
+
+    new_state = %{
+      state
+      | callback_state: final_callback_state,
+        nacked_messages: new_nacked_messages
+    }
+
+    {:noreply, new_state}
+  end
+
+  # Handle periodic redelivery
+  @impl true
+  def handle_info(:trigger_redelivery, state) do
+    new_state =
+      if MapSet.size(state.nacked_messages) > 0 do
+        nacked_list = MapSet.to_list(state.nacked_messages)
+
+        redeliver_command = %Binary.CommandRedeliverUnacknowledgedMessages{
+          consumer_id: state.consumer_id,
+          message_ids: nacked_list
+        }
+
+        case Pulsar.Broker.send_command(state.broker_pid, redeliver_command) do
+          :ok ->
+            Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
+            %{state | nacked_messages: MapSet.new()}
+
+          {:error, reason} ->
+            Logger.error("Failed to send redelivery command: #{inspect(reason)}")
+            state
+        end
+      else
+        state
+      end
+
+    schedule_redelivery(state.redelivery_interval)
     {:noreply, new_state}
   end
 
@@ -575,5 +628,12 @@ defmodule Pulsar.Consumer do
 
   defp maybe_add_timestamp(command, timestamp) do
     %{command | message_publish_time: timestamp}
+  end
+
+  defp schedule_redelivery(nil), do: :ok
+
+  defp schedule_redelivery(interval) when is_integer(interval) and interval > 0 do
+    Process.send_after(self(), :trigger_redelivery, interval)
+    :ok
   end
 end
