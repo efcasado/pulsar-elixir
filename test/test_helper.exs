@@ -1,5 +1,7 @@
 alias Pulsar.Test.Support.System
 
+Logger.configure(level: :info)
+
 Application.ensure_all_started(:telemetry_test)
 
 :ok = System.start_pulsar()
