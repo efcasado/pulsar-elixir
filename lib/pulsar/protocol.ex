@@ -170,6 +170,10 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandCloseConsumer{}), do: :CLOSE_CONSUMER
   defp command_to_type(%Binary.CommandCloseProducer{}), do: :CLOSE_PRODUCER
   defp command_to_type(%Binary.CommandSeek{}), do: :SEEK
+
+  defp command_to_type(%Binary.CommandRedeliverUnacknowledgedMessages{}),
+    do: :REDELIVER_UNACKNOWLEDGED_MESSAGES
+
   # defp command_to_type(command) do
   #   command
   #   |> Map.get(:__struct__)
@@ -211,6 +215,10 @@ defmodule Pulsar.Protocol do
 
   defp field_name_from_type(:SEND_ERROR) do
     :send_error
+  end
+
+  defp field_name_from_type(:REDELIVER_UNACKNOWLEDGED_MESSAGES) do
+    :redeliverUnacknowledgedMessages
   end
 
   defp field_name_from_type(type) do
