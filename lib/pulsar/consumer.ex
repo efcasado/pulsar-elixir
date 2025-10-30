@@ -14,10 +14,11 @@ defmodule Pulsar.Consumer do
   """
 
   use GenServer
-  require Logger
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
+
+  require Logger
 
   defstruct [
     :topic,
@@ -196,7 +197,7 @@ defmodule Pulsar.Consumer do
   def handle_continue({:init_callback, init_args}, state) do
     case apply(state.callback_module, :init, [init_args]) do
       {:ok, callback_state} ->
-        {:noreply, %__MODULE__{state | callback_state: callback_state}, {:continue, :subscribe}}
+        {:noreply, %{state | callback_state: callback_state}, {:continue, :subscribe}}
 
       {:error, reason} ->
         {:stop, reason, nil}
@@ -220,7 +221,7 @@ defmodule Pulsar.Consumer do
       consumer_name = Map.get(response, :consumer_name, "unknown")
 
       {:noreply,
-       %__MODULE__{
+       %{
          state
          | consumer_id: state.consumer_id,
            consumer_name: consumer_name,
@@ -284,7 +285,7 @@ defmodule Pulsar.Consumer do
         schedule_redelivery(state.redelivery_interval)
 
         {:noreply,
-         %__MODULE__{
+         %{
            state
            | broker_monitor: broker_monitor,
              flow_outstanding_permits: state.flow_initial
@@ -300,7 +301,7 @@ defmodule Pulsar.Consumer do
       case start_dead_letter_producer(state) do
         {:ok, producer_pid} ->
           Logger.info("Started dead letter producer for consumer on topic #{state.topic}")
-          {:noreply, %__MODULE__{state | dead_letter_producer_pid: producer_pid}}
+          {:noreply, %{state | dead_letter_producer_pid: producer_pid}}
 
         {:error, reason} ->
           Logger.error("Failed to start dead letter producer: #{inspect(reason)}")
@@ -316,17 +317,11 @@ defmodule Pulsar.Consumer do
   end
 
   @impl true
-  def handle_info(
-        {:broker_message, %Binary.CommandCloseConsumer{}},
-        state
-      ) do
+  def handle_info({:broker_message, %Binary.CommandCloseConsumer{}}, state) do
     {:stop, :broker_close_requested, state}
   end
 
-  def handle_info(
-        {:broker_message, {command, metadata, payload, broker_metadata}},
-        state
-      ) do
+  def handle_info({:broker_message, {command, metadata, payload, broker_metadata}}, state) do
     base_message_id = message_id(command)
     redelivery_count = Map.get(command, :redelivery_count, 0)
 
@@ -336,15 +331,14 @@ defmodule Pulsar.Consumer do
     {final_callback_state, nacked_ids} =
       payload
       |> Enum.with_index()
-      |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index},
-                                                    {callback_state, nacked_acc} ->
+      |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index}, {callback_state, nacked_acc} ->
         msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
 
         message_id_to_ack =
-          if msg_metadata != nil do
-            %{base_message_id | batch_index: index}
-          else
+          if msg_metadata == nil do
             base_message_id
+          else
+            %{base_message_id | batch_index: index}
           end
 
         result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
@@ -379,9 +373,7 @@ defmodule Pulsar.Consumer do
                   {new_callback_state, nacked_acc}
 
                 {:error, dlq_reason} ->
-                  Logger.error(
-                    "Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked"
-                  )
+                  Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
 
                   {new_callback_state, [message_id_to_ack | nacked_acc]}
               end
@@ -394,9 +386,7 @@ defmodule Pulsar.Consumer do
             end
 
           unexpected_result ->
-            Logger.warning(
-              "Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging"
-            )
+            Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
 
             {callback_state, nacked_acc}
         end
@@ -455,9 +445,7 @@ defmodule Pulsar.Consumer do
         {:DOWN, monitor_ref, :process, broker_pid, reason},
         %__MODULE__{broker_monitor: monitor_ref, broker_pid: broker_pid} = state
       ) do
-    Logger.info(
-      "Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, consumer will restart"
-    )
+    Logger.info("Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, consumer will restart")
 
     {:stop, :broker_crashed, state}
   end
@@ -570,14 +558,7 @@ defmodule Pulsar.Consumer do
   defp initial_position(:latest), do: :Latest
   defp initial_position(:earliest), do: :Earliest
 
-  defp subscribe_to_topic(
-         broker_pid,
-         topic,
-         subscription_name,
-         subscription_type,
-         consumer_id,
-         opts
-       ) do
+  defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id, opts) do
     request_id = System.unique_integer([:positive, :monotonic])
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
     durable = Keyword.get(opts, :durable, true)
@@ -746,7 +727,9 @@ defmodule Pulsar.Consumer do
   end
 
   defp send_to_dead_letter(state, payload, _message_id) do
-    if state.dead_letter_producer_pid != nil do
+    if state.dead_letter_producer_pid == nil do
+      {:error, :no_dead_letter_producer}
+    else
       case Pulsar.Producer.send_message(state.dead_letter_producer_pid, payload) do
         {:ok, _dlq_message_id} ->
           :ok
@@ -754,8 +737,6 @@ defmodule Pulsar.Consumer do
         {:error, _reason} = error ->
           error
       end
-    else
-      {:error, :no_dead_letter_producer}
     end
   end
 end

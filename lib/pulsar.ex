@@ -59,8 +59,10 @@ defmodule Pulsar do
       # Service discovery via broker
       {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
   """
-  alias Pulsar.Protocol.Binary
   use Application
+
+  alias Pulsar.Protocol.Binary
+
   require Logger
 
   @supported_broker_opts [
@@ -138,8 +140,7 @@ defmodule Pulsar do
 
     Process.sleep(start_delay_ms)
 
-    consumers
-    |> Enum.each(fn {consumer_name, consumer_opts} ->
+    Enum.each(consumers, fn {consumer_name, consumer_opts} ->
       topic = Keyword.fetch!(consumer_opts, :topic)
       subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
       callback_module = Keyword.fetch!(consumer_opts, :callback_module)
@@ -152,8 +153,7 @@ defmodule Pulsar do
       Pulsar.start_consumer(topic, subscription_name, callback_module, opts)
     end)
 
-    producers
-    |> Enum.each(fn {producer_name, producer_opts} ->
+    Enum.each(producers, fn {producer_name, producer_opts} ->
       topic = Keyword.fetch!(producer_opts, :topic)
 
       opts =

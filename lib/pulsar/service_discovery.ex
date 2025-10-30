@@ -9,9 +9,9 @@ defmodule Pulsar.ServiceDiscovery do
       {:ok, broker_pid} = Pulsar.ServiceDiscovery.lookup_topic("persistent://public/default/my-topic")
   """
 
-  require Logger
-
   alias Pulsar.Utils
+
+  require Logger
 
   @spec lookup_topic(String.t()) :: {:ok, pid()} | {:error, any()}
   def lookup_topic(topic) do
@@ -19,9 +19,7 @@ defmodule Pulsar.ServiceDiscovery do
       [:pulsar, :service_discovery, :lookup_topic],
       %{},
       fn ->
-        result =
-          Utils.broker()
-          |> lookup_topic(topic, false)
+        result = lookup_topic(Utils.broker(), topic, false)
 
         metadata = %{success: match?({:ok, _}, result)}
         {result, metadata}
@@ -33,13 +31,13 @@ defmodule Pulsar.ServiceDiscovery do
     case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do
       {:ok, %{response: :Connect} = response} ->
         response
-        |> get_broker_url
+        |> get_broker_url()
         |> Pulsar.start_broker()
 
       {:ok, %{response: :Redirect, authoritative: authoritative} = response} ->
         {:ok, broker} =
           response
-          |> get_broker_url
+          |> get_broker_url()
           |> Pulsar.start_broker()
 
         lookup_topic(broker, topic, authoritative)

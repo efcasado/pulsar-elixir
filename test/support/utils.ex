@@ -1,4 +1,5 @@
 defmodule Pulsar.Test.Support.Utils do
+  @moduledoc false
   def wait_for(_fun, attempts \\ 100, interval_ms \\ 100)
 
   def wait_for(_fun, 0, _interval_ms) do
@@ -6,13 +7,11 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   def wait_for(fun, attempts, interval_ms) do
-    case fun.() do
-      true ->
-        :ok
-
-      false ->
-        Process.sleep(interval_ms)
-        wait_for(fun, attempts - 1, interval_ms)
+    if fun.() do
+      :ok
+    else
+      Process.sleep(interval_ms)
+      wait_for(fun, attempts - 1, interval_ms)
     end
   end
 
@@ -69,7 +68,7 @@ defmodule Pulsar.Test.Support.Utils do
   defp aggregate_flow_stats(events) do
     events
     |> Enum.group_by(& &1.consumer_id)
-    |> Enum.map(fn {consumer_id, consumer_events} ->
+    |> Map.new(fn {consumer_id, consumer_events} ->
       stats = %{
         consumer_id: consumer_id,
         event_count: length(consumer_events),
@@ -78,7 +77,6 @@ defmodule Pulsar.Test.Support.Utils do
 
       {consumer_id, stats}
     end)
-    |> Map.new()
   end
 
   defp aggregate_success_stats(events) do

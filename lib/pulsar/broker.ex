@@ -19,9 +19,10 @@ defmodule Pulsar.Broker do
 
   @behaviour :gen_statem
 
-  require Logger
   alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+
+  require Logger
 
   # Main connection state (unified from Connection)
   defstruct [
@@ -273,7 +274,7 @@ defmodule Pulsar.Broker do
 
     actions = [{{:timeout, :reconnect}, wait, nil}]
     # Clear consumers and producers since we've restarted them
-    cleared_broker = %__MODULE__{
+    cleared_broker = %{
       broker
       | socket: nil,
         prev_backoff: wait,
@@ -321,7 +322,7 @@ defmodule Pulsar.Broker do
       {:ok, socket} ->
         Logger.debug("Connection succeeded")
         actions = [{:next_event, :internal, :handshake}]
-        {:next_state, :connected, %__MODULE__{broker | socket: socket, prev_backoff: 0}, actions}
+        {:next_state, :connected, %{broker | socket: socket, prev_backoff: 0}, actions}
 
       {:error, error} ->
         wait = next_backoff(broker)
@@ -329,7 +330,7 @@ defmodule Pulsar.Broker do
         Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
 
         actions = [{{:timeout, :reconnect}, wait, nil}]
-        {:keep_state, %__MODULE__{broker | prev_backoff: wait}, actions}
+        {:keep_state, %{broker | prev_backoff: wait}, actions}
     end
   end
 
@@ -339,9 +340,7 @@ defmodule Pulsar.Broker do
   end
 
   def disconnected(event_type, event_data, _broker) do
-    Logger.warning(
-      "Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state"
-    )
+    Logger.warning("Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state")
 
     :keep_state_and_data
   end
@@ -484,11 +483,7 @@ defmodule Pulsar.Broker do
     end
   end
 
-  def connected(
-        {:call, from},
-        {:publish_message, command_send, message_metadata, payload},
-        broker
-      ) do
+  def connected({:call, from}, {:publish_message, command_send, message_metadata, payload}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
     # Encode the message with payload
@@ -614,19 +609,13 @@ defmodule Pulsar.Broker do
     :keep_state_and_data
   end
 
-  defp handle_command(
-         %Binary.CommandLookupTopicResponse{request_id: request_id} = command,
-         broker
-       ) do
+  defp handle_command(%Binary.CommandLookupTopicResponse{request_id: request_id} = command, broker) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
   end
 
-  defp handle_command(
-         %Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command,
-         broker
-       ) do
+  defp handle_command(%Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command, broker) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
@@ -645,8 +634,7 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_command(
-         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload,
-          broker_metadata},
+         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload, broker_metadata},
          broker
        ) do
     case Map.get(broker.consumers, consumer_id) do
@@ -682,9 +670,7 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {producer_pid, _monitor_ref} ->
-        Logger.info(
-          "Broker requested producer #{producer_id} closure, will restart with fresh lookup"
-        )
+        Logger.info("Broker requested producer #{producer_id} closure, will restart with fresh lookup")
 
         Process.exit(producer_pid, :broker_close_requested)
         :keep_state_and_data

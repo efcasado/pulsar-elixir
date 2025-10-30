@@ -1,14 +1,15 @@
 defmodule Pulsar.Protocol do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
-  @doc """
-  Helper module to simplify working with the Pulsar binary protocol.
-  """
-
+  @moduledoc false
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
 
-  def latest_version() do
+  @doc """
+  Helper module to simplify working with the Pulsar binary protocol.
+  """
+
+  def latest_version do
     %Binary.ProtocolVersion{}
     |> Map.keys()
     |> Enum.map(&Atom.to_string(&1))
@@ -84,19 +85,11 @@ defmodule Pulsar.Protocol do
   end
 
   # Message command with broker entry metadata
-  def decode(<<
-        _total_size::32,
-        size::32,
-        command::bytes-size(size),
-        0x0E02::16,
-        broker_metadata_size::32,
-        broker_metadata::bytes-size(broker_metadata_size),
-        0x0E01::16,
-        _checksum::32,
-        metadata_size::32,
-        metadata::bytes-size(metadata_size),
-        payload::binary
-      >>) do
+  def decode(
+        <<_total_size::32, size::32, command::bytes-size(size), 0x0E02::16, broker_metadata_size::32,
+          broker_metadata::bytes-size(broker_metadata_size), 0x0E01::16, _checksum::32, metadata_size::32,
+          metadata::bytes-size(metadata_size), payload::binary>>
+      ) do
     # Decode broker entry metadata
     broker_entry_metadata = Binary.BrokerEntryMetadata.decode(broker_metadata)
 
@@ -104,8 +97,9 @@ defmodule Pulsar.Protocol do
     message_metadata = Binary.MessageMetadata.decode(metadata)
 
     command =
-      Binary.BaseCommand.decode(command)
-      |> do_decode
+      command
+      |> Binary.BaseCommand.decode()
+      |> do_decode()
 
     payload = maybe_uncompress(message_metadata, payload)
 
@@ -116,22 +110,17 @@ defmodule Pulsar.Protocol do
   end
 
   # Message command without broker entry metadata (original format)
-  def decode(<<
-        _total_size::32,
-        size::32,
-        command::bytes-size(size),
-        0x0E01::16,
-        _checksum::32,
-        metadata_size::32,
-        metadata::bytes-size(metadata_size),
-        payload::binary
-      >>) do
+  def decode(
+        <<_total_size::32, size::32, command::bytes-size(size), 0x0E01::16, _checksum::32, metadata_size::32,
+          metadata::bytes-size(metadata_size), payload::binary>>
+      ) do
     # message command
     metadata = Binary.MessageMetadata.decode(metadata)
 
     command =
-      Binary.BaseCommand.decode(command)
-      |> do_decode
+      command
+      |> Binary.BaseCommand.decode()
+      |> do_decode()
 
     payload = maybe_uncompress(metadata, payload)
 
@@ -143,8 +132,9 @@ defmodule Pulsar.Protocol do
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
     # single command
-    Binary.BaseCommand.decode(command)
-    |> do_decode
+    command
+    |> Binary.BaseCommand.decode()
+    |> do_decode()
   end
 
   defp do_decode(%Binary.BaseCommand{} = base_command) do
@@ -171,8 +161,7 @@ defmodule Pulsar.Protocol do
   defp command_to_type(%Binary.CommandCloseProducer{}), do: :CLOSE_PRODUCER
   defp command_to_type(%Binary.CommandSeek{}), do: :SEEK
 
-  defp command_to_type(%Binary.CommandRedeliverUnacknowledgedMessages{}),
-    do: :REDELIVER_UNACKNOWLEDGED_MESSAGES
+  defp command_to_type(%Binary.CommandRedeliverUnacknowledgedMessages{}), do: :REDELIVER_UNACKNOWLEDGED_MESSAGES
 
   # defp command_to_type(command) do
   #   command
@@ -185,8 +174,7 @@ defmodule Pulsar.Protocol do
   defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     field_name = field_name_from_type(type)
 
-    base_command
-    |> Map.fetch!(field_name)
+    Map.fetch!(base_command, field_name)
   end
 
   defp field_name_from_type(:LOOKUP) do
@@ -251,9 +239,10 @@ defmodule Pulsar.Protocol do
   end
 
   defp unwrap_messages(metadata, payload) do
-    case metadata.num_messages_in_batch > 0 do
-      true -> parse_batch_messages(payload, metadata.num_messages_in_batch, [])
-      false -> [{nil, payload}]
+    if metadata.num_messages_in_batch > 0 do
+      parse_batch_messages(payload, metadata.num_messages_in_batch, [])
+    else
+      [{nil, payload}]
     end
   end
 
@@ -261,11 +250,7 @@ defmodule Pulsar.Protocol do
   defp parse_batch_messages(_, 0, acc), do: Enum.reverse(acc)
 
   defp parse_batch_messages(
-         <<
-           metadata_size::32,
-           metadata::bytes-size(metadata_size),
-           data::binary
-         >> = payload,
+         <<metadata_size::32, metadata::bytes-size(metadata_size), data::binary>> = payload,
          count,
          acc
        ) do

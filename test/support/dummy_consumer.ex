@@ -1,4 +1,5 @@
 defmodule Pulsar.Test.Support.DummyConsumer do
+  @moduledoc false
   @behaviour Pulsar.Consumer.Callback
 
   def init(opts) do

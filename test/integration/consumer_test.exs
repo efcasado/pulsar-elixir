@@ -1,11 +1,13 @@
 defmodule Pulsar.Integration.ConsumerTest do
   use ExUnit.Case
+
   import TelemetryTest
 
-  require Logger
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
-  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+
+  require Logger
 
   @moduletag :integration
   @topic_prefix "persistent://public/default/integration-test-topic-"
@@ -316,7 +318,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     durable_subscription_name = @subscription_prefix <> "durable-test"
     non_durable_subscription_name = @subscription_prefix <> "non-durable-test"
     assert durable_subscription_name in subscriptions
-    assert non_durable_subscription_name not in subscriptions
+    refute non_durable_subscription_name in subscriptions
 
     # Verify failure scenarios completed as expected
     assert Process.alive?(exclusive_multi_group) == false
@@ -350,8 +352,7 @@ defmodule Pulsar.Integration.ConsumerTest do
     end)
 
     consumed_messages =
-      consumers
-      |> Enum.reduce(0, fn consumer_pid, acc ->
+      Enum.reduce(consumers, 0, fn consumer_pid, acc ->
         @consumer_callback.count_messages(consumer_pid) + acc
       end)
 

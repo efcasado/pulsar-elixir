@@ -22,6 +22,7 @@ defmodule Pulsar.ProducerGroup do
   """
 
   use Supervisor
+
   require Logger
 
   @producer_registry Pulsar.ProducerRegistry
@@ -62,7 +63,8 @@ defmodule Pulsar.ProducerGroup do
   Returns a list of producer PIDs.
   """
   def get_producers(supervisor_pid) do
-    Supervisor.which_children(supervisor_pid)
+    supervisor_pid
+    |> Supervisor.which_children()
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
   end
 
@@ -79,9 +81,7 @@ defmodule Pulsar.ProducerGroup do
   def init({name, topic, opts}) do
     producer_count = Keyword.get(opts, :producer_count, 1)
 
-    Logger.info(
-      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers"
-    )
+    Logger.info("Starting producer group #{name} for topic #{topic} with #{producer_count} producers")
 
     # Create child specs for each producer in the group
     children = create_producer_children(name, topic, opts, producer_count)

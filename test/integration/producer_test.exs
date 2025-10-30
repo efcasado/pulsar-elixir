@@ -1,11 +1,13 @@
 defmodule Pulsar.Integration.ProducerTest do
   use ExUnit.Case, async: true
+
   import TelemetryTest
 
-  require Logger
-
+  alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+
+  require Logger
 
   @moduletag :integration
   @topic "persistent://public/default/producer-test-topic"
@@ -57,8 +59,8 @@ defmodule Pulsar.Integration.ProducerTest do
       assert {:ok, message_id_data} = Pulsar.send(producer_group_name, message_payload)
 
       # Verify message_id is returned
-      assert message_id_data.ledgerId != nil
-      assert message_id_data.entryId != nil
+      assert message_id_data.ledgerId
+      assert message_id_data.entryId
 
       # Send another message using the producer PID
       assert {:ok, _message_id_data2} = Pulsar.send(group_pid, "Another message")
@@ -99,7 +101,7 @@ defmodule Pulsar.Integration.ProducerTest do
 
       # Start consumer
       assert {:ok, consumer_pid} =
-               Pulsar.start_consumer(@topic, @subscription, Pulsar.Test.Support.DummyConsumer)
+               Pulsar.start_consumer(@topic, @subscription, DummyConsumer)
 
       # Wait for consumer to be ready and subscribed
       [consumer] = Pulsar.get_consumers(consumer_pid)
@@ -122,11 +124,11 @@ defmodule Pulsar.Integration.ProducerTest do
 
       # Wait for consumer to receive the message
       Utils.wait_for(fn ->
-        Pulsar.Test.Support.DummyConsumer.count_messages(consumer) > 0
+        DummyConsumer.count_messages(consumer) > 0
       end)
 
       # Verify message was received
-      messages = Pulsar.Test.Support.DummyConsumer.get_messages(consumer)
+      messages = DummyConsumer.get_messages(consumer)
       assert length(messages) == 1
       assert hd(messages).payload == message_payload
 
@@ -175,7 +177,7 @@ defmodule Pulsar.Integration.ProducerTest do
         Pulsar.start_consumer(
           @topic,
           @subscription,
-          Pulsar.Test.Support.DummyConsumer
+          DummyConsumer
         )
 
       [consumer] = Pulsar.get_consumers(consumer_pid)
@@ -188,12 +190,12 @@ defmodule Pulsar.Integration.ProducerTest do
       {:ok, _} = Pulsar.send("p-snappy", "Hello, world!")
 
       Utils.wait_for(fn ->
-        Pulsar.Test.Support.DummyConsumer.count_messages(consumer) == 5
+        DummyConsumer.count_messages(consumer) == 5
       end)
 
       all_decoded? =
         consumer
-        |> Pulsar.Test.Support.DummyConsumer.get_messages()
+        |> DummyConsumer.get_messages()
         |> Enum.all?(fn message -> message == "Hello, world!" end)
 
       assert all_decoded?
@@ -228,7 +230,7 @@ defmodule Pulsar.Integration.ProducerTest do
         end)
 
       # Original producer crashed
-      assert not Process.alive?(producer_pid_before_crash)
+      refute Process.alive?(producer_pid_before_crash)
       # A new producer started
       assert Process.alive?(producer_pid_after_crash)
       # The old and new producers are not the same

@@ -1,4 +1,5 @@
 defmodule Pulsar.Auth.OAuth2 do
+  @moduledoc false
   def auth_method_name(_auth), do: "token"
 
   def auth_data(auth) do

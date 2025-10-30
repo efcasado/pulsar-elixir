@@ -11,6 +11,7 @@ defmodule Pulsar.PartitionedConsumer do
   """
 
   use Supervisor
+
   require Logger
 
   @consumer_registry Pulsar.ConsumerRegistry
@@ -33,15 +34,7 @@ defmodule Pulsar.PartitionedConsumer do
   `{:ok, pid}` - The supervisor PID that manages all partition consumer groups
   `{:error, reason}` - Error if the supervisor failed to start
   """
-  def start_link(
-        name,
-        topic,
-        partitions,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        opts \\ []
-      ) do
+  def start_link(name, topic, partitions, subscription_name, subscription_type, callback_module, opts \\ []) do
     Supervisor.start_link(
       __MODULE__,
       {name, topic, partitions, subscription_name, subscription_type, callback_module, opts},
@@ -62,7 +55,8 @@ defmodule Pulsar.PartitionedConsumer do
   Returns a list of `{partition_topic, group_pid}` tuples.
   """
   def get_partition_groups(supervisor_pid) do
-    Supervisor.which_children(supervisor_pid)
+    supervisor_pid
+    |> Supervisor.which_children()
     |> Enum.map(fn {partition_topic, group_pid, :supervisor, _modules} ->
       {partition_topic, group_pid}
     end)
@@ -86,7 +80,8 @@ defmodule Pulsar.PartitionedConsumer do
     Logger.info("Starting partitioned consumer for topic #{topic} with #{partitions} partitions")
 
     children =
-      Range.new(0, partitions - 1)
+      0
+      |> Range.new(partitions - 1)
       |> Enum.map(fn partition_index ->
         partition_topic = "#{topic}-partition-#{partition_index}"
         partition_group_name = "#{name}-partition-#{partition_index}"
