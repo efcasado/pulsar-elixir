@@ -10,10 +10,11 @@ defmodule Pulsar.Producer do
   """
 
   use GenServer
-  require Logger
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
+
+  require Logger
 
   defstruct [
     :topic,
@@ -183,9 +184,7 @@ defmodule Pulsar.Producer do
         {:DOWN, monitor_ref, :process, broker_pid, reason},
         %__MODULE__{broker_monitor: monitor_ref, broker_pid: broker_pid} = state
       ) do
-    Logger.info(
-      "Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, producer will restart"
-    )
+    Logger.info("Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, producer will restart")
 
     {:stop, :broker_crashed, state}
   end
@@ -272,8 +271,8 @@ defmodule Pulsar.Producer do
       producer_id: state.producer_id
     }
 
-    :telemetry.span(
-      [:pulsar, :producer, :opened],
+    [:pulsar, :producer, :opened]
+    |> :telemetry.span(
       start_metadata,
       fn ->
         result =
@@ -290,8 +289,7 @@ defmodule Pulsar.Producer do
         stop_metadata =
           Map.merge(start_metadata, %{
             success: match?({:ok, _}, result),
-            producer_name:
-              if(match?({:ok, _}, result), do: elem(result, 1).producer_name, else: nil)
+            producer_name: if(match?({:ok, _}, result), do: elem(result, 1).producer_name)
           })
 
         {result, stop_metadata}

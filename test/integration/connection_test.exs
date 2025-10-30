@@ -1,13 +1,16 @@
 defmodule Pulsar.Integration.ConnectionTest do
   use ExUnit.Case
-  require Logger
-  alias Pulsar.Test.Support.Utils
+
+  alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
+
+  require Logger
 
   @moduletag :integration
   @topic "persistent://public/default/integration-test-topic"
   @subscription "integration-test-subscription"
-  @consumer_callback Pulsar.Test.Support.DummyConsumer
+  @consumer_callback DummyConsumer
 
   setup_all do
     :ok = System.create_topic(@topic)
@@ -55,7 +58,7 @@ defmodule Pulsar.Integration.ConnectionTest do
       [consumer_pid_after_crash] = Pulsar.get_consumers(group_pid)
 
       # consumer crashed due to broker link
-      assert not Process.alive?(consumer_pid_before_crash)
+      refute Process.alive?(consumer_pid_before_crash)
       # consumer group supervisor is still alive
       assert Process.alive?(group_pid)
       # a new consumer started
@@ -69,7 +72,7 @@ defmodule Pulsar.Integration.ConnectionTest do
         Pulsar.start_consumer(
           @topic,
           @subscription <> "-unload",
-          Pulsar.Test.Support.DummyConsumer,
+          DummyConsumer,
           subscription_type: :Shared
         )
 
@@ -82,7 +85,7 @@ defmodule Pulsar.Integration.ConnectionTest do
       [consumer_pid_after_unload] = Pulsar.get_consumers(group_pid)
 
       # original consumer crashed due to topic unload
-      assert not Process.alive?(consumer_pid_before_unload)
+      refute Process.alive?(consumer_pid_before_unload)
       # consumer group supervisor is still alive
       assert Process.alive?(group_pid)
       # a new consumer started

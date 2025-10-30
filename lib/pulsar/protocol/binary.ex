@@ -535,6 +535,8 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
 
   use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
 
+  alias Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue
+
   field(:topic, 1, required: true, type: :string)
   field(:subscription, 2, required: true, type: :string)
 
@@ -555,7 +557,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
     type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   )
 
-  field(:metadata, 10, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
+  field(:metadata, 10, repeated: true, type: KeyValue)
   field(:read_compacted, 11, optional: true, type: :bool)
   field(:schema, 12, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
 
@@ -577,7 +579,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
 
   field(:subscription_properties, 18,
     repeated: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue
+    type: KeyValue
   )
 
   field(:consumer_epoch, 19, optional: true, type: :uint64)
@@ -987,16 +989,18 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetLastMessageIdResponse do
 
   use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
 
+  alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+
   field(:last_message_id, 1,
     required: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+    type: MessageIdData
   )
 
   field(:request_id, 2, required: true, type: :uint64)
 
   field(:consumer_mark_delete_position, 3,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+    type: MessageIdData
   )
 end
 

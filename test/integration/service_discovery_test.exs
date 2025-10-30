@@ -1,12 +1,13 @@
 defmodule Pulsar.Integration.ServiceDiscoveryTest do
   use ExUnit.Case
+
   import TelemetryTest
 
-  require Logger
-
+  alias Pulsar.ServiceDiscovery
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
-  alias Pulsar.ServiceDiscovery
+
+  require Logger
 
   @moduletag :integration
   @topic "persistent://public/default/service-discovery-test-topic"

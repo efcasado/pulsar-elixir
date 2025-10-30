@@ -1,10 +1,11 @@
 defmodule Pulsar.Integration.DeadLetterPolicyTest do
   use ExUnit.Case
 
-  require Logger
+  alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
-  alias Pulsar.Test.Support.DummyConsumer
+
+  require Logger
 
   @moduletag :integration
   @topic "persistent://public/default/dlq-test-topic"
@@ -25,8 +26,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
 
     {:ok, app_pid} = Pulsar.start(config)
 
-    @messages
-    |> Enum.each(&({:ok, _message_id} = Pulsar.send(:test_producer, &1)))
+    Enum.each(@messages, &({:ok, _message_id} = Pulsar.send(:test_producer, &1)))
 
     on_exit(fn ->
       Process.exit(app_pid, :shutdown)
@@ -116,7 +116,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
     assert failing_consumer_count >= length(@messages) * 2
 
     {:ok, topics} = System.list_topics()
-    refute Enum.member?(topics, expected_dlq_topic)
+    refute expected_dlq_topic in topics
   end
 
   test "dead letter policy with default DLQ topic name" do

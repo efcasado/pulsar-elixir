@@ -12,6 +12,7 @@ defmodule Pulsar.ConsumerGroup do
   """
 
   use Supervisor
+
   require Logger
 
   @consumer_registry Pulsar.ConsumerRegistry
@@ -56,7 +57,8 @@ defmodule Pulsar.ConsumerGroup do
   Returns a list of consumer PIDs.
   """
   def get_consumers(supervisor_pid) do
-    Supervisor.which_children(supervisor_pid)
+    supervisor_pid
+    |> Supervisor.which_children()
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
   end
 
@@ -64,9 +66,7 @@ defmodule Pulsar.ConsumerGroup do
   def init({name, topic, subscription_name, subscription_type, callback_module, opts}) do
     consumer_count = Keyword.get(opts, :consumer_count, 1)
 
-    Logger.info(
-      "Starting consumer group #{name} for topic #{topic} with #{consumer_count} consumers"
-    )
+    Logger.info("Starting consumer group #{name} for topic #{topic} with #{consumer_count} consumers")
 
     # Create child specs for each consumer in the group
     children =

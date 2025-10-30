@@ -1,5 +1,6 @@
 defmodule Pulsar.Utils do
-  def broker() do
+  @moduledoc false
+  def broker do
     {_id, pid, _, _} =
       Pulsar.BrokerSupervisor
       |> Supervisor.which_children()

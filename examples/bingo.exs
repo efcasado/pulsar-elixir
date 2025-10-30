@@ -1,4 +1,5 @@
 defmodule BingoPlayer do
+  @moduledoc false
   require Logger
 
   def init([game_master, card_size]) do
@@ -19,9 +20,7 @@ defmodule BingoPlayer do
         IO.puts("#{inspect(self())}: 🎉 BINGO!")
         Process.send(game_master, self(), [])
       else
-        IO.puts(
-          "#{inspect(self())}: scratched #{number}! Card now has: #{inspect(updated_card, charlists: :as_lists)}"
-        )
+        IO.puts("#{inspect(self())}: scratched #{number}! Card now has: #{inspect(updated_card, charlists: :as_lists)}")
       end
     end
 
@@ -32,8 +31,7 @@ defmodule BingoPlayer do
   def bingo?(_card), do: false
 
   def scratch(number, card) do
-    card
-    |> Enum.reject(&(&1 == number))
+    Enum.reject(card, &(&1 == number))
   end
 
   defp card(size) do
@@ -44,6 +42,7 @@ defmodule BingoPlayer do
 end
 
 defmodule Main do
+  @moduledoc false
   require Logger
 
   @broker "pulsar://broker1:6650"
@@ -63,7 +62,7 @@ defmodule Main do
     call_numbers(Enum.shuffle(other_numbers), producer)
   end
 
-  def run() do
+  def run do
     deps = Application.spec(:pulsar, :applications)
     Enum.each(deps, &Application.ensure_all_started/1)
 
@@ -86,8 +85,7 @@ defmodule Main do
   end
 
   defp consumers(num_players, card_size, topic) do
-    1..num_players
-    |> Enum.map(fn player_number ->
+    Enum.map(1..num_players, fn player_number ->
       name = "player-#{player_number}"
       atom_name = String.to_atom(name)
 
@@ -105,7 +103,7 @@ defmodule Main do
     end)
   end
 
-  defp and_the_winner_is() do
+  defp and_the_winner_is do
     receive do
       winner ->
         IO.puts("🥁 and the winner is ... congratulations, #{inspect(winner)}!!!")

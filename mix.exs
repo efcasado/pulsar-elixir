@@ -31,6 +31,7 @@ defmodule Pulsar.MixProject do
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.13.0"},
       {:snappyer, "~> 1.2"},
+      {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
       {:telemetry, "~> 1.0"},
       {:telemetry_test, "~> 0.1.0", only: :test}
       # {:dep_from_hexpm, "~> 0.3.0"},

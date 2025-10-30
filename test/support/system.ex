@@ -1,4 +1,5 @@
 defmodule Pulsar.Test.Support.System do
+  @moduledoc false
   alias Pulsar.Test.Support.Utils
 
   require Logger
@@ -24,12 +25,11 @@ defmodule Pulsar.Test.Support.System do
     }
   ]
 
-  def broker() do
-    @brokers
-    |> Enum.random()
+  def broker do
+    Enum.random(@brokers)
   end
 
-  def brokers() do
+  def brokers do
     @brokers
   end
 
@@ -39,8 +39,8 @@ defmodule Pulsar.Test.Support.System do
   end
 
   def broker_for_consumer(consumer) when is_pid(consumer) do
-    @brokers
-    |> Enum.find(
+    Enum.find(
+      @brokers,
       nil,
       fn broker ->
         broker.service_url
@@ -51,8 +51,8 @@ defmodule Pulsar.Test.Support.System do
   end
 
   def broker_for_producer(producer) when is_pid(producer) do
-    @brokers
-    |> Enum.find(
+    Enum.find(
+      @brokers,
       nil,
       fn broker ->
         broker.service_url
@@ -140,8 +140,7 @@ defmodule Pulsar.Test.Support.System do
       topic
     ]
 
-    messages
-    |> Enum.each(fn
+    Enum.each(messages, fn
       {key, message} ->
         {_, 0} = docker_exec(base_cmd ++ ["-m", message, "-k", key])
 
@@ -162,13 +161,12 @@ defmodule Pulsar.Test.Support.System do
       topic
     ]
 
-    with {raw_subscriptions, 0} <- docker_exec(broker.container, command) do
-      subscriptions =
-        raw_subscriptions
-        |> String.split()
+    case docker_exec(broker.container, command) do
+      {raw_subscriptions, 0} ->
+        subscriptions = String.split(raw_subscriptions)
 
-      {:ok, subscriptions}
-    else
+        {:ok, subscriptions}
+
       {error_output, exit_code} ->
         {:error, %{exit_code: exit_code, message: error_output}}
     end
@@ -184,15 +182,16 @@ defmodule Pulsar.Test.Support.System do
       namespace
     ]
 
-    with {raw_topics, 0} <- docker_exec(broker.container, command) do
-      topics =
-        raw_topics
-        |> String.split("\n", trim: true)
-        |> Enum.map(&String.trim/1)
-        |> Enum.reject(&(&1 == ""))
+    case docker_exec(broker.container, command) do
+      {raw_topics, 0} ->
+        topics =
+          raw_topics
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
 
-      {:ok, topics}
-    else
+        {:ok, topics}
+
       {error_output, exit_code} ->
         {:error, %{exit_code: exit_code, message: error_output}}
     end
@@ -209,8 +208,7 @@ defmodule Pulsar.Test.Support.System do
   end
 
   defp brokers_up? do
-    @brokers
-    |> Enum.all?(&broker_up?(&1))
+    Enum.all?(@brokers, &broker_up?(&1))
   end
 
   defp broker_up?(broker) do
