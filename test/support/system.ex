@@ -174,6 +174,30 @@ defmodule Pulsar.Test.Support.System do
     end
   end
 
+  def list_topics(namespace \\ "public/default", broker \\ broker()) do
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "list",
+      namespace
+    ]
+
+    with {raw_topics, 0} <- docker_exec(broker.container, command) do
+      topics =
+        raw_topics
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      {:ok, topics}
+    else
+      {error_output, exit_code} ->
+        {:error, %{exit_code: exit_code, message: error_output}}
+    end
+  end
+
   defp docker_exec(command) do
     broker = broker()
 
