@@ -24,6 +24,7 @@ defmodule Pulsar.Consumer do
     :subscription_name,
     :subscription_type,
     :consumer_id,
+    :consumer_name,
     :callback_module,
     :callback_state,
     :broker_pid,
@@ -38,7 +39,10 @@ defmodule Pulsar.Consumer do
     :start_message_id,
     :start_timestamp,
     :nacked_messages,
-    :redelivery_interval
+    :redelivery_interval,
+    :max_redelivery,
+    :dead_letter_topic,
+    :dead_letter_producer_pid
   ]
 
   @type t :: %__MODULE__{
@@ -46,6 +50,7 @@ defmodule Pulsar.Consumer do
           subscription_name: String.t(),
           subscription_type: String.t(),
           consumer_id: integer(),
+          consumer_name: String.t() | nil,
           callback_module: module(),
           callback_state: term(),
           broker_pid: pid(),
@@ -59,7 +64,10 @@ defmodule Pulsar.Consumer do
           start_message_id: {non_neg_integer(), non_neg_integer()},
           start_timestamp: non_neg_integer(),
           nacked_messages: MapSet.t(),
-          redelivery_interval: non_neg_integer() | nil
+          redelivery_interval: non_neg_integer() | nil,
+          max_redelivery: non_neg_integer() | nil,
+          dead_letter_topic: String.t() | nil,
+          dead_letter_producer_pid: pid() | nil
         }
 
   ## Public API
@@ -80,6 +88,9 @@ defmodule Pulsar.Consumer do
     - `:flow_refill` - Flow permits refill (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
+    - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
+      - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
+      - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -94,8 +105,11 @@ defmodule Pulsar.Consumer do
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
     {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
 
-    {redelivery_interval, _genserver_opts} =
+    {redelivery_interval, genserver_opts} =
       Keyword.pop(genserver_opts, :redelivery_interval, nil)
+
+    {dead_letter_policy, _genserver_opts} =
+      Keyword.pop(genserver_opts, :dead_letter_policy, nil)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -112,7 +126,8 @@ defmodule Pulsar.Consumer do
       force_create_topic: force_create_topic,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
-      redelivery_interval: redelivery_interval
+      redelivery_interval: redelivery_interval,
+      dead_letter_policy: dead_letter_policy
     }
 
     GenServer.start_link(__MODULE__, consumer_config, [])
@@ -144,11 +159,15 @@ defmodule Pulsar.Consumer do
       force_create_topic: force_create_topic,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
-      redelivery_interval: redelivery_interval
+      redelivery_interval: redelivery_interval,
+      dead_letter_policy: dead_letter_policy
     } = consumer_config
+
+    {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(dead_letter_policy)
 
     state = %__MODULE__{
       consumer_id: System.unique_integer([:positive, :monotonic]),
+      consumer_name: nil,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -163,7 +182,10 @@ defmodule Pulsar.Consumer do
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       nacked_messages: MapSet.new(),
-      redelivery_interval: redelivery_interval
+      redelivery_interval: redelivery_interval,
+      max_redelivery: max_redelivery,
+      dead_letter_topic: dead_letter_topic,
+      dead_letter_producer_pid: nil
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -184,7 +206,7 @@ defmodule Pulsar.Consumer do
   def handle_continue(:subscribe, state) do
     with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
-         {:ok, _response} <-
+         {:ok, response} <-
            subscribe_to_topic(
              broker_pid,
              state.topic,
@@ -195,8 +217,15 @@ defmodule Pulsar.Consumer do
              durable: state.durable,
              force_create_topic: state.force_create_topic
            ) do
-      {:noreply, %__MODULE__{state | consumer_id: state.consumer_id, broker_pid: broker_pid},
-       {:continue, :seek_subscription}}
+      consumer_name = Map.get(response, :consumer_name, "unknown")
+
+      {:noreply,
+       %__MODULE__{
+         state
+         | consumer_id: state.consumer_id,
+           consumer_name: consumer_name,
+           broker_pid: broker_pid
+       }, {:continue, :seek_subscription}}
     else
       {:error, reason} ->
         {:stop, reason, state}
@@ -259,10 +288,26 @@ defmodule Pulsar.Consumer do
            state
            | broker_monitor: broker_monitor,
              flow_outstanding_permits: state.flow_initial
-         }}
+         }, {:continue, :init_dead_letter_producer}}
 
       {:error, reason} ->
         {:stop, reason, state}
+    end
+  end
+
+  def handle_continue(:init_dead_letter_producer, state) do
+    if should_init_dead_letter_producer?(state) do
+      case start_dead_letter_producer(state) do
+        {:ok, producer_pid} ->
+          Logger.info("Started dead letter producer for consumer on topic #{state.topic}")
+          {:noreply, %__MODULE__{state | dead_letter_producer_pid: producer_pid}}
+
+        {:error, reason} ->
+          Logger.error("Failed to start dead letter producer: #{inspect(reason)}")
+          {:stop, reason, state}
+      end
+    else
+      {:noreply, state}
     end
   end
 
@@ -283,6 +328,7 @@ defmodule Pulsar.Consumer do
         state
       ) do
     base_message_id = message_id(command)
+    redelivery_count = Map.get(command, :redelivery_count, 0)
 
     num_messages = length(payload)
     state = decrement_permits(state, num_messages)
@@ -316,11 +362,36 @@ defmodule Pulsar.Consumer do
             {new_callback_state, nacked_acc}
 
           {:error, reason, new_callback_state} ->
-            Logger.warning(
-              "Message processing failed: #{inspect(reason)}, tracking for redelivery"
-            )
+            if should_send_to_dead_letter?(state, redelivery_count) do
+              Logger.warning(
+                "Redelivery count of #{redelivery_count} exceed max redelivery of #{state.max_redelivery}, sending to DLQ topic"
+              )
 
-            {new_callback_state, [message_id_to_ack | nacked_acc]}
+              case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
+                :ok ->
+                  ack_command = %Binary.CommandAck{
+                    consumer_id: state.consumer_id,
+                    ack_type: :Individual,
+                    message_id: [message_id_to_ack]
+                  }
+
+                  {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+                  {new_callback_state, nacked_acc}
+
+                {:error, dlq_reason} ->
+                  Logger.error(
+                    "Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked"
+                  )
+
+                  {new_callback_state, [message_id_to_ack | nacked_acc]}
+              end
+            else
+              Logger.warning(
+                "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
+              )
+
+              {new_callback_state, [message_id_to_ack | nacked_acc]}
+            end
 
           unexpected_result ->
             Logger.warning(
@@ -635,5 +706,56 @@ defmodule Pulsar.Consumer do
   defp schedule_redelivery(interval) when is_integer(interval) and interval > 0 do
     Process.send_after(self(), :trigger_redelivery, interval)
     :ok
+  end
+
+  defp parse_dead_letter_policy(nil), do: {nil, nil}
+
+  defp parse_dead_letter_policy(policy) when is_list(policy) do
+    max_redelivery = Keyword.get(policy, :max_redelivery)
+    topic = Keyword.get(policy, :topic)
+
+    # Validate max_redelivery
+    validated_max_redelivery =
+      case max_redelivery do
+        n when is_integer(n) and n >= 1 -> n
+        _ -> nil
+      end
+
+    {validated_max_redelivery, topic}
+  end
+
+  defp should_init_dead_letter_producer?(state) do
+    state.max_redelivery != nil and state.max_redelivery >= 1
+  end
+
+  defp start_dead_letter_producer(state) do
+    # Generate default dead letter topic if not provided
+    dead_letter_topic =
+      state.dead_letter_topic ||
+        "#{state.topic}-#{state.subscription_name}-DLQ"
+
+    # Start a producer for the dead letter topic
+    Pulsar.Producer.start_link(dead_letter_topic, [])
+  end
+
+  defp should_send_to_dead_letter?(state, redelivery_count) do
+    state.max_redelivery != nil and
+      state.max_redelivery >= 1 and
+      redelivery_count >= state.max_redelivery and
+      state.dead_letter_producer_pid != nil
+  end
+
+  defp send_to_dead_letter(state, payload, _message_id) do
+    if state.dead_letter_producer_pid != nil do
+      case Pulsar.Producer.send_message(state.dead_letter_producer_pid, payload) do
+        {:ok, _dlq_message_id} ->
+          :ok
+
+        {:error, _reason} = error ->
+          error
+      end
+    else
+      {:error, :no_dead_letter_producer}
+    end
   end
 end
