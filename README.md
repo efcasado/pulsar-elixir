@@ -234,7 +234,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Access modes                       | ❌        |
 | Consumer  | ACK                                | ✅        |
 | Consumer  | Batch-index ACK                    | ✅        |
-| Consumer  | NACK                               | ❌        |
+| Consumer  | NACK                               | ✅        |
 | Consumer  | NACK back-off                      | ❌        |
 | Consumer  | Batching                           | ✅        |
 | Consumer  | Partitioned topics                 | ✅        |
@@ -243,7 +243,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Subscription types                 | ✅        |
 | Consumer  | Subscription modes                 | ✅        |
 | Consumer  | Retry letter topic                 | ❌        |
-| Consumer  | Dead letter topic                  | ❌        |
+| Consumer  | Dead letter topic                  | ✅        |
 | Consumer  | Compression                        | ✅        |
 | Consumer  | Compaction                         | ❌        |
 | Consumer  | Schema                             | ❌        |
