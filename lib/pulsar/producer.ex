@@ -355,8 +355,9 @@ defmodule Pulsar.Producer do
       fn ->
         result =
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
-               {:ok, response} <- create_producer(broker_pid, state),
-               producer_ready? <- Map.get(response, :producer_ready, true) do
+               {:ok, response} <- create_producer(broker_pid, state) do
+            producer_ready? = Map.get(response, :producer_ready, true)
+
             state =
               state
               |> Map.put(:broker_pid, broker_pid)
