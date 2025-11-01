@@ -237,4 +237,143 @@ defmodule Pulsar.Integration.ProducerTest do
       assert producer_pid_before_crash != producer_pid_after_crash
     end
   end
+
+  describe "Producer Access Modes" do
+    @shared_topic "persistent://public/default/producer-shared-test"
+    @exclusive_topic "persistent://public/default/producer-exclusive-test"
+
+    test "multiple producers can publish with :Shared access mode" do
+      # Start two separate producer groups with :Shared mode on same topic
+      assert {:ok, group_pid_1} = Pulsar.start_producer(@shared_topic, access_mode: :Shared)
+
+      assert {:ok, group_pid_2} =
+               Pulsar.start_producer(@shared_topic,
+                 access_mode: :Shared,
+                 name: "shared-producer-2"
+               )
+
+      [producer_1] = Pulsar.get_producers(group_pid_1)
+      [producer_2] = Pulsar.get_producers(group_pid_2)
+
+      # Wait for both producers to register
+      Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
+      Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
+
+      # Both should send successfully
+      assert {:ok, _} = Pulsar.send(group_pid_1, "Message from producer 1")
+      assert {:ok, _} = Pulsar.send(group_pid_2, "Message from producer 2")
+
+      Pulsar.stop_producer(group_pid_1)
+      Pulsar.stop_producer(group_pid_2)
+    end
+
+    test "only one producer can connect with :Exclusive access mode" do
+      # Start first producer with :Exclusive
+      assert {:ok, group_pid_1} =
+               Pulsar.start_producer(@exclusive_topic, access_mode: :Exclusive)
+
+      [producer_1] = Pulsar.get_producers(group_pid_1)
+      Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
+
+      assert {:ok, _} = Pulsar.send(group_pid_1, "Exclusive message")
+
+      # Second producer with :Exclusive should fail to register
+      assert {:ok, group_pid_2} =
+               Pulsar.start_producer(@exclusive_topic,
+                 access_mode: :Exclusive,
+                 name: "exclusive-2"
+               )
+
+      Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
+
+      # Stop the first producer to release exclusive lock
+      Pulsar.stop_producer(group_pid_1)
+      Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+
+      # Second exclusive producer should now succeed
+      assert {:ok, group_pid_2} =
+               Pulsar.start_producer(@exclusive_topic,
+                 access_mode: :Exclusive,
+                 name: "exclusive-2"
+               )
+
+      [producer_2] = Pulsar.get_producers(group_pid_2)
+      Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
+
+      assert {:ok, _} = Pulsar.send(group_pid_2, "New exclusive owner")
+
+      Pulsar.stop_producer(group_pid_2)
+    end
+
+    test "producer recovers from broker-initiated topic unload" do
+      # TODO: support ExtensibleLoadManager config
+      # It adds a reassignment url to skip topic lookup
+      # See: https://github.com/apache/pulsar/blob/master/pip/pip-307.md
+      topic = "persistent://public/default/producer-unload-test"
+
+      {:ok, group_pid} = Pulsar.start_producer(topic)
+      [producer_pid_before_unload] = Pulsar.get_producers(group_pid)
+
+      Utils.wait_for(fn -> :sys.get_state(producer_pid_before_unload).producer_name != nil end)
+
+      :ok = System.unload_topic(topic)
+
+      Utils.wait_for(fn -> not Process.alive?(producer_pid_before_unload) end)
+
+      [producer_pid_after_unload] = Pulsar.get_producers(group_pid)
+
+      refute Process.alive?(producer_pid_before_unload)
+      assert Process.alive?(group_pid)
+      assert Process.alive?(producer_pid_after_unload)
+      assert producer_pid_before_unload != producer_pid_after_unload
+
+      Pulsar.stop_producer(group_pid)
+    end
+
+    test ":WaitForExclusive waits for exclusive access " do
+      # See: https://github.com/apache/pulsar/blob/master/pip/pip-68.md
+      wait_topic = "persistent://public/default/producer-wait-exclusive-test"
+
+      # Start first producer with :Exclusive - becomes the exclusive producer immediately
+      assert {:ok, group_pid_1} =
+               Pulsar.start_producer(wait_topic, access_mode: :Exclusive, name: "producer-1")
+
+      [producer_1] = Pulsar.get_producers(group_pid_1)
+      Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
+
+      assert :sys.get_state(producer_1).waiting? != true
+
+      # Start second producer with :WaitForExclusive. It should be not ready
+      {:ok, group_pid_2} =
+        Pulsar.start_producer(wait_topic,
+          access_mode: :WaitForExclusive,
+          name: "waiting-producer-2"
+        )
+
+      [producer_2] = Pulsar.get_producers(group_pid_2)
+
+      Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
+
+      assert :sys.get_state(producer_2).waiting?
+      # First producer can send messages
+      assert {:ok, _} = Pulsar.send(group_pid_1, "Message from first producer")
+
+      # Second producer should not be able to send messages yet
+      assert {:error, :producer_waiting} =
+               Pulsar.send(group_pid_2, "Message from second producer while waiting")
+
+      # Now stop the first producer to release exclusive access
+      Pulsar.stop_producer(group_pid_1)
+      Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+
+      # Second producer should now get exclusive access
+      Utils.wait_for(fn -> :sys.get_state(producer_2).waiting? == false end)
+
+      # Second producer should now be able to send messages
+      assert {:ok, _} = Pulsar.send(group_pid_2, "Message from second producer")
+
+      # Cleanup
+      Pulsar.stop_producer(group_pid_2)
+    end
+  end
 end
