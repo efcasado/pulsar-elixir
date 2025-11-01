@@ -322,7 +322,7 @@ defmodule Pulsar.Integration.ProducerTest do
 
       [producer_pid_after_unload] = Pulsar.get_producers(group_pid)
 
-      assert not Process.alive?(producer_pid_before_unload)
+      refute Process.alive?(producer_pid_before_unload)
       assert Process.alive?(group_pid)
       assert Process.alive?(producer_pid_after_unload)
       assert producer_pid_before_unload != producer_pid_after_unload
