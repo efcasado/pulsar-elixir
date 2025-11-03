@@ -28,7 +28,7 @@ defmodule Pulsar.Producer do
     :pending_sends,
     :access_mode,
     :compression,
-    :waiting?
+    :ready
   ]
 
   @type t :: %__MODULE__{
@@ -41,7 +41,7 @@ defmodule Pulsar.Producer do
           pending_sends: %{integer() => {GenServer.from(), map()}},
           access_mode: atom(),
           compression: :NONE | :LZ4 | :ZLIB | :SNAPPY | :ZSTD,
-          waiting?: boolean() | nil
+          ready: boolean() | nil
         }
 
   ## Public API
@@ -146,7 +146,7 @@ defmodule Pulsar.Producer do
       pending_sends: %{},
       access_mode: access_mode,
       compression: compression,
-      waiting?: nil
+      ready: nil
     }
 
     Logger.info("Starting producer for topic #{topic}")
@@ -187,7 +187,7 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
-  def handle_call({:send_message, _}, _from, %{waiting?: true} = state) do
+  def handle_call({:send_message, _}, _from, %{ready: true} = state) do
     # If we send while Producer has no access, Pulsar closes the connection
     Logger.warning("Producer #{inspect(state.producer_id)} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}
@@ -285,9 +285,9 @@ defmodule Pulsar.Producer do
   def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
     producer_ready = Map.get(command, :producer_ready, true)
 
-    if state.waiting? && producer_ready do
+    if state.ready && producer_ready do
       Logger.info("Producer #{state.producer_name} granted exclusive access")
-      new_state = %{state | waiting?: false}
+      new_state = %{state | ready: false}
       {:noreply, new_state}
     else
       Logger.debug("Received CommandProducerSuccess but not in waiting state or not ready")
@@ -366,10 +366,10 @@ defmodule Pulsar.Producer do
             # Check if producer is ready or if we need to wait for WaitForExclusive
             if producer_ready? do
               Logger.info("Producer #{response.producer_name} registered and ready")
-              {:ok, Map.put(state, :waiting?, false)}
+              {:ok, Map.put(state, :ready, false)}
             else
               Logger.info("Producer #{response.producer_name} created but waiting for access")
-              {:ok, Map.put(state, :waiting?, true)}
+              {:ok, Map.put(state, :ready, true)}
             end
           else
             {:error, reason} = error ->
