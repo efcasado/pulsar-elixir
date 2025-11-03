@@ -341,7 +341,7 @@ defmodule Pulsar.Integration.ProducerTest do
       [producer_1] = Pulsar.get_producers(group_pid_1)
       Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
 
-      assert :sys.get_state(producer_1).waiting? != true
+      assert :sys.get_state(producer_1).ready != true
 
       # Start second producer with :WaitForExclusive. It should be not ready
       {:ok, group_pid_2} =
@@ -354,7 +354,7 @@ defmodule Pulsar.Integration.ProducerTest do
 
       Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
 
-      assert :sys.get_state(producer_2).waiting?
+      assert :sys.get_state(producer_2).ready
       # First producer can send messages
       assert {:ok, _} = Pulsar.send(group_pid_1, "Message from first producer")
 
@@ -367,7 +367,7 @@ defmodule Pulsar.Integration.ProducerTest do
       Utils.wait_for(fn -> not Process.alive?(producer_1) end)
 
       # Second producer should now get exclusive access
-      Utils.wait_for(fn -> :sys.get_state(producer_2).waiting? == false end)
+      Utils.wait_for(fn -> :sys.get_state(producer_2).ready == false end)
 
       # Second producer should now be able to send messages
       assert {:ok, _} = Pulsar.send(group_pid_2, "Message from second producer")
