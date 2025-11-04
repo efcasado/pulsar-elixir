@@ -20,6 +20,7 @@ defmodule Pulsar.Broker do
   @behaviour :gen_statem
 
   alias Pulsar.Config
+  alias Pulsar.Producer
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -41,8 +42,7 @@ defmodule Pulsar.Broker do
     :actions,
     # Broker-specific state
     :consumers,
-    :producers,
-    :producer_names
+    :producers
   ]
 
   @type t :: %__MODULE__{
@@ -60,8 +60,7 @@ defmodule Pulsar.Broker do
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
-          producers: %{integer() => {pid(), reference()}},
-          producer_names: %{String.t() => integer()}
+          producers: %{integer() => {pid(), reference()}}
         }
 
   ## Public API
@@ -229,7 +228,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
-        Pulsar.Producer.stop(producer_pid)
+        Producer.stop(producer_pid)
       end
     end)
 
@@ -262,7 +261,6 @@ defmodule Pulsar.Broker do
       requests: %{},
       consumers: %{},
       producers: %{},
-      producer_names: %{},
       prev_backoff: 0
     }
 
@@ -291,8 +289,7 @@ defmodule Pulsar.Broker do
       | socket: nil,
         prev_backoff: wait,
         consumers: %{},
-        producers: %{},
-        producer_names: %{}
+        producers: %{}
     }
 
     {:keep_state, cleared_broker, actions}
@@ -509,8 +506,7 @@ defmodule Pulsar.Broker do
     new_broker = %{
       broker
       | consumers: new_consumers,
-        producers: new_producers,
-        producer_names: new_producer_names
+        producers: new_producers
     }
 
     {:keep_state, new_broker}
@@ -733,7 +729,7 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {consumer_pid, _monitor_ref} ->
-        Logger.info("Broker requested consumer #{consumer_id} closure")
+        Logger.warning("Broker requested consumer #{consumer_id} closure")
 
         send(consumer_pid, {:broker_message, command})
         :keep_state_and_data
@@ -747,11 +743,8 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {producer_pid, _monitor_ref} ->
-        Logger.info(
-          "Broker requested producer #{producer_id} closure, will restart with fresh lookup"
-        )
+        Logger.info("Broker requested producer #{producer_id} closure")
 
-        # Send the CommandCloseProducer to the producer to handle gracefully
         send(producer_pid, {:broker_message, command})
         :keep_state_and_data
     end
@@ -783,32 +776,30 @@ defmodule Pulsar.Broker do
 
   defp handle_command(%Binary.CommandProducerSuccess{} = command, broker) do
     # CommandProducerSuccess can arrive twice for WaitForExclusive mode:
-    # 1. First with producer_ready: false (pending state) - request_id in broker.requests
-    # 2. Second with producer_ready: true (final state) - request_id NOT in broker.requests (already cleaned up)
+    # 1. First with producer_ready: false (pending state, request_id in broker.requests)
+    # 2. Second with producer_ready: true (final state, request_id NOT in broker.requests, find pid by name)
     request_id = command.request_id
 
-    # Check if this request_id is still pending in broker.requests
     if Map.has_key?(broker.requests, request_id) do
       # Initial registration response - request is still pending
-      handle_producer_registration_response(command, broker, request_id)
+      # handle_producer_registration_response(command, broker, request_id)
+      new_broker = reply_to_request(broker, request_id, {:ok, command})
+      {:keep_state, new_broker}
     else
       # Subsequent notification - request was already completed
-      handle_producer_ready_notification(command, broker)
+      # handle_producer_ready_notification(command, broker)
+      Enum.each(broker.producers, fn {_id, {producer_pid, _ref}} ->
+        send(producer_pid, {:broker_message, command})
+      end)
+
+      :keep_state_and_data
     end
   end
 
-  defp handle_command(command, broker) when is_map(command) do
-    # Handle responses with request_id
-    case Map.get(command, :request_id) do
-      nil ->
-        Logger.debug("Received command without request_id: #{inspect(command)}")
-        :keep_state_and_data
-
-      request_id ->
-        reply = {:ok, command}
-        new_broker = reply_to_request(broker, request_id, reply)
-        {:keep_state, new_broker}
-    end
+  defp handle_command(%Binary.CommandAckResponse{request_id: request_id} = command, broker) do
+    reply = {:ok, command}
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
   end
 
   defp handle_command(command, _broker) do
