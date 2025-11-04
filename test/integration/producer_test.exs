@@ -1,5 +1,5 @@
 defmodule Pulsar.Integration.ProducerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case
 
   import TelemetryTest
 
