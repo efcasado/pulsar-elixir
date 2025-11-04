@@ -53,6 +53,7 @@ defmodule Pulsar.Producer do
 
   - `topic` - The topic to publish to
   - `opts` - Additional options:
+    - `:name` - Producer name (optional, will be auto-generated if not provided)
     - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
       - `:Shared` - Multiple producers can publish on the topic (default)
       - `:Exclusive` - Only one producer can publish. If another producer tries to connect,
@@ -63,22 +64,24 @@ defmodule Pulsar.Producer do
     - `:compression` - Compression algorithm (default: :NONE)
 
   The producer will automatically use service discovery to find the broker.
-  The broker will assign a unique producer name.
+  If no name is provided, the broker will assign a unique producer name.
 
   ## Examples
 
       # Default shared mode
       {:ok, producer} = Producer.start_link("persistent://public/default/my-topic")
 
-      # Exclusive mode - only this producer can publish to the topic
+      # With custom name and exclusive mode
       {:ok, producer} = Producer.start_link(
         "persistent://public/default/my-topic",
+        name: "my-producer",
         access_mode: :Exclusive
       )
   """
-  def start_link(name, topic, opts \\ []) do
-    {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
-    {compression, _genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
+  def start_link(topic, opts \\ []) do
+    {name, opts} = Keyword.pop(opts, :name, nil)
+    {access_mode, opts} = Keyword.pop(opts, :access_mode, :Shared)
+    {compression, _opts} = Keyword.pop(opts, :compression, :NONE)
 
     producer_config = %{
       name: name,
@@ -136,7 +139,7 @@ defmodule Pulsar.Producer do
       registration_request_id: nil
     }
 
-    Logger.info("Starting producer #{name} for topic #{topic}")
+    Logger.info("Starting producer #{producer_id} for topic #{topic}")
     {:ok, state, {:continue, :register_producer}}
   end
 
@@ -348,10 +351,12 @@ defmodule Pulsar.Producer do
   end
 
   defp create_producer(broker_pid, state) do
+    producer_name = if state.producer_name, do: to_string(state.producer_name)
+
     producer_command = %Binary.CommandProducer{
       topic: state.topic,
       producer_id: state.producer_id,
-      producer_name: state.producer_name,
+      producer_name: producer_name,
       producer_access_mode: state.access_mode
     }
 
