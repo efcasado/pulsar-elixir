@@ -116,7 +116,7 @@ defmodule Pulsar do
       Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
     start_delay_ms =
-      Keyword.get(opts, :start_delay_ms, 500)
+      Keyword.get(opts, :start_delay_ms, Application.get_env(:pulsar, :start_delay_ms, 500))
 
     broker_opts = broker_opts(opts)
 
