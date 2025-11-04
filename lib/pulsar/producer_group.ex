@@ -107,7 +107,7 @@ defmodule Pulsar.ProducerGroup do
         start: {
           Pulsar.Producer,
           :start_link,
-          [topic, opts]
+          [group_name, topic, opts]
         },
         restart: :transient,
         type: :worker
