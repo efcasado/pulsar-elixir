@@ -81,7 +81,9 @@ defmodule Pulsar.ProducerGroup do
   def init({name, topic, opts}) do
     producer_count = Keyword.get(opts, :producer_count, 1)
 
-    Logger.info("Starting producer group #{name} for topic #{topic} with #{producer_count} producers")
+    Logger.info(
+      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
+    )
 
     # Create child specs for each producer in the group
     children = create_producer_children(name, topic, opts, producer_count)
@@ -105,7 +107,7 @@ defmodule Pulsar.ProducerGroup do
         start: {
           Pulsar.Producer,
           :start_link,
-          [topic, opts]
+          [topic, [name: group_name] ++ opts]
         },
         restart: :transient,
         type: :worker
