@@ -246,6 +246,9 @@ defmodule Pulsar.Consumer do
       {:ok, _response} ->
         {:noreply, state, {:continue, :resubscribe}}
 
+      {:error, {:UnknownError, "Reset subscription to publish time error: Failed to fence subscription"}} ->
+        {:noreply, state, {:continue, :resubscribe}}
+
       {:error, reason} ->
         {:stop, reason, state}
     end
