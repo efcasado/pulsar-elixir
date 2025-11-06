@@ -82,6 +82,14 @@ defmodule Pulsar do
   @doc """
   Start the Pulsar application with custom configuration.
 
+  ## Options
+
+  - `:host` - Broker URL (e.g., "pulsar://localhost:6650")
+  - `:consumers` - List of consumer configurations
+  - `:producers` - List of producer configurations
+  - `:broker_connect_max_retries` - Maximum connection attempts (default: 50)
+  - `:broker_connect_delay` - Delay between connection attempts in ms (default: 100)
+
   ## Examples
 
       # Start with custom configuration
@@ -95,6 +103,14 @@ defmodule Pulsar do
             subscription_type: :Shared
           ]}
         ]
+      )
+
+      # Start with custom broker connection wait settings
+      {:ok, pid} = Pulsar.Application.start(
+        host: "pulsar://localhost:6650",
+        broker_connect_max_retries: 100,
+        broker_connect_delay: 50,
+        consumers: [...]
       )
 
       # Later, stop it
@@ -115,9 +131,6 @@ defmodule Pulsar do
     bootstrap_host =
       Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
-    start_delay_ms =
-      Keyword.get(opts, :start_delay_ms, Application.get_env(:pulsar, :start_delay_ms, 500))
-
     broker_opts = broker_opts(opts)
 
     :persistent_term.put({Pulsar, :broker_opts}, broker_opts)
@@ -136,9 +149,21 @@ defmodule Pulsar do
     {:ok, pid} = Supervisor.start_link(children, opts)
 
     # a bootstrap host is required
-    {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
+    {:ok, broker_pid} = Pulsar.start_broker(bootstrap_host, broker_opts)
 
-    Process.sleep(start_delay_ms)
+    broker_wait_opts = [
+      max_retries:
+        Keyword.get(opts, :broker_connect_max_retries, Application.get_env(:pulsar, :broker_connect_max_retries, 50)),
+      delay: Keyword.get(opts, :broker_connect_delay, Application.get_env(:pulsar, :broker_connect_delay, 100))
+    ]
+
+    case Pulsar.Broker.wait_until_connected(broker_pid, broker_wait_opts) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        Logger.warning("Broker connection timeout - consumers/producers may fail to start")
+    end
 
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
       topic = Keyword.fetch!(consumer_opts, :topic)

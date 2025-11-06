@@ -191,6 +191,60 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
+  Checks if the broker is currently connected.
+
+  Returns `true` if in :connected state, `false` otherwise.
+  """
+  @spec connected?(GenServer.server()) :: boolean()
+  def connected?(broker) do
+    :gen_statem.call(broker, :connected?)
+  end
+
+  @doc """
+  Waits until the broker is connected.
+
+  Polls the broker state with a delay between retries until it reaches :connected state
+  or the maximum number of retries is reached.
+
+  Returns `:ok` when connected, `{:error, :timeout}` if max retries is reached.
+
+  ## Parameters
+
+  - `broker` - Broker PID or URL string
+  - `opts` - Options:
+    - `:max_retries` - Maximum number of connection attempts (default: 50)
+    - `:delay` - Delay between retries in milliseconds (default: 100)
+
+  ## Examples
+
+      iex> {:ok, broker} = Pulsar.start_broker("pulsar://localhost:6650")
+      iex> Pulsar.Broker.wait_until_connected(broker)
+      :ok
+
+      iex> Pulsar.Broker.wait_until_connected(broker, max_retries: 20, delay: 50)
+      :ok
+  """
+  @spec wait_until_connected(GenServer.server(), keyword()) :: :ok | {:error, :timeout}
+  def wait_until_connected(broker, opts \\ []) do
+    max_retries = Keyword.get(opts, :max_retries, 50)
+    delay = Keyword.get(opts, :delay, 100)
+    do_wait_until_connected(broker, max_retries, delay, 0)
+  end
+
+  defp do_wait_until_connected(_broker, max_retries, _delay, attempt) when attempt >= max_retries do
+    {:error, :timeout}
+  end
+
+  defp do_wait_until_connected(broker, max_retries, delay, attempt) do
+    if connected?(broker) do
+      :ok
+    else
+      Process.sleep(delay)
+      do_wait_until_connected(broker, max_retries, delay, attempt + 1)
+    end
+  end
+
+  @doc """
   Gracefully stops the broker by closing all consumers/producers first.
   """
   @spec stop(GenServer.server(), term(), timeout()) :: :ok
@@ -334,6 +388,11 @@ defmodule Pulsar.Broker do
     end
   end
 
+  def disconnected({:call, from}, :connected?, _broker) do
+    actions = [{:reply, from, false}]
+    {:keep_state_and_data, actions}
+  end
+
   def disconnected({:call, from}, _request, _broker) do
     actions = [{:reply, from, {:error, :disconnected}}]
     {:keep_state_and_data, actions}
@@ -352,6 +411,11 @@ defmodule Pulsar.Broker do
       {{:timeout, :cleanup_stale_requests}, Config.cleanup_interval(), nil}
     ]
 
+    {:keep_state_and_data, actions}
+  end
+
+  def connected({:call, from}, :connected?, _broker) do
+    actions = [{:reply, from, true}]
     {:keep_state_and_data, actions}
   end
 
