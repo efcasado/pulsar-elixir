@@ -850,14 +850,14 @@ defmodule Pulsar.Broker do
   end
 
   defp next_backoff(%__MODULE__{prev_backoff: 0}) do
-    1000 + :rand.uniform(1000)
+    :rand.uniform(100)
   end
 
   defp next_backoff(%__MODULE__{prev_backoff: prev}) do
     next = round(prev * 2)
     max_backoff = Application.get_env(:pulsar, :max_backoff, 30_000)
     next = min(next, max_backoff)
-    next + :rand.uniform(1000)
+    next + :rand.uniform(100)
   end
 
   defp get_auth_method_name(type: type, opts: opts) do
