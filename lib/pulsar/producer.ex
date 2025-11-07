@@ -51,18 +51,21 @@ defmodule Pulsar.Producer do
   - `opts` - Additional options:
     - `:access_mode` - Producer access mode (default: :Shared)
     - `:compression` - Compression algorithm (default: :NONE)
+    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 0, disabled)
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
   """
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
-    {compression, _genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
+    {compression, genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
+    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 0)
 
     producer_config = %{
       topic: topic,
       access_mode: access_mode,
-      compression: compression
+      compression: compression,
+      startup_jitter_ms: startup_jitter_ms
     }
 
     GenServer.start_link(__MODULE__, producer_config, [])
@@ -96,7 +99,8 @@ defmodule Pulsar.Producer do
     %{
       topic: topic,
       access_mode: access_mode,
-      compression: compression
+      compression: compression,
+      startup_jitter_ms: startup_jitter_ms
     } = producer_config
 
     producer_id = System.unique_integer([:positive, :monotonic])
@@ -112,10 +116,22 @@ defmodule Pulsar.Producer do
     }
 
     Logger.info("Starting producer for topic #{topic}")
-    {:ok, state, {:continue, :register_producer}}
+
+    if startup_jitter_ms > 0 do
+      {:ok, state, {:continue, {:startup_jitter, startup_jitter_ms}}}
+    else
+      {:ok, state, {:continue, :register_producer}}
+    end
   end
 
   @impl true
+  def handle_continue({:startup_jitter, jitter_ms}, state) do
+    sleep_ms = :rand.uniform(jitter_ms)
+    Logger.debug("Producer sleeping for #{sleep_ms}ms jitter")
+    Process.sleep(sleep_ms)
+    {:noreply, state, {:continue, :register_producer}}
+  end
+
   def handle_continue(:register_producer, state) do
     case ServiceDiscovery.lookup_topic(state.topic) do
       {:ok, broker_pid} ->

@@ -87,6 +87,7 @@ defmodule Pulsar do
       # Start with custom configuration
       {:ok, pid} = Pulsar.Application.start(
         host: "pulsar://localhost:6650",
+        startup_jitter_ms: 1000,
         consumers: [
           {:my_consumer, [
             topic: "my-topic",
@@ -118,6 +119,9 @@ defmodule Pulsar do
     start_delay_ms =
       Keyword.get(opts, :start_delay_ms, Application.get_env(:pulsar, :start_delay_ms, 500))
 
+    startup_jitter_ms =
+      Keyword.get(opts, :startup_jitter_ms, Application.get_env(:pulsar, :startup_jitter_ms, 0))
+
     broker_opts = broker_opts(opts)
 
     :persistent_term.put({Pulsar, :broker_opts}, broker_opts)
@@ -148,6 +152,7 @@ defmodule Pulsar do
       opts =
         consumer_opts
         |> Keyword.get(:opts, [])
+        |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, consumer_name)
 
       Pulsar.start_consumer(topic, subscription_name, callback_module, opts)
@@ -159,6 +164,7 @@ defmodule Pulsar do
       opts =
         producer_opts
         |> Keyword.get(:opts, [])
+        |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, producer_name)
 
       Pulsar.start_producer(topic, opts)

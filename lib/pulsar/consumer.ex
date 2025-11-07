@@ -92,6 +92,7 @@ defmodule Pulsar.Consumer do
     - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
       - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
+    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 0, disabled)
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -109,8 +110,10 @@ defmodule Pulsar.Consumer do
     {redelivery_interval, genserver_opts} =
       Keyword.pop(genserver_opts, :redelivery_interval, nil)
 
-    {dead_letter_policy, _genserver_opts} =
+    {dead_letter_policy, genserver_opts} =
       Keyword.pop(genserver_opts, :dead_letter_policy, nil)
+
+    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 0)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -128,7 +131,8 @@ defmodule Pulsar.Consumer do
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
-      dead_letter_policy: dead_letter_policy
+      dead_letter_policy: dead_letter_policy,
+      startup_jitter_ms: startup_jitter_ms
     }
 
     GenServer.start_link(__MODULE__, consumer_config, [])
@@ -161,7 +165,8 @@ defmodule Pulsar.Consumer do
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
-      dead_letter_policy: dead_letter_policy
+      dead_letter_policy: dead_letter_policy,
+      startup_jitter_ms: startup_jitter_ms
     } = consumer_config
 
     {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(dead_letter_policy)
@@ -190,10 +195,22 @@ defmodule Pulsar.Consumer do
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
-    {:ok, state, {:continue, {:init_callback, init_args}}}
+
+    if startup_jitter_ms > 0 do
+      {:ok, state, {:continue, {:startup_jitter, startup_jitter_ms, init_args}}}
+    else
+      {:ok, state, {:continue, {:init_callback, init_args}}}
+    end
   end
 
   @impl true
+  def handle_continue({:startup_jitter, jitter_ms, init_args}, state) do
+    sleep_ms = :rand.uniform(jitter_ms)
+    Logger.debug("Consumer sleeping for #{sleep_ms}ms jitter")
+    Process.sleep(sleep_ms)
+    {:noreply, state, {:continue, {:init_callback, init_args}}}
+  end
+
   def handle_continue({:init_callback, init_args}, state) do
     case apply(state.callback_module, :init, [init_args]) do
       {:ok, callback_state} ->
