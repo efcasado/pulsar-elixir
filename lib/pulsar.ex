@@ -147,11 +147,13 @@ defmodule Pulsar do
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
       topic = Keyword.fetch!(consumer_opts, :topic)
       subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
+      subscription_type = Keyword.fetch!(consumer_opts, :subscription_type)
       callback_module = Keyword.fetch!(consumer_opts, :callback_module)
 
       opts =
         consumer_opts
         |> Keyword.get(:opts, [])
+        |> Keyword.put(:subscription_type, subscription_type)
         |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, consumer_name)
 
