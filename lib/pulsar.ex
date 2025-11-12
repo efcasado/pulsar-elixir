@@ -640,6 +640,45 @@ defmodule Pulsar do
   end
 
   @doc """
+  Sends a flow command to request more messages from a consumer.
+
+  This is a convenience wrapper around `Pulsar.Consumer.send_flow/2`.
+  Use this when you've disabled automatic flow control by setting `:flow_initial` to 0.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID or name
+  - `permits` - Number of message permits to request
+
+  ## Examples
+
+      # Start consumer with manual flow control
+      {:ok, consumer} = Pulsar.start_consumer(
+        topic,
+        subscription,
+        MyCallback,
+        flow_initial: 0
+      )
+
+      # Request 10 messages
+      Pulsar.send_flow(consumer, 10)
+  """
+  @spec send_flow(pid() | String.t(), non_neg_integer()) :: :ok | {:error, term()}
+  def send_flow(consumer, permits) when is_pid(consumer) do
+    Pulsar.Consumer.send_flow(consumer, permits)
+  end
+
+  def send_flow(consumer_name, permits) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name) do
+      {:ok, consumer_pid} ->
+        Pulsar.Consumer.send_flow(consumer_pid, permits)
+
+      {:error, :not_found} ->
+        {:error, :consumer_not_found}
+    end
+  end
+
+  @doc """
   Manually acknowledges a message.
 
   This is a convenience wrapper around `Pulsar.Consumer.ack/2`.

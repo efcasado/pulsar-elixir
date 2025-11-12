@@ -84,9 +84,9 @@ defmodule Pulsar.Consumer do
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
   - `opts` - Additional options:
     - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial` - Initial flow permits (default: 100)
-    - `:flow_threshold` - Flow permits threshold (default: 50)
-    - `:flow_refill` - Flow permits refill (default: 50)
+    - `:flow_initial` - Initial flow permits (default: 100). Set to 0 to disable automatic flow control and use `send_flow/2` manually.
+    - `:flow_threshold` - Flow permits threshold for automatic refill (default: 50). Ignored when `:flow_initial` is 0.
+    - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
     - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
@@ -144,6 +144,42 @@ defmodule Pulsar.Consumer do
   @spec stop(GenServer.server(), term(), timeout()) :: :ok
   def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
     GenServer.stop(consumer, reason, timeout)
+  end
+
+  @doc """
+  Sends a flow command to request more messages from the broker.
+
+  Use this function when you've disabled automatic flow control by setting
+  `:flow_initial` to 0. This allows you to implement custom flow control,
+  such as integrating with Broadway's demand mechanism.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID
+  - `permits` - Number of message permits to request
+
+  ## Examples
+
+      # Start consumer with no automatic flow control
+      {:ok, consumer_pid} = Pulsar.start_consumer(
+        topic,
+        subscription,
+        MyCallback,
+        flow_initial: 0  # Disable automatic flow
+      )
+
+      # Manually request messages based on your own demand
+      Pulsar.Consumer.send_flow(consumer_pid, 10)
+
+      # Example with Broadway demand
+      def handle_demand(demand, state) do
+        Pulsar.Consumer.send_flow(state.consumer, demand)
+        # ... rest of logic
+      end
+  """
+  @spec send_flow(pid(), non_neg_integer()) :: :ok | {:error, term()}
+  def send_flow(consumer, permits) when is_integer(permits) and permits > 0 do
+    GenServer.call(consumer, {:send_flow, permits})
   end
 
   @doc """
@@ -357,7 +393,16 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_continue(:send_initial_flow, state) do
-    case send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial) do
+    # Only send initial flow if flow_initial > 0 (automatic flow control enabled)
+    result =
+      if state.flow_initial > 0 do
+        send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial)
+      else
+        # Manual flow control - don't send initial flow
+        :ok
+      end
+
+    case result do
       :ok ->
         broker_monitor = Process.monitor(state.broker_pid)
         schedule_redelivery(state.redelivery_interval)
@@ -613,6 +658,22 @@ defmodule Pulsar.Consumer do
   end
 
   @impl true
+  def handle_call({:send_flow, permits}, _from, state) do
+    flow_command = %Binary.CommandFlow{
+      consumer_id: state.consumer_id,
+      messagePermits: permits
+    }
+
+    case Pulsar.Broker.send_command(state.broker_pid, flow_command) do
+      :ok ->
+        new_permits = state.flow_outstanding_permits + permits
+        {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:ack, message_id}, _from, state) do
     ack_command = %Binary.CommandAck{
       consumer_id: state.consumer_id,
@@ -764,22 +825,28 @@ defmodule Pulsar.Consumer do
   end
 
   defp check_and_refill_permits(state) do
-    refill_threshold = state.flow_threshold
-    refill_amount = state.flow_refill
-    current_permits = state.flow_outstanding_permits
-
-    if current_permits <= refill_threshold do
-      case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
-        :ok ->
-          new_permits = current_permits + refill_amount
-          %{state | flow_outstanding_permits: new_permits}
-
-        error ->
-          Logger.error("Failed to send flow command: #{inspect(error)}")
-          state
-      end
-    else
+    # Only auto-refill if flow_initial > 0 (automatic flow control enabled)
+    if state.flow_initial == 0 do
+      # Manual flow control - don't auto-refill
       state
+    else
+      refill_threshold = state.flow_threshold
+      refill_amount = state.flow_refill
+      current_permits = state.flow_outstanding_permits
+
+      if current_permits <= refill_threshold do
+        case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+          :ok ->
+            new_permits = current_permits + refill_amount
+            %{state | flow_outstanding_permits: new_permits}
+
+          error ->
+            Logger.error("Failed to send flow command: #{inspect(error)}")
+            state
+        end
+      else
+        state
+      end
     end
   end
 
