@@ -7,7 +7,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     {:ok, %{messages: [], count: 0, fail_all: fail_all}}
   end
 
-  def handle_message({command, metadata, {_single_metadata, payload}, _broker_metadata}, state) do
+  def handle_message({command, metadata, {_single_metadata, payload}, _broker_metadata, _message_id_to_ack}, state) do
     # Build a message structure similar to the old format for compatibility
     message = %{
       id: {command.message_id.ledgerId, command.message_id.entryId},
