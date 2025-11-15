@@ -105,6 +105,8 @@ defmodule Pulsar do
     start(:normal, config)
   end
 
+  def start_link(config), do: start(config)
+
   @impl true
   def start(_type, opts) do
     consumers =
