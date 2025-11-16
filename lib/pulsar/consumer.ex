@@ -945,7 +945,7 @@ defmodule Pulsar.Consumer do
   defp should_send_to_dead_letter?(state, redelivery_count) do
     state.max_redelivery != nil and
       state.max_redelivery >= 1 and
-      redelivery_count >= state.max_redelivery and
+      redelivery_count > state.max_redelivery and
       state.dead_letter_producer_pid != nil
   end
 
