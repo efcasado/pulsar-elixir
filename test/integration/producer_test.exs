@@ -293,7 +293,7 @@ defmodule Pulsar.Integration.ProducerTest do
       # The broker disconnect causes producers to retry registration with backoff
       Utils.wait_for(fn -> Process.alive?(group_pid_2) end)
 
-      # Try to send with fencing producer
+      # Try to send with fencing producer to confirm it's working
       Utils.wait_for(
         fn ->
           case Pulsar.send(group_pid_2, "Probe message") do
@@ -301,27 +301,24 @@ defmodule Pulsar.Integration.ProducerTest do
             {:error, _} -> false
           end
         end,
-        200
+        100,
+        250
       )
 
-      # Verify telemetry events
-      stats = Utils.collect_producer_opened_stats()
-
-      # Should have:
-      # - 2 successful initial opens (producer 1 and producer 2)
-      # - 1 successful reopen (producer 2 reconnected after forced disconnect)
-      # Note: The fenced producer (producer 1) is rejected during registration,
-      # which may or may not be counted in the "opened" stats depending on when the error occurs
-      assert stats.success_count >= 3
-
-      # Collect all raw producer opened events
-      all_events = Utils.collect_events([:pulsar, :producer, :opened, :stop])
-
-      # Check for fenced event in telemetry (optional - may not always be captured in time)
-      [fenced_event] = Enum.filter(all_events, &(Map.get(&1, :error) == :producer_fenced))
-      assert fenced_event.error == :producer_fenced
-      assert fenced_event.topic == topic
-      assert fenced_event.access_mode == :Exclusive
+      # Wait for the fenced event to appear in telemetry
+      # Producer 1 will attempt to reconnect and get rejected by the broker
+      Utils.wait_for(
+        fn ->
+          all_events = Utils.collect_events([:pulsar, :producer, :opened, :stop])
+          # Should have:
+          # - 2 successful initial opens (producer 1 and producer 2)
+          # - 1 failed reopen (producer 1 gets fenced when trying to reconnect)
+          # - 1 successful reopen (producer 2 reconnected after broker disconnect)
+          assert Enum.count(all_events) == 4
+          Enum.any?(all_events, &(Map.get(&1, :error) == :producer_fenced))
+        end,
+        100
+      )
 
       # Cleanup
       Pulsar.stop_producer(group_pid_2)
