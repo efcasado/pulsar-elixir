@@ -63,21 +63,36 @@ defmodule Pulsar.ProducerGroup do
   @doc """
   Gets all producer process PIDs managed by this producer group.
 
-  Returns a list of producer PIDs.
+  Returns a list of producer PIDs that are currently alive.
+  Filters out producers that are restarting or undefined.
   """
   def get_producers(supervisor_pid) do
     supervisor_pid
     |> Supervisor.which_children()
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
+    |> Enum.filter(&is_pid/1)
   end
 
   @doc """
   Sends a message through the producer in this group.
+
+  Returns `{:error, :no_producers_available}` if all producers in the group are dead or restarting.
+  Returns `{:error, :producer_died}` if the producer crashes during the send operation.
   """
   @spec send_message(pid(), binary(), timeout()) :: {:ok, map()} | {:error, term()}
   def send_message(group_pid, payload, timeout \\ 5000) do
-    [producer_pid] = get_producers(group_pid)
-    Pulsar.Producer.send_message(producer_pid, payload, timeout)
+    case get_producers(group_pid) do
+      [] ->
+        {:error, :no_producers_available}
+
+      [producer_pid | _] ->
+        try do
+          Pulsar.Producer.send_message(producer_pid, payload, timeout)
+        catch
+          :exit, reason ->
+            {:error, {:producer_died, reason}}
+        end
+    end
   end
 
   @impl true
@@ -93,7 +108,10 @@ defmodule Pulsar.ProducerGroup do
 
     supervisor_opts = [
       strategy: :one_for_one,
-      max_restarts: Keyword.get(opts, :max_restarts, 10)
+      # Allow many restarts to handle broker disconnection scenarios
+      # where producers may fail multiple times while broker reconnects
+      max_restarts: Keyword.get(opts, :max_restarts, 100),
+      max_seconds: 60
     ]
 
     Supervisor.init(children, supervisor_opts)
