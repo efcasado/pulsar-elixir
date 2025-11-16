@@ -118,11 +118,7 @@ defmodule Pulsar.Broker do
   """
   @spec connected?(GenServer.server()) :: boolean()
   def connected?(broker) do
-    try do
-      :gen_statem.call(broker, :is_connected, 100)
-    catch
-      :exit, _ -> false
-    end
+    :gen_statem.call(broker, :is_connected, 100)
   end
 
   @doc """
