@@ -13,9 +13,9 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Message Format
 
-  `handle_message/2` receives a tuple containing the command, metadata, payload, and broker metadata:
+  `handle_message/2` receives a tuple containing the command, metadata, payload, broker metadata, and message_id_to_ack:
 
-      {command, metadata, payload, broker_metadata}
+      {command, metadata, payload, broker_metadata, message_id_to_ack}
 
   Where:
   - `command` - %Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage{}
@@ -24,6 +24,7 @@ defmodule Pulsar.Consumer.Callback do
     - `single_metadata` - Single message metadata (nil for single messages, struct for batch messages)
     - `binary` - The actual message payload
   - `broker_metadata` - Additional broker information
+  - `message_id_to_ack` - The message ID to use for ACK/NACK (includes batch_index if from a batch)
 
   Note: Both single messages and batch messages use the same normalized format.
   For single messages, single_metadata will be nil.
@@ -31,9 +32,8 @@ defmodule Pulsar.Consumer.Callback do
 
   You can extract message information like this:
 
-      def handle_message({command, metadata, {single_metadata, payload}, _broker_metadata}, state) do
-        message_id = {command.message_id.ledgerId, command.message_id.entryId}
-        # single_metadata is nil for single messages, struct for batch messages
+      def handle_message({command, metadata, {single_metadata, payload}, _broker_metadata, message_id_to_ack}, state) do
+        # Use message_id_to_ack for manual ACK/NACK
         # payload is always the binary message content
         {:ok, state}
       end
@@ -48,7 +48,7 @@ defmodule Pulsar.Consumer.Callback do
           {:ok, %{count: 0, max_messages: max_messages, messages: []}}
         end
 
-        def handle_message({_command, _metadata, {_single_metadata, payload}, _broker_metadata}, callback_state) do
+      def handle_message({command, _metadata, {_single_metadata, payload}, _broker_metadata, _message_id_to_ack}, callback_state) do
           new_state = %{
             callback_state
             | count: callback_state.count + 1,
@@ -128,14 +128,42 @@ defmodule Pulsar.Consumer.Callback do
 
   ### `handle_message/2`
 
-  - `{:ok, new_state}` - Message processed successfully, acknowledge message
-  - `{:error, reason, new_state}` - Processing failed, don't acknowledge message
+  - `{:ok, new_state}` - Message processed successfully, acknowledge message automatically
+  - `{:error, reason, new_state}` - Processing failed, track for redelivery
+  - `{:noreply, new_state}` - Message processed, but don't automatically ACK/NACK. Use `Pulsar.Consumer.ack/2` or `Pulsar.Consumer.nack/2` for manual acknowledgment
   - `{:stop, new_state}` - Message processed successfully, acknowledge, then stop consumer
 
   ### `terminate/2`
 
   - `:ok` - Cleanup completed successfully
   - Any other value is ignored
+
+  ## Manual Acknowledgment
+
+  When you return `{:noreply, state}` from `handle_message/2`, the message will NOT be automatically
+  acknowledged or negatively acknowledged. This gives you full control over when and how to ACK/NACK messages,
+  which is useful for:
+
+  - Broadway pipelines that handle acknowledgment in batches
+  - Async processing where acknowledgment happens after the callback returns
+  - Custom acknowledgment logic based on downstream processing
+
+  Example with manual ACK:
+
+      def handle_message({command, _metadata, {_single_metadata, payload}, _broker_metadata, message_id_to_ack}, state) do
+        # Use message_id_to_ack (not command.message_id) for manual ACK/NACK
+        # This ensures batch messages are ACKed with the correct batch_index
+        
+        # Send to async processor
+        Task.async(fn ->
+          case process_async(payload) do
+            :ok -> Pulsar.Consumer.ack(self(), message_id_to_ack)
+            {:error, _} -> Pulsar.Consumer.nack(self(), message_id_to_ack)
+          end
+        end)
+        
+        {:noreply, state}
+      end
   """
 
   @type message_args :: {
@@ -153,6 +181,7 @@ defmodule Pulsar.Consumer.Callback do
   @callback handle_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}
+              | {:noreply, state}
               | {:stop, state}
 
   @optional_callbacks terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2

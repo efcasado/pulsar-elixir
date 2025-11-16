@@ -61,7 +61,7 @@ defmodule Pulsar do
   """
   use Application
 
-  alias Pulsar.Protocol.Binary
+  alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
 
   require Logger
 
@@ -104,6 +104,8 @@ defmodule Pulsar do
   def start(config) do
     start(:normal, config)
   end
+
+  def start_link(config), do: start(config)
 
   @impl true
   def start(_type, opts) do
@@ -640,6 +642,126 @@ defmodule Pulsar do
   end
 
   @doc """
+  Sends a flow command to request more messages from a consumer.
+
+  This is a convenience wrapper around `Pulsar.Consumer.send_flow/2`.
+  Use this when you've disabled automatic flow control by setting `:flow_initial` to 0.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID or name
+  - `permits` - Number of message permits to request
+
+  ## Examples
+
+      # Start consumer with manual flow control
+      {:ok, consumer} = Pulsar.start_consumer(
+        topic,
+        subscription,
+        MyCallback,
+        flow_initial: 0
+      )
+
+      # Request 10 messages
+      Pulsar.send_flow(consumer, 10)
+  """
+  @spec send_flow(pid() | String.t(), non_neg_integer()) :: :ok | {:error, term()}
+  def send_flow(consumer, permits) when is_pid(consumer) do
+    Pulsar.Consumer.send_flow(consumer, permits)
+  end
+
+  def send_flow(consumer_name, permits) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name) do
+      {:ok, consumer_pid} ->
+        Pulsar.Consumer.send_flow(consumer_pid, permits)
+
+      {:error, :not_found} ->
+        {:error, :consumer_not_found}
+    end
+  end
+
+  @doc """
+  Manually acknowledges a message.
+
+  This is a convenience wrapper around `Pulsar.Consumer.ack/2`.
+  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID or name
+  - `message_id` - The message ID to acknowledge (from the command structure)
+
+  ## Examples
+
+      # Using with consumer PID
+      Pulsar.ack(consumer_pid, message_id)
+
+      # Can also be used with message structure for Broadway
+      def ack(consumer, messages) do
+        Enum.each(messages, fn %{message_id: message_id} ->
+          Pulsar.ack(consumer, message_id)
+        end)
+      end
+  """
+  @spec ack(pid() | String.t(), MessageIdData.t()) :: :ok | {:error, term()}
+  def ack(consumer, message_id) when is_pid(consumer) do
+    Pulsar.Consumer.ack(consumer, message_id)
+  end
+
+  def ack(consumer_name, message_id) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name) do
+      {:ok, consumer_pid} ->
+        Pulsar.Consumer.ack(consumer_pid, message_id)
+
+      {:error, :not_found} ->
+        {:error, :consumer_not_found}
+    end
+  end
+
+  @doc """
+  Manually negatively acknowledges a message.
+
+  This is a convenience wrapper around `Pulsar.Consumer.nack/2`.
+  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+
+  The message will be tracked for redelivery if `:redelivery_interval` is configured.
+  When the message is redelivered and the redelivery count exceeds `:max_redelivery`,
+  it will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
+  regardless of whether you use manual or automatic acknowledgment.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID or name
+  - `message_id` - The message ID to negatively acknowledge (from the command structure)
+
+  ## Examples
+
+      # Using with consumer PID
+      Pulsar.nack(consumer_pid, message_id)
+
+      # Can also be used with message structure for Broadway
+      def nack(consumer, messages) do
+        Enum.each(messages, fn %{message_id: message_id} ->
+          Pulsar.nack(consumer, message_id)
+        end)
+      end
+  """
+  @spec nack(pid() | String.t(), MessageIdData.t()) :: :ok | {:error, term()}
+  def nack(consumer, message_id) when is_pid(consumer) do
+    Pulsar.Consumer.nack(consumer, message_id)
+  end
+
+  def nack(consumer_name, message_id) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name) do
+      {:ok, consumer_pid} ->
+        Pulsar.Consumer.nack(consumer_pid, message_id)
+
+      {:error, :not_found} ->
+        {:error, :consumer_not_found}
+    end
+  end
+
+  @doc """
   Sends a message synchronously using a producer group.
 
   The producer group must be started first using `start_producer/2`.
@@ -657,7 +779,7 @@ defmodule Pulsar do
 
   """
   @spec send(String.t() | pid(), binary(), keyword()) ::
-          {:ok, Binary.Pulsar.Proto.MessageIdData.t()} | {:error, term()}
+          {:ok, MessageIdData.t()} | {:error, term()}
   def send(producer_group_pid_or_name, message, opts \\ [])
 
   def send(producer_group_pid, message, opts) when is_pid(producer_group_pid) do

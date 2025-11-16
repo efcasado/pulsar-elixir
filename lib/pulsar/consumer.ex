@@ -84,9 +84,9 @@ defmodule Pulsar.Consumer do
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
   - `opts` - Additional options:
     - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial` - Initial flow permits (default: 100)
-    - `:flow_threshold` - Flow permits threshold (default: 50)
-    - `:flow_refill` - Flow permits refill (default: 50)
+    - `:flow_initial` - Initial flow permits (default: 100). Set to 0 to disable automatic flow control and use `send_flow/2` manually.
+    - `:flow_threshold` - Flow permits threshold for automatic refill (default: 50). Ignored when `:flow_initial` is 0.
+    - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
     - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
@@ -144,6 +144,100 @@ defmodule Pulsar.Consumer do
   @spec stop(GenServer.server(), term(), timeout()) :: :ok
   def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
     GenServer.stop(consumer, reason, timeout)
+  end
+
+  @doc """
+  Sends a flow command to request more messages from the broker.
+
+  Use this function when you've disabled automatic flow control by setting
+  `:flow_initial` to 0. This allows you to implement custom flow control,
+  such as integrating with Broadway's demand mechanism.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID
+  - `permits` - Number of message permits to request
+
+  ## Examples
+
+      # Start consumer with no automatic flow control
+      {:ok, consumer_pid} = Pulsar.start_consumer(
+        topic,
+        subscription,
+        MyCallback,
+        flow_initial: 0  # Disable automatic flow
+      )
+
+      # Manually request messages based on your own demand
+      Pulsar.Consumer.send_flow(consumer_pid, 10)
+
+      # Example with Broadway demand
+      def handle_demand(demand, state) do
+        Pulsar.Consumer.send_flow(state.consumer, demand)
+        # ... rest of logic
+      end
+  """
+  @spec send_flow(pid(), non_neg_integer()) :: :ok | {:error, term()}
+  def send_flow(consumer, permits) when is_integer(permits) and permits > 0 do
+    GenServer.call(consumer, {:send_flow, permits})
+  end
+
+  @doc """
+  Manually acknowledges a message.
+
+  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID
+  - `message_id` - The message ID to acknowledge (from the command structure)
+
+  ## Examples
+
+      def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
+        message_id = command.message_id
+        # Process message...
+        spawn(fn ->
+          # Do async processing
+          Pulsar.Consumer.ack(consumer_pid, message_id)
+        end)
+        {:noreply, state}
+      end
+  """
+  @spec ack(pid(), Binary.MessageIdData.t()) :: :ok | {:error, term()}
+  def ack(consumer, message_id) do
+    GenServer.call(consumer, {:ack, message_id})
+  end
+
+  @doc """
+  Manually negatively acknowledges a message.
+
+  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+
+  The message will be tracked for redelivery if `:redelivery_interval` is configured.
+  When the message is redelivered and the redelivery count exceeds `:max_redelivery`,
+  it will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
+  regardless of whether you use manual or automatic acknowledgment.
+
+  ## Parameters
+
+  - `consumer` - The consumer process PID
+  - `message_id` - The message ID to negatively acknowledge (from the command structure)
+
+  ## Examples
+
+      def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
+        message_id = command.message_id
+        case process_message() do
+          :ok -> Pulsar.Consumer.ack(self(), message_id)
+          {:error, _reason} -> Pulsar.Consumer.nack(self(), message_id)
+        end
+        {:noreply, state}
+      end
+  """
+  @spec nack(pid(), Binary.MessageIdData.t()) :: :ok | {:error, term()}
+  def nack(consumer, message_id) do
+    GenServer.call(consumer, {:nack, message_id})
   end
 
   ## GenServer Callbacks
@@ -299,7 +393,16 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_continue(:send_initial_flow, state) do
-    case send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial) do
+    # Only send initial flow if flow_initial > 0 (automatic flow control enabled)
+    result =
+      if state.flow_initial > 0 do
+        send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial)
+      else
+        # Manual flow control - don't send initial flow
+        :ok
+      end
+
+    case result do
       :ok ->
         broker_monitor = Process.monitor(state.broker_pid)
         schedule_redelivery(state.redelivery_interval)
@@ -348,86 +451,125 @@ defmodule Pulsar.Consumer do
     num_messages = length(payload)
     state = decrement_permits(state, num_messages)
 
-    {final_callback_state, nacked_ids} =
-      payload
-      |> Enum.with_index()
-      |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index}, {callback_state, nacked_acc} ->
-        msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata}
+    # Check if entire batch should go to DLQ (redelivery count applies to whole batch)
+    if should_send_to_dead_letter?(state, redelivery_count) do
+      Logger.warning(
+        "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ"
+      )
 
-        message_id_to_ack =
-          if msg_metadata == nil do
-            base_message_id
-          else
-            %{base_message_id | batch_index: index}
-          end
-
-        result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
-
-        case result do
-          {:ok, new_callback_state} ->
-            ack_command = %Binary.CommandAck{
-              consumer_id: state.consumer_id,
-              ack_type: :Individual,
-              message_id: [message_id_to_ack]
-            }
-
-            {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
-
-            {new_callback_state, nacked_acc}
-
-          {:error, reason, new_callback_state} ->
-            if should_send_to_dead_letter?(state, redelivery_count) do
-              Logger.warning(
-                "Redelivery count of #{redelivery_count} exceed max redelivery of #{state.max_redelivery}, sending to DLQ topic"
-              )
-
-              case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
-                :ok ->
-                  ack_command = %Binary.CommandAck{
-                    consumer_id: state.consumer_id,
-                    ack_type: :Individual,
-                    message_id: [message_id_to_ack]
-                  }
-
-                  {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
-                  {new_callback_state, nacked_acc}
-
-                {:error, dlq_reason} ->
-                  Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-
-                  {new_callback_state, [message_id_to_ack | nacked_acc]}
-              end
+      {final_callback_state, nacked_ids} =
+        payload
+        |> Enum.with_index()
+        |> Enum.reduce({state.callback_state, []}, fn {{_msg_metadata, msg_payload}, index},
+                                                      {callback_state, nacked_acc} ->
+          message_id_to_ack =
+            if index == 0 and length(payload) == 1 do
+              base_message_id
             else
+              %{base_message_id | batch_index: index}
+            end
+
+          case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
+            :ok ->
+              # Successfully sent to DLQ, ACK the message
+              ack_command = %Binary.CommandAck{
+                consumer_id: state.consumer_id,
+                ack_type: :Individual,
+                message_id: [message_id_to_ack]
+              }
+
+              {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+              {callback_state, nacked_acc}
+
+            {:error, dlq_reason} ->
+              Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
+
+              {callback_state, [message_id_to_ack | nacked_acc]}
+          end
+        end)
+
+      state = check_and_refill_permits(state)
+
+      new_nacked_messages =
+        if state.redelivery_interval do
+          MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
+        else
+          state.nacked_messages
+        end
+
+      new_state = %{
+        state
+        | callback_state: final_callback_state,
+          nacked_messages: new_nacked_messages
+      }
+
+      {:noreply, new_state}
+    else
+      # Process messages normally
+      {final_callback_state, nacked_ids} =
+        payload
+        |> Enum.with_index()
+        |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index},
+                                                      {callback_state, nacked_acc} ->
+          message_id_to_ack =
+            if msg_metadata == nil do
+              base_message_id
+            else
+              %{base_message_id | batch_index: index}
+            end
+
+          # Include message_id_to_ack for manual ACK/NACK use cases (e.g., Broadway)
+          msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata, message_id_to_ack}
+
+          result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
+
+          case result do
+            {:ok, new_callback_state} ->
+              ack_command = %Binary.CommandAck{
+                consumer_id: state.consumer_id,
+                ack_type: :Individual,
+                message_id: [message_id_to_ack]
+              }
+
+              {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+
+              {new_callback_state, nacked_acc}
+
+            {:noreply, new_callback_state} ->
+              # Manual ACK mode - don't automatically ACK or NACK
+              {new_callback_state, nacked_acc}
+
+            {:error, reason, new_callback_state} ->
               Logger.warning(
                 "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
               )
 
               {new_callback_state, [message_id_to_ack | nacked_acc]}
-            end
 
-          unexpected_result ->
-            Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
+            unexpected_result ->
+              Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
 
-            {callback_state, nacked_acc}
+              {callback_state, nacked_acc}
+          end
+        end)
+
+      state = check_and_refill_permits(state)
+
+      new_nacked_messages =
+        if state.redelivery_interval do
+          MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
+        else
+          state.nacked_messages
         end
-      end)
 
-    state = check_and_refill_permits(state)
+      new_state = %{
+        state
+        | callback_state: final_callback_state,
+          nacked_messages: new_nacked_messages
+      }
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-      else
-        state.nacked_messages
-      end
-
-    new_state = %{
-      state
-      | callback_state: final_callback_state,
-        nacked_messages: new_nacked_messages
-    }
-
-    {:noreply, new_state}
+      {:noreply, new_state}
+    end
   end
 
   # Handle periodic redelivery
@@ -516,6 +658,61 @@ defmodule Pulsar.Consumer do
   end
 
   @impl true
+  def handle_call({:send_flow, permits}, _from, state) do
+    flow_command = %Binary.CommandFlow{
+      consumer_id: state.consumer_id,
+      messagePermits: permits
+    }
+
+    case Pulsar.Broker.send_command(state.broker_pid, flow_command) do
+      :ok ->
+        new_permits = state.flow_outstanding_permits + permits
+        {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:ack, message_id}, _from, state) do
+    ack_command = %Binary.CommandAck{
+      consumer_id: state.consumer_id,
+      ack_type: :Individual,
+      message_id: [message_id]
+    }
+
+    case Pulsar.Broker.send_request(state.broker_pid, ack_command) do
+      {:ok, _response} ->
+        {:reply, :ok, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:nack, message_id}, _from, state) do
+    # Manual NACK follows the same pattern as auto-NACK:
+    # - Add to nacked_messages if redelivery_interval is configured (for periodic redelivery)
+    # - Note: DLQ logic cannot be applied here since we don't have redelivery_count or payload
+    #   from the broker. The DLQ will only trigger on subsequent redeliveries when the message
+    #   comes back through handle_message with an updated redelivery_count.
+
+    new_nacked_messages =
+      if state.redelivery_interval do
+        # Track for periodic redelivery
+        MapSet.put(state.nacked_messages, message_id)
+      else
+        # No periodic redelivery configured, so we don't track nacked messages
+        # Note: Without redelivery_interval, messages won't be automatically redelivered
+        # and DLQ won't be triggered. Consider configuring :redelivery_interval and
+        # :dead_letter_policy for production use.
+        Logger.debug("NACKed message #{inspect(message_id)}, but no redelivery_interval configured")
+        state.nacked_messages
+      end
+
+    {:reply, :ok, %{state | nacked_messages: new_nacked_messages}}
+  end
+
   def handle_call(request, from, state) do
     # Delegate to callback module if it implements handle_call
     if function_exported?(state.callback_module, :handle_call, 3) do
@@ -628,22 +825,28 @@ defmodule Pulsar.Consumer do
   end
 
   defp check_and_refill_permits(state) do
-    refill_threshold = state.flow_threshold
-    refill_amount = state.flow_refill
-    current_permits = state.flow_outstanding_permits
-
-    if current_permits <= refill_threshold do
-      case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
-        :ok ->
-          new_permits = current_permits + refill_amount
-          %{state | flow_outstanding_permits: new_permits}
-
-        error ->
-          Logger.error("Failed to send flow command: #{inspect(error)}")
-          state
-      end
-    else
+    # Only auto-refill if flow_initial > 0 (automatic flow control enabled)
+    if state.flow_initial == 0 do
+      # Manual flow control - don't auto-refill
       state
+    else
+      refill_threshold = state.flow_threshold
+      refill_amount = state.flow_refill
+      current_permits = state.flow_outstanding_permits
+
+      if current_permits <= refill_threshold do
+        case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+          :ok ->
+            new_permits = current_permits + refill_amount
+            %{state | flow_outstanding_permits: new_permits}
+
+          error ->
+            Logger.error("Failed to send flow command: #{inspect(error)}")
+            state
+        end
+      else
+        state
+      end
     end
   end
 
@@ -742,7 +945,7 @@ defmodule Pulsar.Consumer do
   defp should_send_to_dead_letter?(state, redelivery_count) do
     state.max_redelivery != nil and
       state.max_redelivery >= 1 and
-      redelivery_count >= state.max_redelivery and
+      redelivery_count > state.max_redelivery and
       state.dead_letter_producer_pid != nil
   end
 
