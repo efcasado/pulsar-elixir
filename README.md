@@ -1,11 +1,13 @@
 # Elixir Client for Apache Pulsar
 
 > [!CAUTION]
-> This project is a prototype in very early development and it is likely to be
-> abandoned before it reaches maturity. Don't waste your time on it! ;)
+> This project is a prototype in very early development. APIs are likely to break often
+> until the project reaches its first stable release.
 
 An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 
+If you are interested in using this library together with [Broadway](https://github.com/dashbitco/broadway),
+check our [Broadway producer for Pulsar](https://github.com/efcasado/off_broadway_pulsar).
 
 ## Architecture
 
