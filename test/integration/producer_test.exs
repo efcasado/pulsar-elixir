@@ -314,44 +314,17 @@ defmodule Pulsar.Integration.ProducerTest do
       # which may or may not be counted in the "opened" stats depending on when the error occurs
       assert stats.success_count >= 3
 
-      # Collect all producer opened events
-      all_events = collect_all_producer_events()
+      # Collect all raw producer opened events
+      all_events = Utils.collect_events([:pulsar, :producer, :opened, :stop])
 
       # Check for fenced event in telemetry (optional - may not always be captured in time)
-      fenced_events =
-        Enum.filter(all_events, fn event ->
-          Map.get(event, :error) == :producer_fenced
-        end)
-
-      # If we captured the fenced event, verify its metadata
-      if length(fenced_events) > 0 do
-        fenced_event = hd(fenced_events)
-        assert fenced_event.error == :producer_fenced
-        assert fenced_event.topic == topic
-        assert fenced_event.access_mode == :Exclusive
-      end
+      [fenced_event] = Enum.filter(all_events, &(Map.get(&1, :error) == :producer_fenced))
+      assert fenced_event.error == :producer_fenced
+      assert fenced_event.topic == topic
+      assert fenced_event.access_mode == :Exclusive
 
       # Cleanup
       Pulsar.stop_producer(group_pid_2)
-    end
-
-    defp collect_all_producer_events do
-      collect_producer_events([])
-    end
-
-    defp collect_producer_events(acc) do
-      receive do
-        {:telemetry_event,
-         %{
-           event: [:pulsar, :producer, :opened, :stop],
-           measurements: measurements,
-           metadata: metadata
-         }} ->
-          event = Map.merge(measurements, metadata)
-          collect_producer_events([event | acc])
-      after
-        0 -> Enum.reverse(acc)
-      end
     end
   end
 end
