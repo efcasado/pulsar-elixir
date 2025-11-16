@@ -65,7 +65,11 @@ defmodule Pulsar.Test.Support.Utils do
     |> then(fn events -> %{total_count: length(events)} end)
   end
 
-  defp collect_events(event_name) do
+  @doc """
+  Collects all raw telemetry events for the given event name.
+  Returns a list of events with merged measurements and metadata.
+  """
+  def collect_events(event_name) do
     collect_events(event_name, [])
   end
 
