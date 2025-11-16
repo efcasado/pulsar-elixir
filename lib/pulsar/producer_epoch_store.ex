@@ -85,11 +85,11 @@ defmodule Pulsar.ProducerEpochStore do
   """
   @spec put(String.t(), String.t(), atom(), integer()) :: :ok | :error
   def put(topic, producer_name, access_mode, epoch) do
-    if :ets.whereis(@table_name) != :undefined do
+    if :ets.whereis(@table_name) == :undefined do
+      :error
+    else
       :ets.insert(@table_name, {{topic, producer_name, access_mode}, epoch})
       :ok
-    else
-      :error
     end
   end
 
@@ -113,11 +113,11 @@ defmodule Pulsar.ProducerEpochStore do
   """
   @spec delete(String.t(), String.t(), atom()) :: :ok | :error
   def delete(topic, producer_name, access_mode) do
-    if :ets.whereis(@table_name) != :undefined do
+    if :ets.whereis(@table_name) == :undefined do
+      :error
+    else
       :ets.delete(@table_name, {topic, producer_name, access_mode})
       :ok
-    else
-      :error
     end
   end
 
