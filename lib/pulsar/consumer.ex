@@ -448,6 +448,9 @@ defmodule Pulsar.Consumer do
     base_message_id = message_id(command)
     redelivery_count = Map.get(command, :redelivery_count, 0)
 
+    payload = maybe_uncompress(metadata, payload)
+    payload = unwrap_messages(metadata, payload)
+
     num_messages = length(payload)
     state = decrement_permits(state, num_messages)
 
@@ -961,5 +964,61 @@ defmodule Pulsar.Consumer do
           error
       end
     end
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload) do
+    payload
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+    :zlib.uncompress(compressed_payload)
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
+    {:ok, payload} = NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
+    payload
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
+    :ezstd.decompress(compressed_payload)
+  end
+
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+    {:ok, payload} = :snappyer.decompress(compressed_payload)
+    payload
+  end
+
+  defp unwrap_messages(metadata, payload) do
+    if metadata.num_messages_in_batch > 0 do
+      parse_batch_messages(payload, metadata.num_messages_in_batch, [])
+    else
+      [{nil, payload}]
+    end
+  end
+
+  defp parse_batch_messages(<<>>, 0, acc), do: Enum.reverse(acc)
+  defp parse_batch_messages(_, 0, acc), do: Enum.reverse(acc)
+
+  defp parse_batch_messages(
+         <<metadata_size::32, metadata::bytes-size(metadata_size), data::binary>> = payload,
+         count,
+         acc
+       ) do
+    single_metadata = Binary.SingleMessageMetadata.decode(metadata)
+
+    payload_size = single_metadata.payload_size
+
+    <<payload::bytes-size(payload_size), rest::binary>> = data
+
+    # Build individual message as {metadata, payload} tuple
+    message = {single_metadata, payload}
+
+    parse_batch_messages(rest, count - 1, [message | acc])
+  rescue
+    _ -> [{nil, payload}]
+  end
+
+  defp parse_batch_messages(payload, _, _) do
+    [{nil, payload}]
   end
 end
