@@ -154,7 +154,7 @@ defmodule Pulsar.Integration.ProducerTest do
 
       assert {:ok, _} = Pulsar.send(group_pid_1, "Exclusive message")
 
-      # Second producer with :Exclusive should fail to register
+      # Producer with :Exclusive should fail to register
       assert {:ok, group_pid_2} =
                Pulsar.start_producer(@exclusive_topic,
                  access_mode: :Exclusive,
@@ -167,11 +167,11 @@ defmodule Pulsar.Integration.ProducerTest do
       Pulsar.stop_producer(group_pid_1)
       Utils.wait_for(fn -> not Process.alive?(producer_1) end)
 
-      # Second exclusive producer should now succeed
+      # New exclusive producer should now succeed
       assert {:ok, group_pid_2} =
                Pulsar.start_producer(@exclusive_topic,
                  access_mode: :Exclusive,
-                 name: "exclusive-2"
+                 name: "exclusive-3"
                )
 
       [producer_2] = Pulsar.get_producers(group_pid_2)
@@ -217,13 +217,11 @@ defmodule Pulsar.Integration.ProducerTest do
       [producer_1] = Pulsar.get_producers(group_pid_1)
       Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
 
-      # Start second producer with :WaitForExclusive. It should be not ready
+      # Start second producer with :WaitForExclusive. It should not be ready
       {:ok, group_pid_2} = Pulsar.start_producer(wait_topic, access_mode: :WaitForExclusive, name: "waiting-producer-2")
-
       [producer_2] = Pulsar.get_producers(group_pid_2)
 
       Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name == "waiting-producer-2" end)
-
       refute :sys.get_state(producer_2).ready
 
       # First producer can send messages
@@ -244,6 +242,116 @@ defmodule Pulsar.Integration.ProducerTest do
 
       # Cleanup
       Pulsar.stop_producer(group_pid_2)
+    end
+
+    @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
+    test ":ExclusiveWithFencing takes over and fences old producer" do
+      topic = "persistent://public/default/fencing-test"
+
+      # Step 1: Start first producer with :Exclusive and send a message
+      {:ok, group_pid_1} =
+        Pulsar.start_producer(topic, access_mode: :Exclusive, name: "original-exclusive")
+
+      [producer_1] = Pulsar.get_producers(group_pid_1)
+      Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
+
+      # First producer should have epoch 0
+      assert :sys.get_state(producer_1).topic_epoch == 0
+
+      # Verify original producer can send
+      assert {:ok, _} = Pulsar.send(group_pid_1, "Message from original producer")
+
+      # Step 2: Start second producer with :ExclusiveWithFencing - should fence out first
+      {:ok, group_pid_2} =
+        Pulsar.start_producer(topic,
+          access_mode: :ExclusiveWithFencing,
+          name: "fencing-takeover"
+        )
+
+      [producer_2] = Pulsar.get_producers(group_pid_2)
+      Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
+
+      # Second producer should have topic_epoch = 1
+      producer_2_state = :sys.get_state(producer_2)
+      assert producer_2_state.topic_epoch == 1
+
+      # Both producers are still alive (broker doesn't proactively close fenced producers)
+      assert Process.alive?(producer_1)
+      assert Process.alive?(producer_2)
+
+      # Step 3: Try to send from the fenced (original) producer
+      # This will trigger the broker to close the connection, causing the producer to die
+      assert {:error, {:producer_died, _}} = Pulsar.send(group_pid_1, "Message from fenced producer")
+
+      # Wait for the old producer to die (connection closes and restart fails due to fencing)
+      Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+
+      # Original producer should be stopped permanently (fenced)
+      refute Process.alive?(producer_1), "Old producer should be fenced and stopped"
+
+      # Step 4: Wait for broker to reconnect and producers to stabilize
+      # The broker disconnect causes producers to retry registration with backoff
+      Utils.wait_for(fn -> Process.alive?(group_pid_2) end)
+
+      # Try to send with fencing producer
+      Utils.wait_for(
+        fn ->
+          case Pulsar.send(group_pid_2, "Probe message") do
+            {:ok, _} -> true
+            {:error, _} -> false
+          end
+        end,
+        200
+      )
+
+      # Verify telemetry events
+      stats = Utils.collect_producer_opened_stats()
+
+      # Should have:
+      # - 2 successful initial opens (producer 1 and producer 2)
+      # - 1 successful reopen (producer 2 reconnected after forced disconnect)
+      # Note: The fenced producer (producer 1) is rejected during registration,
+      # which may or may not be counted in the "opened" stats depending on when the error occurs
+      assert stats.success_count >= 3
+
+      # Collect all producer opened events
+      all_events = collect_all_producer_events()
+
+      # Check for fenced event in telemetry (optional - may not always be captured in time)
+      fenced_events =
+        Enum.filter(all_events, fn event ->
+          Map.get(event, :error) == :producer_fenced
+        end)
+
+      # If we captured the fenced event, verify its metadata
+      if length(fenced_events) > 0 do
+        fenced_event = hd(fenced_events)
+        assert fenced_event.error == :producer_fenced
+        assert fenced_event.topic == topic
+        assert fenced_event.access_mode == :Exclusive
+      end
+
+      # Cleanup
+      Pulsar.stop_producer(group_pid_2)
+    end
+
+    defp collect_all_producer_events do
+      collect_producer_events([])
+    end
+
+    defp collect_producer_events(acc) do
+      receive do
+        {:telemetry_event,
+         %{
+           event: [:pulsar, :producer, :opened, :stop],
+           measurements: measurements,
+           metadata: metadata
+         }} ->
+          event = Map.merge(measurements, metadata)
+          collect_producer_events([event | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
     end
   end
 end

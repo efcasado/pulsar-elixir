@@ -131,6 +131,8 @@ defmodule Pulsar do
           clients
       end
 
+    Pulsar.ProducerEpochStore.init()
+
     # Start clients (brokers are now started within each client)
     children =
       Enum.map(clients_config, fn {client_name, client_opts} ->
@@ -177,6 +179,7 @@ defmodule Pulsar do
 
   @impl true
   def stop(pid) when is_pid(pid) do
+    Pulsar.ProducerEpochStore.cleanup()
     Supervisor.stop(pid, :normal)
   end
 

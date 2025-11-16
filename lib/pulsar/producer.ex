@@ -11,6 +11,7 @@ defmodule Pulsar.Producer do
 
   use GenServer
 
+  alias Pulsar.ProducerEpochStore
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
 
@@ -28,7 +29,8 @@ defmodule Pulsar.Producer do
     :access_mode,
     :compression,
     :ready,
-    :registration_request_id
+    :registration_request_id,
+    :topic_epoch
   ]
 
   @type t :: %__MODULE__{
@@ -42,7 +44,8 @@ defmodule Pulsar.Producer do
           access_mode: atom(),
           compression: :NONE | :LZ4 | :ZLIB | :SNAPPY | :ZSTD,
           ready: boolean() | nil,
-          registration_request_id: integer() | nil
+          registration_request_id: integer() | nil,
+          topic_epoch: integer() | nil
         }
 
   ## Public API
@@ -143,6 +146,13 @@ defmodule Pulsar.Producer do
 
     producer_id = System.unique_integer([:positive, :monotonic])
 
+    # Try to restore topic_epoch from ETS if this producer is restarting
+    topic_epoch =
+      case ProducerEpochStore.get(topic, name, access_mode) do
+        {:ok, epoch} -> epoch
+        :error -> nil
+      end
+
     state = %__MODULE__{
       client: client,
       topic: topic,
@@ -153,10 +163,15 @@ defmodule Pulsar.Producer do
       access_mode: access_mode,
       compression: compression,
       ready: nil,
-      registration_request_id: nil
+      registration_request_id: nil,
+      topic_epoch: topic_epoch
     }
 
-    Logger.info("Starting producer #{producer_id} for topic #{topic}")
+    if topic_epoch do
+      Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
+    else
+      Logger.info("Starting producer #{producer_id} for topic #{topic}")
+    end
 
     total_startup_delay = startup_delay_ms + startup_jitter_ms
 
@@ -179,7 +194,18 @@ defmodule Pulsar.Producer do
   def handle_continue(:register_producer, state) do
     case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
-        register_with_broker(state, broker_pid)
+        if Pulsar.Broker.connected?(broker_pid) do
+          register_with_broker(state, broker_pid)
+        else
+          Logger.debug("Broker disconnected, retrying producer registration in 1s")
+          Process.send_after(self(), :retry_registration, 1000)
+          {:noreply, %{state | broker_pid: broker_pid, ready: false}}
+        end
+
+      {:error, :disconnected} ->
+        Logger.debug("Broker disconnected during topic lookup, retrying in 1s")
+        Process.send_after(self(), :retry_registration, 1000)
+        {:noreply, %{state | ready: false}}
 
       {:error, reason} ->
         Logger.error("Topic lookup failed: #{inspect(reason)}")
@@ -288,7 +314,12 @@ defmodule Pulsar.Producer do
   @impl true
   def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
     if state.registration_request_id == command.request_id do
-      {:noreply, %{state | ready: command.producer_ready}}
+      # Save topic_epoch if we received one (for ExclusiveWithFencing producers)
+      if command.topic_epoch do
+        ProducerEpochStore.put(state.topic, state.producer_name, state.access_mode, command.topic_epoch)
+      end
+
+      {:noreply, %{state | ready: command.producer_ready, topic_epoch: command.topic_epoch}}
     else
       {:noreply, state}
     end
@@ -300,13 +331,24 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
+  def handle_info(:retry_registration, state) do
+    # Retry registration by triggering continue
+    {:noreply, state, {:continue, :register_producer}}
+  end
+
+  @impl true
   def terminate(_reason, nil) do
     :ok
   end
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
     Logger.debug("Terminating producer: #{inspect(state.producer_name)}")
+
+    # Clean up epoch entry if producer is being permanently stopped (fenced or normal shutdown)
+    if reason in [:shutdown, {:shutdown, :producer_fenced}, :normal] do
+      ProducerEpochStore.delete(state.topic, state.producer_name, state.access_mode)
+    end
 
     start_metadata = %{
       topic: state.topic,
@@ -356,6 +398,7 @@ defmodule Pulsar.Producer do
               |> Map.put(:producer_name, Map.get(response, :producer_name))
               |> Map.put(:registration_request_id, response.request_id)
               |> Map.put(:ready, Map.get(response, :producer_ready, true))
+              |> Map.put(:topic_epoch, Map.get(response, :topic_epoch))
 
             {:ok, state}
           else
@@ -364,18 +407,34 @@ defmodule Pulsar.Producer do
               error
           end
 
-        stop_metadata =
-          Map.merge(start_metadata, %{
-            success: match?({:ok, _}, result),
-            producer_name: if(match?({:ok, _}, result), do: elem(result, 1).producer_name)
-          })
+        stop_metadata_extra =
+          case result do
+            {:ok, state} ->
+              %{success: true, producer_name: state.producer_name}
 
+            {:error, {:ProducerFenced, _msg}} ->
+              %{
+                success: false,
+                error: :producer_fenced,
+                producer_id: state.producer_id,
+                access_mode: state.access_mode,
+                topic: state.topic
+              }
+
+            {:error, reason} ->
+              %{success: false, error: reason}
+          end
+
+        stop_metadata = Map.merge(start_metadata, stop_metadata_extra)
         {result, stop_metadata}
       end
     )
     |> case do
       {:ok, new_state} ->
         {:noreply, new_state, {:continue, :monitor_broker}}
+
+      {:error, {:ProducerFenced, _msg}} ->
+        {:stop, {:shutdown, :producer_fenced}, state}
 
       {:error, reason} ->
         {:stop, reason, state}
@@ -389,7 +448,8 @@ defmodule Pulsar.Producer do
       topic: state.topic,
       producer_id: state.producer_id,
       producer_name: producer_name,
-      producer_access_mode: state.access_mode
+      producer_access_mode: state.access_mode,
+      topic_epoch: state.topic_epoch
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
