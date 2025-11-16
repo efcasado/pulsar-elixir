@@ -113,6 +113,19 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
+  Checks if the broker is in connected state.
+  Returns immediately without waiting.
+  """
+  @spec connected?(GenServer.server()) :: boolean()
+  def connected?(broker) do
+    try do
+      :gen_statem.call(broker, :is_connected, 100)
+    catch
+      :exit, _ -> false
+    end
+  end
+
+  @doc """
   Sends a command to the broker without expecting a response.
   """
   @spec send_command(GenServer.server(), struct()) :: :ok | {:error, term()}
@@ -348,6 +361,11 @@ defmodule Pulsar.Broker do
     end
   end
 
+  def disconnected({:call, from}, :is_connected, _broker) do
+    actions = [{:reply, from, false}]
+    {:keep_state_and_data, actions}
+  end
+
   def disconnected({:call, from}, _request, _broker) do
     actions = [{:reply, from, {:error, :disconnected}}]
     {:keep_state_and_data, actions}
@@ -510,6 +528,11 @@ defmodule Pulsar.Broker do
     }
 
     {:keep_state, new_broker}
+  end
+
+  def connected({:call, from}, :is_connected, broker) do
+    actions = [{:reply, from, true}]
+    {:keep_state, broker, actions}
   end
 
   def connected({:call, from}, {:register_producer, producer_id, producer_pid}, broker) do
