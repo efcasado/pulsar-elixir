@@ -14,63 +14,35 @@ check our [Broadway producer for Pulsar](https://github.com/efcasado/off_broadwa
 The library supports multi-client architecture, allowing you to connect to multiple Pulsar clusters simultaneously.
 Each client maintains its own set of registries and supervisors for brokers, consumers, and producers.
 
-```mermaid
-flowchart TD
-    P[Pulsar.Supervisor] --> Client["Client<br/>(e.g., :default)"]
-
-    Client --> BR[BrokerRegistry]
-    Client --> CR[ConsumerRegistry]
-    Client --> PR[ProducerRegistry]
-    Client --> BS[BrokerSupervisor]
-    Client --> CS[ConsumerSupervisor]
-    Client --> PS[ProducerSupervisor]
-
-    BS -.->|DynamicSupervisor| B1[Broker 1]
-    BS -.->|DynamicSupervisor| B2[Broker 2]
-
-    CS -.->|DynamicSupervisor| CG1["<b>ConsumerGroup</b><br/>my-topic"]
-    CS -.->|DynamicSupervisor| PC1["<b>PartitionedConsumer</b><br/>my-partitioned-topic"]
-
-    PS -.->|DynamicSupervisor| PG1["<b>ProducerGroup</b><br/>my-topic"]
-
-    CG1 -.->|DynamicSupervisor| C1[Consumer 1]
-
-    PC1 -.->|DynamicSupervisor| CG2["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-0"]
-    PC1 -.->|DynamicSupervisor| CG3["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-1"]
-    PC1 -.->|DynamicSupervisor| CG4["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-2"]
-
-    CG2 -.->|DynamicSupervisor| C2[Consumer 2]
-    CG2 -.->|DynamicSupervisor| C3[Consumer 3]
-    CG3 -.->|DynamicSupervisor| C4[Consumer 4]
-    CG3 -.->|DynamicSupervisor| C5[Consumer 5]
-    CG4 -.->|DynamicSupervisor| C6[Consumer 6]
-    CG4 -.->|DynamicSupervisor| C7[Consumer 7]
-
-    PG1 -.->|DynamicSupervisor| P1[Producer 1]
-    PG1 -.->|DynamicSupervisor| P2[Producer 2]
-
-    %% Broker ownership and monitoring
-    B1 <===>|monitor| C1
-    B1 <===>|monitor| C2
-    B1 <===>|monitor| C3
-
-    B2 <===>|monitor| C4
-    B2 <===>|monitor| C5
-    B2 <===>|monitor| C6
-    B2 <===>|monitor| C7
-
-    B1 <===>|monitor| P1
-    B2 <===>|monitor| P2
-
-    classDef supervisor fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef registry fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef worker fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef client fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px
-
-    class P,BS,CS,PS,CG1,CG2,CG3,CG4,PC1,PG1 supervisor
-    class BR,CR,PR registry
-    class Client client
-    class C1,C2,C3,C4,C5,C6,C7,P1,P2,B1,B2 worker
+```
+Pulsar.Supervisor
+└── Client (:default)
+    ├── Registries
+    │   ├── BrokerRegistry
+    │   ├── ConsumerRegistry
+    │   └── ProducerRegistry
+    │
+    ├── BrokerSupervisor
+    │   ├── Broker 1
+    │   │   ├── monitors: C1, C2, P1
+    │   └── Broker 2
+    │       ├── monitors: C3, C4
+    │
+    ├── ConsumerSupervisor
+    │   ├── ConsumerGroup: my-topic
+    │   │   └── C1
+    │   │
+    │   └── PartitionedConsumer: my-partitioned-topic
+    │       ├── ConsumerGroup partition-0
+    │       │   └── C2
+    │       ├── ConsumerGroup partition-1
+    │       │   └── C3
+    │       └── ConsumerGroup partition-2
+    │           └── C4
+    │
+    └── ProducerSupervisor
+        └── ProducerGroup: my-topic
+            └── P1
 ```
 
 
