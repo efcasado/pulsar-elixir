@@ -183,73 +183,12 @@ config :pulsar,
 ```
 ### Manual Mode
 
-Alternatively, you can start the Pulsar client on demand and add it to your application's supervisor
-by calling `Pulsar.start/1` directly. This is useful when you want full control over the lifecycle
-or when using Pulsar as an included application.
-
-**Single client:**
-```elixir
-{:ok, pid} = Pulsar.start(
-  host: "pulsar://localhost:6650",
-  socket_opts: [verify: :verify_none],
-  consumers: [
-    my_consumer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic",
-        subscription_name: "my-subscription",
-        callback_module: MyApp.MyConsumer,
-        subscription_type: :Exclusive,
-        flow_initial: 100,
-        flow_threshold: 50,
-        flow_refill: 50,
-        initial_position: :earliest,
-        durable: true,
-        force_create_topic: true
-    ]
-  ],
-  producers: [
-    my_producer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic"
-    ]
-  ]
-)
-```
-
-**Multiple clients:**
-```elixir
-{:ok, pid} = Pulsar.start(
-  clients: [
-    default: [host: "pulsar://localhost:6650"],
-    cluster_2: [host: "pulsar://other-cluster:6650"]
-  ],
-  consumers: [
-    my_consumer: [
-        client: :default,
-        topic: "persistent://my-tenant/my-namespace/my-topic",
-        subscription_name: "my-subscription",
-        callback_module: MyApp.MyConsumer
-    ],
-    other_consumer: [
-        client: :cluster_2,
-        topic: "persistent://other-tenant/other-namespace/other-topic",
-        subscription_name: "other-subscription",
-        callback_module: MyApp.OtherConsumer
-    ]
-  ],
-  producers: [
-    my_producer: [client: :default, topic: "persistent://my-tenant/my-namespace/my-topic"],
-    other_producer: [client: :cluster_2, topic: "persistent://other-tenant/other-namespace/other-topic"]
-  ]
-)
-```
-
-**Fully manual (programmatic control):**
-
-For complete control, you can start clients, consumers, and producers manually in your own supervision tree:
+For complete control over the Pulsar client lifecycle, you can start clients, consumers, and producers
+manually in your own supervision tree:
 
 ```elixir
 # In your application supervisor
 children = [
-  {Registry, keys: :unique, name: Pulsar.ClientRegistry},
   {Pulsar.Client, name: :my_client, host: "pulsar://localhost:6650"}
 ]
 

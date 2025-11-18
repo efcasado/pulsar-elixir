@@ -64,7 +64,7 @@ defmodule Pulsar.Client do
   """
   def start_link(opts) do
     name = Keyword.fetch!(opts, :name)
-    Supervisor.start_link(__MODULE__, opts, name: via_tuple(name))
+    Supervisor.start_link(__MODULE__, opts, name: name)
   end
 
   @impl true
@@ -85,16 +85,6 @@ defmodule Pulsar.Client do
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
-  end
-
-  @doc """
-  Looks up a client process by name.
-  """
-  def whereis(client_name) do
-    case Registry.lookup(Pulsar.ClientRegistry, client_name) do
-      [{pid, _}] -> {:ok, pid}
-      [] -> {:error, :not_found}
-    end
   end
 
   ## Registry and Supervisor Name Helpers
@@ -135,10 +125,6 @@ defmodule Pulsar.Client do
   end
 
   ## Private Functions
-
-  defp via_tuple(client_name) do
-    {:via, Registry, {Pulsar.ClientRegistry, client_name}}
-  end
 
   defp build_broker_opts(opts) do
     app_opts =

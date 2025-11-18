@@ -134,16 +134,11 @@ defmodule Pulsar do
           clients
       end
 
-    # Start application supervisor with ClientRegistry
-    base_children = [{Registry, keys: :unique, name: Pulsar.ClientRegistry}]
-
-    # Add client children for each configured client
-    client_children =
+    # Start clients
+    children =
       Enum.map(clients_config, fn {client_name, client_opts} ->
         {Pulsar.Client, Keyword.put(client_opts, :name, client_name)}
       end)
-
-    children = base_children ++ client_children
 
     sup_opts = [strategy: :one_for_one, name: @app_supervisor]
     {:ok, pid} = Supervisor.start_link(children, sup_opts)
