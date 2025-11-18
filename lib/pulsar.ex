@@ -73,8 +73,8 @@ defmodule Pulsar do
 
   ## Examples
 
-      # Start with custom configuration
-      {:ok, pid} = Pulsar.Application.start(
+      # Start with custom configuration (single client)
+      {:ok, pid} = Pulsar.start(
         host: "pulsar://localhost:6650",
         startup_jitter_ms: 1000,
         consumers: [
@@ -87,8 +87,20 @@ defmodule Pulsar do
         ]
       )
 
+      # Start with multiple clients
+      {:ok, pid} = Pulsar.start(
+        clients: [
+          default: [host: "pulsar://localhost:6650"],
+          cluster_2: [host: "pulsar://other:6650"]
+        ],
+        consumers: [
+          {:consumer1, [client: :default, topic: "topic1", ...]},
+          {:consumer2, [client: :cluster_2, topic: "topic2", ...]}
+        ]
+      )
+
       # Later, stop it
-      :ok = Pulsar.Application.stop(pid)
+      :ok = Pulsar.stop(pid)
   """
   def start(config) do
     start(:normal, config)
@@ -98,15 +110,11 @@ defmodule Pulsar do
 
   @impl true
   def start(_type, opts) do
-    # Embedded mode - start a default client automatically
     consumers =
       Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
 
     producers =
       Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
-
-    bootstrap_host =
-      Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
     start_delay_ms =
       Keyword.get(opts, :start_delay_ms, Application.get_env(:pulsar, :start_delay_ms, 500))
@@ -114,42 +122,75 @@ defmodule Pulsar do
     startup_jitter_ms =
       Keyword.get(opts, :startup_jitter_ms, Application.get_env(:pulsar, :startup_jitter_ms, 0))
 
-    # Start application supervisor with ClientRegistry and default client
-    children = [
-      {Registry, keys: :unique, name: Pulsar.ClientRegistry},
-      {Pulsar.Client, Keyword.put(opts, :name, @default_client)}
-    ]
+    # Get client configurations - support both :clients (multi-client) and :host (single client)
+    clients_config =
+      case Keyword.get(opts, :clients, Application.get_env(:pulsar, :clients)) do
+        nil ->
+          # Fallback to legacy single-client mode with :host
+          bootstrap_host = Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
+          if bootstrap_host, do: [{@default_client, [host: bootstrap_host] ++ opts}], else: []
+
+        clients when is_list(clients) ->
+          clients
+      end
+
+    # Start application supervisor with ClientRegistry
+    base_children = [{Registry, keys: :unique, name: Pulsar.ClientRegistry}]
+
+    # Add client children for each configured client
+    client_children =
+      Enum.map(clients_config, fn {client_name, client_opts} ->
+        {Pulsar.Client, Keyword.put(client_opts, :name, client_name)}
+      end)
+
+    children = base_children ++ client_children
 
     sup_opts = [strategy: :one_for_one, name: @app_supervisor]
     {:ok, pid} = Supervisor.start_link(children, sup_opts)
 
-    # a bootstrap host is required
-    {:ok, _} = Pulsar.start_broker(bootstrap_host, [])
+    # Start brokers for each client
+    Enum.each(clients_config, fn {client_name, client_opts} ->
+      case Keyword.get(client_opts, :host) do
+        nil ->
+          Logger.warning("Client #{inspect(client_name)} has no :host configured, skipping broker startup")
+
+        bootstrap_host ->
+          {:ok, _} = Pulsar.start_broker(bootstrap_host, client: client_name)
+      end
+    end)
 
     Process.sleep(start_delay_ms)
 
+    # Start consumers
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
       topic = Keyword.fetch!(consumer_opts, :topic)
       subscription_name = Keyword.fetch!(consumer_opts, :subscription_name)
       callback_module = Keyword.fetch!(consumer_opts, :callback_module)
+      client = Keyword.get(consumer_opts, :client, @default_client)
 
       opts =
         consumer_opts
-        |> Keyword.get(:opts, [])
+        |> Keyword.delete(:topic)
+        |> Keyword.delete(:subscription_name)
+        |> Keyword.delete(:callback_module)
         |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, consumer_name)
+        |> Keyword.put(:client, client)
 
       Pulsar.start_consumer(topic, subscription_name, callback_module, opts)
     end)
 
+    # Start producers
     Enum.each(producers, fn {producer_name, producer_opts} ->
       topic = Keyword.fetch!(producer_opts, :topic)
+      client = Keyword.get(producer_opts, :client, @default_client)
 
       opts =
         producer_opts
-        |> Keyword.get(:opts, [])
+        |> Keyword.delete(:topic)
         |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, producer_name)
+        |> Keyword.put(:client, client)
 
       Pulsar.start_producer(topic, opts)
     end)
