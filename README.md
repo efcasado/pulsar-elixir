@@ -24,13 +24,14 @@ Pulsar.Supervisor
     │
     ├── BrokerSupervisor
     │   ├── Broker 1
-    │   │   ├── monitors: C1, C2, P1
+    │   │   ├── monitors: C1, C2, DLQ-P1, P1
     │   └── Broker 2
     │       ├── monitors: C3, C4
     │
     ├── ConsumerSupervisor
     │   ├── ConsumerGroup: my-topic
-    │   │   └── C1
+    │   │   └── C1 (with DLQ policy)
+    │   │       └── DLQ-P1 (linked process)
     │   │
     │   └── PartitionedConsumer: my-partitioned-topic
     │       ├── ConsumerGroup partition-0
