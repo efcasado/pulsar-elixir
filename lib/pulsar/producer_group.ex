@@ -25,7 +25,7 @@ defmodule Pulsar.ProducerGroup do
 
   require Logger
 
-  @producer_registry Pulsar.ProducerRegistry
+  @default_client :default
 
   @doc """
   Starts a producer group supervisor.
@@ -45,10 +45,13 @@ defmodule Pulsar.ProducerGroup do
   `{:error, reason}` - Error if the supervisor failed to start
   """
   def start_link(name, topic, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    producer_registry = Pulsar.Client.producer_registry(client)
+
     Supervisor.start_link(
       __MODULE__,
       {name, topic, opts},
-      name: {:via, Registry, {@producer_registry, name}}
+      name: {:via, Registry, {producer_registry, name}}
     )
   end
 

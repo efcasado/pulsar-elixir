@@ -14,7 +14,7 @@ defmodule Pulsar.PartitionedConsumer do
 
   require Logger
 
-  @consumer_registry Pulsar.ConsumerRegistry
+  @default_client :default
 
   @doc """
   Starts a partitioned consumer supervisor.
@@ -35,10 +35,13 @@ defmodule Pulsar.PartitionedConsumer do
   `{:error, reason}` - Error if the supervisor failed to start
   """
   def start_link(name, topic, partitions, subscription_name, subscription_type, callback_module, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    consumer_registry = Pulsar.Client.consumer_registry(client)
+
     Supervisor.start_link(
       __MODULE__,
       {name, topic, partitions, subscription_name, subscription_type, callback_module, opts},
-      name: {:via, Registry, {@consumer_registry, name}}
+      name: {:via, Registry, {consumer_registry, name}}
     )
   end
 

@@ -65,19 +65,8 @@ defmodule Pulsar do
 
   require Logger
 
-  @supported_broker_opts [
-    :auth,
-    :conn_timeout,
-    :socket_opts
-  ]
-
+  @default_client :default
   @app_supervisor Pulsar.Supervisor
-  @broker_registry Pulsar.BrokerRegistry
-  @consumer_registry Pulsar.ConsumerRegistry
-  @producer_registry Pulsar.ProducerRegistry
-  @broker_supervisor Pulsar.BrokerSupervisor
-  @consumer_supervisor Pulsar.ConsumerSupervisor
-  @producer_supervisor Pulsar.ProducerSupervisor
 
   @doc """
   Start the Pulsar application with custom configuration.
@@ -109,6 +98,7 @@ defmodule Pulsar do
 
   @impl true
   def start(_type, opts) do
+    # Embedded mode - start a default client automatically
     consumers =
       Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
 
@@ -124,25 +114,17 @@ defmodule Pulsar do
     startup_jitter_ms =
       Keyword.get(opts, :startup_jitter_ms, Application.get_env(:pulsar, :startup_jitter_ms, 0))
 
-    broker_opts = broker_opts(opts)
+    # Start application supervisor with ClientRegistry and default client
+    children = [
+      {Registry, keys: :unique, name: Pulsar.ClientRegistry},
+      {Pulsar.Client, Keyword.put(opts, :name, @default_client)}
+    ]
 
-    :persistent_term.put({Pulsar, :broker_opts}, broker_opts)
-
-    children =
-      [
-        {Registry, keys: :unique, name: @broker_registry},
-        {Registry, keys: :unique, name: @consumer_registry},
-        {Registry, keys: :unique, name: @producer_registry},
-        {DynamicSupervisor, strategy: :one_for_one, name: @broker_supervisor},
-        {DynamicSupervisor, strategy: :one_for_one, name: @consumer_supervisor},
-        {DynamicSupervisor, strategy: :one_for_one, name: @producer_supervisor}
-      ]
-
-    opts = [strategy: :one_for_one, name: @app_supervisor]
-    {:ok, pid} = Supervisor.start_link(children, opts)
+    sup_opts = [strategy: :one_for_one, name: @app_supervisor]
+    {:ok, pid} = Supervisor.start_link(children, sup_opts)
 
     # a bootstrap host is required
-    {:ok, _} = Pulsar.start_broker(bootstrap_host, broker_opts)
+    {:ok, _} = Pulsar.start_broker(bootstrap_host, [])
 
     Process.sleep(start_delay_ms)
 
@@ -198,14 +180,18 @@ defmodule Pulsar do
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_broker(broker_url, opts \\ []) do
-    case lookup_broker(broker_url) do
+    client = Keyword.get(opts, :client, @default_client)
+    broker_registry = Pulsar.Client.broker_registry(client)
+    broker_supervisor = Pulsar.Client.broker_supervisor(client)
+
+    case lookup_broker(broker_url, client: client) do
       {:ok, broker_pid} ->
         {:ok, broker_pid}
 
       {:error, :not_found} ->
-        global_opts = :persistent_term.get({Pulsar, :broker_opts}, [])
-        merged_opts = Keyword.merge(global_opts, opts)
-        registry_opts = [{:name, {:via, Registry, {@broker_registry, broker_url}}} | merged_opts]
+        global_opts = Pulsar.Client.get_broker_opts(client)
+        merged_opts = Keyword.merge(global_opts, Keyword.delete(opts, :client))
+        registry_opts = [{:name, {:via, Registry, {broker_registry, broker_url}}} | merged_opts]
 
         child_spec = %{
           id: broker_url,
@@ -214,7 +200,7 @@ defmodule Pulsar do
           restart: :permanent
         }
 
-        case DynamicSupervisor.start_child(@broker_supervisor, child_spec) do
+        case DynamicSupervisor.start_child(broker_supervisor, child_spec) do
           {:ok, broker_pid} ->
             {:ok, broker_pid}
 
@@ -240,9 +226,12 @@ defmodule Pulsar do
       iex> Pulsar.lookup_broker("pulsar://unknown:6650")
       {:error, :not_found}
   """
-  @spec lookup_broker(String.t()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup_broker(broker_url) do
-    case Registry.lookup(@broker_registry, broker_url) do
+  @spec lookup_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_broker(broker_url, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    broker_registry = Pulsar.Client.broker_registry(client)
+
+    case Registry.lookup(broker_registry, broker_url) do
       [{pid, _value}] -> {:ok, pid}
       [] -> {:error, :not_found}
     end
@@ -258,9 +247,9 @@ defmodule Pulsar do
       iex> Pulsar.stop_broker("pulsar://localhost:6650")
       :ok
   """
-  @spec stop_broker(String.t()) :: :ok | {:error, :not_found}
-  def stop_broker(broker_url) do
-    case lookup_broker(broker_url) do
+  @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
+  def stop_broker(broker_url, opts \\ []) do
+    case lookup_broker(broker_url, opts) do
       {:ok, broker_pid} ->
         Pulsar.Broker.stop(broker_pid)
         :ok
@@ -349,10 +338,12 @@ defmodule Pulsar do
 
   @spec start_consumer(String.t(), String.t(), module(), keyword()) :: {:ok, pid} | {:error, term}
   def start_consumer(topic, subscription_name, callback_module, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    consumer_supervisor = Pulsar.Client.consumer_supervisor(client)
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
-    case check_partitioned_topic(topic) do
+    case check_partitioned_topic(topic, client) do
       {:ok, 0} ->
         # Regular topic - create single consumer group
         child_spec = %{
@@ -366,7 +357,7 @@ defmodule Pulsar do
           type: :supervisor
         }
 
-        DynamicSupervisor.start_child(@consumer_supervisor, child_spec)
+        DynamicSupervisor.start_child(consumer_supervisor, child_spec)
 
       {:ok, partitions} when partitions > 0 ->
         # Partitioned topic - create PartitionedConsumer supervisor
@@ -381,7 +372,7 @@ defmodule Pulsar do
           type: :supervisor
         }
 
-        DynamicSupervisor.start_child(@consumer_supervisor, child_spec)
+        DynamicSupervisor.start_child(consumer_supervisor, child_spec)
 
       {:error, reason} ->
         {:error, reason}
@@ -416,13 +407,18 @@ defmodule Pulsar do
       iex> Pulsar.stop_consumer("my-topic-my-subscription")
       :ok
   """
-  @spec stop_consumer(pid() | String.t()) :: :ok | {:error, :not_found}
-  def stop_consumer(group_pid) when is_pid(group_pid) do
+  @spec stop_consumer(pid() | String.t(), keyword()) :: :ok | {:error, :not_found}
+  def stop_consumer(group_pid, opts \\ [])
+
+  def stop_consumer(group_pid, _opts) when is_pid(group_pid) do
     Supervisor.stop(group_pid)
   end
 
-  def stop_consumer(group_id) when is_binary(group_id) do
-    case Registry.lookup(@consumer_registry, group_id) do
+  def stop_consumer(group_id, opts) when is_binary(group_id) do
+    client = Keyword.get(opts, :client, @default_client)
+    consumer_registry = Pulsar.Client.consumer_registry(client)
+
+    case Registry.lookup(consumer_registry, group_id) do
       [{group_pid, _value}] ->
         stop_consumer(group_pid)
 
@@ -445,9 +441,12 @@ defmodule Pulsar do
       iex> Pulsar.lookup_consumer("nonexistent")
       {:error, :not_found}
   """
-  @spec lookup_consumer(String.t()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup_consumer(name) do
-    case Registry.lookup(@consumer_registry, name) do
+  @spec lookup_consumer(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_consumer(name, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    consumer_registry = Pulsar.Client.consumer_registry(client)
+
+    case Registry.lookup(consumer_registry, name) do
       [{consumer_pid, _value}] -> {:ok, consumer_pid}
       [] -> {:error, :not_found}
     end
@@ -459,8 +458,10 @@ defmodule Pulsar do
   Works with both ConsumerGroup and PartitionedConsumer supervisors.
   Returns a flat list of consumer process PIDs.
   """
-  @spec get_consumers(pid() | String.t()) :: [pid()] | {:error, :not_found}
-  def get_consumers(group_pid) when is_pid(group_pid) do
+  @spec get_consumers(pid() | String.t(), keyword()) :: [pid()] | {:error, :not_found}
+  def get_consumers(group_pid, opts \\ [])
+
+  def get_consumers(group_pid, _opts) when is_pid(group_pid) do
     case Supervisor.which_children(group_pid) do
       [] ->
         []
@@ -478,8 +479,11 @@ defmodule Pulsar do
     end
   end
 
-  def get_consumers(group_id) when is_binary(group_id) do
-    case Registry.lookup(@consumer_registry, group_id) do
+  def get_consumers(group_id, opts) when is_binary(group_id) do
+    client = Keyword.get(opts, :client, @default_client)
+    consumer_registry = Pulsar.Client.consumer_registry(client)
+
+    case Registry.lookup(consumer_registry, group_id) do
       [{group_pid, _value}] ->
         get_consumers(group_pid)
 
@@ -536,6 +540,8 @@ defmodule Pulsar do
   """
   @spec start_producer(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_producer(topic, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    producer_supervisor = Pulsar.Client.producer_supervisor(client)
     name = Keyword.get(opts, :name, "#{topic}-producer")
 
     child_spec = %{
@@ -549,7 +555,7 @@ defmodule Pulsar do
       type: :supervisor
     }
 
-    DynamicSupervisor.start_child(@producer_supervisor, child_spec)
+    DynamicSupervisor.start_child(producer_supervisor, child_spec)
   end
 
   @doc """
@@ -574,13 +580,18 @@ defmodule Pulsar do
       iex> Pulsar.stop_producer("my-topic-producer")
       :ok
   """
-  @spec stop_producer(pid() | String.t()) :: :ok | {:error, :not_found}
-  def stop_producer(group_pid) when is_pid(group_pid) do
+  @spec stop_producer(pid() | String.t(), keyword()) :: :ok | {:error, :not_found}
+  def stop_producer(group_pid, opts \\ [])
+
+  def stop_producer(group_pid, _opts) when is_pid(group_pid) do
     Pulsar.ProducerGroup.stop(group_pid)
   end
 
-  def stop_producer(group_pid) when is_binary(group_pid) do
-    case Registry.lookup(@producer_registry, group_pid) do
+  def stop_producer(group_pid, opts) when is_binary(group_pid) do
+    client = Keyword.get(opts, :client, @default_client)
+    producer_registry = Pulsar.Client.producer_registry(client)
+
+    case Registry.lookup(producer_registry, group_pid) do
       [{producer_pid, _value}] ->
         stop_producer(producer_pid)
 
@@ -603,9 +614,12 @@ defmodule Pulsar do
       iex> Pulsar.lookup_producer("nonexistent")
       {:error, :not_found}
   """
-  @spec lookup_producer(String.t()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup_producer(name) do
-    case Registry.lookup(@producer_registry, name) do
+  @spec lookup_producer(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_producer(name, opts \\ []) do
+    client = Keyword.get(opts, :client, @default_client)
+    producer_registry = Pulsar.Client.producer_registry(client)
+
+    case Registry.lookup(producer_registry, name) do
       [{producer_pid, _value}] -> {:ok, producer_pid}
       [] -> {:error, :not_found}
     end
@@ -626,13 +640,18 @@ defmodule Pulsar do
       iex> Pulsar.get_producers("my-topic-producer")
       [#PID<0.123.0>, #PID<0.124.0>, #PID<0.125.0>]
   """
-  @spec get_producers(pid() | String.t()) :: [pid()] | {:error, :not_found}
-  def get_producers(group_pid) when is_pid(group_pid) do
+  @spec get_producers(pid() | String.t(), keyword()) :: [pid()] | {:error, :not_found}
+  def get_producers(group_pid, opts \\ [])
+
+  def get_producers(group_pid, _opts) when is_pid(group_pid) do
     Pulsar.ProducerGroup.get_producers(group_pid)
   end
 
-  def get_producers(group_id) when is_binary(group_id) do
-    case Registry.lookup(@producer_registry, group_id) do
+  def get_producers(group_id, opts) when is_binary(group_id) do
+    client = Keyword.get(opts, :client, @default_client)
+    producer_registry = Pulsar.Client.producer_registry(client)
+
+    case Registry.lookup(producer_registry, group_id) do
       [{group_pid, _value}] ->
         get_producers(group_pid)
 
@@ -670,8 +689,8 @@ defmodule Pulsar do
     Pulsar.Consumer.send_flow(consumer, permits)
   end
 
-  def send_flow(consumer_name, permits) when is_binary(consumer_name) do
-    case lookup_consumer(consumer_name) do
+  def send_flow(consumer_name, permits, opts \\ []) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name, opts) do
       {:ok, consumer_pid} ->
         Pulsar.Consumer.send_flow(consumer_pid, permits)
 
@@ -708,8 +727,8 @@ defmodule Pulsar do
     Pulsar.Consumer.ack(consumer, message_id)
   end
 
-  def ack(consumer_name, message_id) when is_binary(consumer_name) do
-    case lookup_consumer(consumer_name) do
+  def ack(consumer_name, message_id, opts \\ []) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name, opts) do
       {:ok, consumer_pid} ->
         Pulsar.Consumer.ack(consumer_pid, message_id)
 
@@ -751,8 +770,8 @@ defmodule Pulsar do
     Pulsar.Consumer.nack(consumer, message_id)
   end
 
-  def nack(consumer_name, message_id) when is_binary(consumer_name) do
-    case lookup_consumer(consumer_name) do
+  def nack(consumer_name, message_id, opts \\ []) when is_binary(consumer_name) do
+    case lookup_consumer(consumer_name, opts) do
       {:ok, consumer_pid} ->
         Pulsar.Consumer.nack(consumer_pid, message_id)
 
@@ -789,8 +808,9 @@ defmodule Pulsar do
 
   def send(producer_group_name, message, opts) when is_binary(message) do
     timeout = Keyword.get(opts, :timeout, 5000)
+    client = Keyword.get(opts, :client, @default_client)
 
-    case lookup_producer(producer_group_name) do
+    case lookup_producer(producer_group_name, client: client) do
       {:ok, group_pid} ->
         Pulsar.ProducerGroup.send_message(group_pid, message, timeout)
 
@@ -799,9 +819,9 @@ defmodule Pulsar do
     end
   end
 
-  @spec check_partitioned_topic(String.t()) :: {:ok, integer()} | {:error, term()}
-  defp check_partitioned_topic(topic) do
-    broker = Pulsar.Utils.broker()
+  @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
+  defp check_partitioned_topic(topic, client) do
+    broker = Pulsar.Utils.broker(client)
 
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
       {:ok, %{response: :Success, partitions: partitions}} ->
@@ -810,19 +830,5 @@ defmodule Pulsar do
       {:ok, %{response: :Failed, error: error}} ->
         {:error, {:partition_metadata_check_failed, error}}
     end
-  end
-
-  defp broker_opts(opts) do
-    app_opts =
-      @supported_broker_opts
-      |> Enum.map(fn key -> {key, Application.get_env(:pulsar, key)} end)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    passed_opts =
-      opts
-      |> Keyword.take(@supported_broker_opts)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    Keyword.merge(app_opts, passed_opts)
   end
 end
