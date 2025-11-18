@@ -16,8 +16,7 @@ Each client maintains its own set of registries and supervisors for brokers, con
 
 ```mermaid
 flowchart TD
-    P[Pulsar.Supervisor] --> ClientReg[ClientRegistry]
-    P --> Client["Client<br/>(e.g., :default)"]
+    P[Pulsar.Supervisor] --> Client["Client<br/>(e.g., :default)"]
 
     Client --> BR[BrokerRegistry]
     Client --> CR[ConsumerRegistry]
@@ -69,7 +68,7 @@ flowchart TD
     classDef client fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px
 
     class P,BS,CS,PS,CG1,CG2,CG3,CG4,PC1,PG1 supervisor
-    class ClientReg,BR,CR,PR registry
+    class BR,CR,PR registry
     class Client client
     class C1,C2,C3,C4,C5,C6,C7,P1,P2,B1,B2 worker
 ```
