@@ -95,10 +95,8 @@ defmodule Main do
          subscription_name: name,
          subscription_type: :Exclusive,
          callback_module: BingoPlayer,
-         opts: [
-           durable: false,
-           init_args: [self(), card_size]
-         ]
+         durable: false,
+         init_args: [self(), card_size]
        ]}
     end)
   end
@@ -111,6 +109,6 @@ defmodule Main do
   end
 end
 
-Logger.configure(level: :none)
+Logger.configure(level: :warning)
 
 Main.run()
