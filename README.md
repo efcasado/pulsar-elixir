@@ -11,59 +11,39 @@ check our [Broadway producer for Pulsar](https://github.com/efcasado/off_broadwa
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    P[Pulsar.Supervisor] --> BR[BrokerRegistry]
-    P --> CR[ConsumerRegistry]
-    P --> PR[ProducerRegistry]
-    P --> BS[BrokerSupervisor]
-    P --> CS[ConsumerSupervisor]
-    P --> PS[ProducerSupervisor]
+The library supports multi-client architecture, allowing you to connect to multiple Pulsar clusters simultaneously.
+Each client maintains its own set of registries and supervisors for brokers, consumers, and producers.
 
-    BS -.->|DynamicSupervisor| B1[Broker 1]
-    BS -.->|DynamicSupervisor| B2[Broker 2]
-
-    CS -.->|DynamicSupervisor| CG1["<b>ConsumerGroup</b><br/>my-topic"]
-    CS -.->|DynamicSupervisor| PC1["<b>PartitionedConsumer</b><br/>my-partitioned-topic"]
-
-    PS -.->|DynamicSupervisor| PG1["<b>ProducerGroup</b><br/>my-topic"]
-
-    CG1 -.->|DynamicSupervisor| C1[Consumer 1]
-
-    PC1 -.->|DynamicSupervisor| CG2["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-0"]
-    PC1 -.->|DynamicSupervisor| CG3["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-1"]
-    PC1 -.->|DynamicSupervisor| CG4["<b>ConsumerGroup</b><br/>my-partitioned-topic-partition-2"]
-
-    CG2 -.->|DynamicSupervisor| C2[Consumer 2]
-    CG2 -.->|DynamicSupervisor| C3[Consumer 3]
-    CG3 -.->|DynamicSupervisor| C4[Consumer 4]
-    CG3 -.->|DynamicSupervisor| C5[Consumer 5]
-    CG4 -.->|DynamicSupervisor| C6[Consumer 6]
-    CG4 -.->|DynamicSupervisor| C7[Consumer 7]
-
-    PG1 -.->|DynamicSupervisor| P1[Producer 1]
-    PG1 -.->|DynamicSupervisor| P2[Producer 2]
-
-    %% Broker ownership and monitoring
-    B1 <===>|monitor| C1
-    B1 <===>|monitor| C2
-    B1 <===>|monitor| C3
-
-    B2 <===>|monitor| C4
-    B2 <===>|monitor| C5
-    B2 <===>|monitor| C6
-    B2 <===>|monitor| C7
-
-    B1 <===>|monitor| P1
-    B2 <===>|monitor| P2
-
-    classDef supervisor fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef registry fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef worker fill:#fff3e0,stroke:#e65100,stroke-width:2px
-
-    class P,BS,CS,PS,CG1,CG2,CG3,CG4,PC1,PG1 supervisor
-    class BR,CR,PR registry
-    class C1,C2,C3,C4,C5,C6,C7,P1,P2,B1,B2 worker
+```
+Pulsar.Supervisor
+└── Client (:default)
+    ├── Registries
+    │   ├── BrokerRegistry
+    │   ├── ConsumerRegistry
+    │   └── ProducerRegistry
+    │
+    ├── BrokerSupervisor
+    │   ├── Broker 1
+    │   │   ├── monitors: C1, C2, DLQ-P1, P1
+    │   └── Broker 2
+    │       ├── monitors: C3, C4
+    │
+    ├── ConsumerSupervisor
+    │   ├── ConsumerGroup: my-topic
+    │   │   └── C1 (with DLQ policy)
+    │   │       └── DLQ-P1 (linked process)
+    │   │
+    │   └── PartitionedConsumer: my-partitioned-topic
+    │       ├── ConsumerGroup partition-0
+    │       │   └── C2
+    │       ├── ConsumerGroup partition-1
+    │       │   └── C3
+    │       └── ConsumerGroup partition-2
+    │           └── C4
+    │
+    └── ProducerSupervisor
+        └── ProducerGroup: my-topic
+            └── P1
 ```
 
 
@@ -77,6 +57,8 @@ def deps do
 end
 ```
 
+### Single Client Configuration
+
 You can configure the client by adding the following configuration to your `config/config.exs`:
 
 ```elixir
@@ -84,7 +66,7 @@ config :pulsar,
   host: "pulsar://localhost:6650",
   socket_opts: [verify: :verify_none],
   auth: [
-    type: Pulsar.Auth.OAuth2
+    type: Pulsar.Auth.OAuth2,
     settings: [
         client_id: "<YOUR-OAUTH2-CLIENT-ID>",
         client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
@@ -97,21 +79,19 @@ config :pulsar,
         topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-subscription",
         callback_module: MyApp.MyConsumer,
-        opts: [
-          subscription_type: "Exclusive",
-          flow_initial: 100,
-          flow_threshold: 50,
-          flow_refill: 50,
-          initial_position: :earliest
-          durable: true,
-          force_create_topic: true,
-          dead_letter_policy: [
-            max_redelivery: 3,
-            topic: "persistent://my-tenant/my-namespace/my-topic-my-subscription-DLQ"
-            producer: "my-topic-my-subscription-my-consumer-13243-DLQ"
-          ],
-          redelivery_interval: 1000
-        ]
+        subscription_type: :Exclusive,
+        flow_initial: 100,
+        flow_threshold: 50,
+        flow_refill: 50,
+        initial_position: :earliest,
+        durable: true,
+        force_create_topic: true,
+        dead_letter_policy: [
+          max_redelivery: 3,
+          topic: "persistent://my-tenant/my-namespace/my-topic-my-subscription-DLQ",
+          producer: "my-topic-my-subscription-my-consumer-13243-DLQ"
+        ],
+        redelivery_interval: 1000
     ]
   ],
   producers: [
@@ -120,43 +100,84 @@ config :pulsar,
     ]
   ]
 ```
-Alternatively, you can start the Pulsar client on demand and add it to your application's supervisor
-by calling `Pulsar.start/1` directly, as follows:
+
+### Multi-Client Configuration
+
+You can also configure multiple clients to connect to different Pulsar clusters:
 
 ```elixir
-{:ok, pid} = Pulsar.start(
-  host: "pulsar://localhost:6650",
-  socket_opts: [verify: :verify_none],
-  auth: [
-    type: Pulsar.Auth.OAuth2
-    settings: [
-        client_id: "<YOUR-OAUTH2-CLIENT-ID>",
-        client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
-        site: "<YOUR-OAUTH2-ISSUER-URL>",
-        audience: "<YOUR-OAUTH2-AUDIENCE>"
+config :pulsar,
+  clients: [
+    default: [
+      host: "pulsar://localhost:6650",
+      socket_opts: [verify: :verify_none]
+    ],
+    cluster_2: [
+      host: "pulsar://other-cluster:6650",
+      socket_opts: [verify: :verify_none],
+      auth: [
+        type: Pulsar.Auth.OAuth2,
+        settings: [
+          client_id: "<YOUR-OAUTH2-CLIENT-ID>",
+          client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
+          site: "<YOUR-OAUTH2-ISSUER-URL>",
+          audience: "<YOUR-OAUTH2-AUDIENCE>"
+        ]
+      ]
     ]
   ],
   consumers: [
     my_consumer: [
+        client: :default,  # optional, defaults to :default
         topic: "persistent://my-tenant/my-namespace/my-topic",
         subscription_name: "my-subscription",
         callback_module: MyApp.MyConsumer,
-        opts: [
-          subscription_type: "Exclusive",
-          flow_initial: 100,
-          flow_threshold: 50,
-          flow_refill: 50,
-          initial_position: :earliest
-          durable: true,
-          force_create_topic: true
-        ]
+        subscription_type: :Exclusive
+    ],
+    other_consumer: [
+        client: :cluster_2,
+        topic: "persistent://other-tenant/other-namespace/other-topic",
+        subscription_name: "other-subscription",
+        callback_module: MyApp.OtherConsumer,
+        subscription_type: :Shared
     ]
   ],
   producers: [
     my_producer: [
+        client: :default,
         topic: "persistent://my-tenant/my-namespace/my-topic"
+    ],
+    other_producer: [
+        client: :cluster_2,
+        topic: "persistent://other-tenant/other-namespace/other-topic"
     ]
   ]
+```
+### Manual Mode
+
+For complete control over the Pulsar client lifecycle, you can start clients, consumers, and producers
+manually in your own supervision tree:
+
+```elixir
+# In your application supervisor
+children = [
+  {Pulsar.Client, name: :my_client, host: "pulsar://localhost:6650"}
+]
+
+Supervisor.start_link(children, strategy: :one_for_one)
+
+# Later, start consumers and producers as needed
+# The client will automatically handle broker connections
+{:ok, consumer_pid} = Pulsar.start_consumer(
+  "persistent://my-tenant/my-namespace/my-topic",
+  "my-subscription",
+  MyApp.MyConsumer,
+  client: :my_client
+)
+
+{:ok, producer_pid} = Pulsar.start_producer(
+  "persistent://my-tenant/my-namespace/my-topic",
+  client: :my_client
 )
 ```
 
