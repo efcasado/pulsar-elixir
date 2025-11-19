@@ -9,7 +9,7 @@ defmodule Pulsar.Client do
 
   ## Usage
 
-  ### Embedded Mode (Automatic)
+  ### Single Client (Implicit)
 
   When using `Pulsar.start/1`, a default client is automatically created:
 
@@ -21,7 +21,7 @@ defmodule Pulsar.Client do
       # Uses implicit :default client
       {:ok, consumer} = Pulsar.start_consumer(topic, subscription, MyCallback)
 
-  ### Manual Mode (Explicit)
+  ### Multiple Clients (Explicit)
 
   You can start multiple clients in your supervision tree:
 
