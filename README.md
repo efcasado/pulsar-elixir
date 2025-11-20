@@ -67,7 +67,7 @@ config :pulsar,
   socket_opts: [verify: :verify_none],
   auth: [
     type: Pulsar.Auth.OAuth2,
-    settings: [
+    opts: [
         client_id: "<YOUR-OAUTH2-CLIENT-ID>",
         client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
         site: "<YOUR-OAUTH2-ISSUER-URL>",
@@ -117,7 +117,7 @@ config :pulsar,
       socket_opts: [verify: :verify_none],
       auth: [
         type: Pulsar.Auth.OAuth2,
-        settings: [
+        opts: [
           client_id: "<YOUR-OAUTH2-CLIENT-ID>",
           client_secret: "<YOUR-OAUTH2-CLIENT-SECRET>",
           site: "<YOUR-OAUTH2-ISSUER-URL>",
