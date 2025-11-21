@@ -736,37 +736,42 @@ defmodule Pulsar do
   end
 
   @doc """
-  Manually acknowledges a message.
+  Manually acknowledges one or more messages.
 
   This is a convenience wrapper around `Pulsar.Consumer.ack/2`.
   Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+  Supports batching multiple message IDs in a single ACK command for better performance.
 
   ## Parameters
 
   - `consumer` - The consumer process PID or name
-  - `message_id` - The message ID to acknowledge (from the command structure)
+  - `message_ids` - A single message ID or a list of message IDs to acknowledge
 
   ## Examples
 
-      # Using with consumer PID
+      # Acknowledge a single message
       Pulsar.ack(consumer_pid, message_id)
 
-      # Can also be used with message structure for Broadway
+      # Acknowledge multiple messages in batch (more efficient)
+      Pulsar.ack(consumer_pid, [message_id1, message_id2, message_id3])
+
+      # Can also be used with message structures for Broadway
       def ack(consumer, messages) do
-        Enum.each(messages, fn %{message_id: message_id} ->
-          Pulsar.ack(consumer, message_id)
-        end)
+        message_ids = Enum.map(messages, & &1.message_id)
+        Pulsar.ack(consumer, message_ids)
       end
   """
-  @spec ack(pid() | String.t(), MessageIdData.t()) :: :ok | {:error, term()}
-  def ack(consumer, message_id) when is_pid(consumer) do
-    Pulsar.Consumer.ack(consumer, message_id)
+  @spec ack(pid() | String.t(), MessageIdData.t() | [MessageIdData.t()], keyword()) :: :ok | {:error, term()}
+  def ack(consumer, message_ids, opts \\ [])
+
+  def ack(consumer, message_ids, _opts) when is_pid(consumer) do
+    Pulsar.Consumer.ack(consumer, message_ids)
   end
 
-  def ack(consumer_name, message_id, opts \\ []) when is_binary(consumer_name) do
+  def ack(consumer_name, message_ids, opts) when is_binary(consumer_name) do
     case lookup_consumer(consumer_name, opts) do
       {:ok, consumer_pid} ->
-        Pulsar.Consumer.ack(consumer_pid, message_id)
+        Pulsar.Consumer.ack(consumer_pid, message_ids)
 
       {:error, :not_found} ->
         {:error, :consumer_not_found}
@@ -774,42 +779,47 @@ defmodule Pulsar do
   end
 
   @doc """
-  Manually negatively acknowledges a message.
+  Manually negatively acknowledges one or more messages.
 
   This is a convenience wrapper around `Pulsar.Consumer.nack/2`.
   Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+  Supports batching multiple message IDs in a single NACK for better performance.
 
-  The message will be tracked for redelivery if `:redelivery_interval` is configured.
-  When the message is redelivered and the redelivery count exceeds `:max_redelivery`,
-  it will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
+  The messages will be tracked for redelivery if `:redelivery_interval` is configured.
+  When the messages are redelivered and the redelivery count exceeds `:max_redelivery`,
+  they will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
   regardless of whether you use manual or automatic acknowledgment.
 
   ## Parameters
 
   - `consumer` - The consumer process PID or name
-  - `message_id` - The message ID to negatively acknowledge (from the command structure)
+  - `message_ids` - A single message ID or a list of message IDs to negatively acknowledge
 
   ## Examples
 
-      # Using with consumer PID
+      # NACK a single message
       Pulsar.nack(consumer_pid, message_id)
 
-      # Can also be used with message structure for Broadway
+      # NACK multiple messages in batch (more efficient)
+      Pulsar.nack(consumer_pid, [message_id1, message_id2, message_id3])
+
+      # Can also be used with message structures for Broadway
       def nack(consumer, messages) do
-        Enum.each(messages, fn %{message_id: message_id} ->
-          Pulsar.nack(consumer, message_id)
-        end)
+        message_ids = Enum.map(messages, & &1.message_id)
+        Pulsar.nack(consumer, message_ids)
       end
   """
-  @spec nack(pid() | String.t(), MessageIdData.t()) :: :ok | {:error, term()}
-  def nack(consumer, message_id) when is_pid(consumer) do
-    Pulsar.Consumer.nack(consumer, message_id)
+  @spec nack(pid() | String.t(), MessageIdData.t() | [MessageIdData.t()], keyword()) :: :ok | {:error, term()}
+  def nack(consumer, message_ids, opts \\ [])
+
+  def nack(consumer, message_ids, _opts) when is_pid(consumer) do
+    Pulsar.Consumer.nack(consumer, message_ids)
   end
 
-  def nack(consumer_name, message_id, opts \\ []) when is_binary(consumer_name) do
+  def nack(consumer_name, message_ids, opts) when is_binary(consumer_name) do
     case lookup_consumer(consumer_name, opts) do
       {:ok, consumer_pid} ->
-        Pulsar.Consumer.nack(consumer_pid, message_id)
+        Pulsar.Consumer.nack(consumer_pid, message_ids)
 
       {:error, :not_found} ->
         {:error, :consumer_not_found}
