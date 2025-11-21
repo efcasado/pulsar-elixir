@@ -474,14 +474,14 @@ defmodule Pulsar.Consumer do
 
           case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
             :ok ->
-              # Successfully sent to DLQ, ACK the message
+              # Successfully sent to DLQ, ACK the message asynchronously
               ack_command = %Binary.CommandAck{
                 consumer_id: state.consumer_id,
                 ack_type: :Individual,
                 message_id: [message_id_to_ack]
               }
 
-              {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+              :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
               {callback_state, nacked_acc}
 
             {:error, dlq_reason} ->
@@ -528,13 +528,14 @@ defmodule Pulsar.Consumer do
 
           case result do
             {:ok, new_callback_state} ->
+              # ACK asynchronously - no need to wait for response
               ack_command = %Binary.CommandAck{
                 consumer_id: state.consumer_id,
                 ack_type: :Individual,
                 message_id: [message_id_to_ack]
               }
 
-              {:ok, _response} = Pulsar.Broker.send_request(state.broker_pid, ack_command)
+              :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
 
               {new_callback_state, nacked_acc}
 
