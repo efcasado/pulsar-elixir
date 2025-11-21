@@ -268,6 +268,9 @@ defmodule Pulsar.Broker do
     wait = next_backoff(broker)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
+    # Fail all pending requests immediately to prevent timeouts
+    broker = fail_all_pending_requests(broker, :connection_lost)
+
     # Restart all consumers and producers by exiting their processes
     # The supervision trees will automatically restart them
     restart_consumers_and_producers(broker)
@@ -356,12 +359,22 @@ defmodule Pulsar.Broker do
   end
 
   def connected(:info, {:tcp_closed, socket}, %__MODULE__{socket: socket} = broker) do
-    Logger.debug("Socket closed")
+    pending_requests = map_size(broker.requests)
+
+    Logger.error(
+      "Socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
+    )
+
     {:next_state, :disconnected, broker}
   end
 
   def connected(:info, {:ssl_closed, socket}, %__MODULE__{socket: socket} = broker) do
-    Logger.debug("Socket closed")
+    pending_requests = map_size(broker.requests)
+
+    Logger.error(
+      "Socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
+    )
+
     {:next_state, :disconnected, broker}
   end
 
@@ -605,7 +618,11 @@ defmodule Pulsar.Broker do
     :keep_state_and_data
   end
 
-  defp handle_command(%Binary.CommandConnected{}, _broker) do
+  defp handle_command(%Binary.CommandConnected{} = cmd, _broker) do
+    Logger.info(
+      "Successfully connected to broker: protocol_version=#{cmd.protocol_version}, server_version=#{cmd.server_version}"
+    )
+
     :keep_state_and_data
   end
 
@@ -765,6 +782,14 @@ defmodule Pulsar.Broker do
 
     # Keep only active requests
     %{broker | requests: Map.new(active_requests)}
+  end
+
+  defp fail_all_pending_requests(broker, reason) do
+    Enum.each(broker.requests, fn {_request_id, {from, _timestamp}} ->
+      :gen_statem.reply(from, {:error, reason})
+    end)
+
+    %{broker | requests: %{}}
   end
 
   defp send_command_internal(command, broker) do
