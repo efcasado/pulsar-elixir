@@ -703,8 +703,8 @@ defmodule Pulsar.Consumer do
       message_id: message_ids
     }
 
-    case Pulsar.Broker.send_request(state.broker_pid, ack_command) do
-      {:ok, _response} ->
+    case Pulsar.Broker.send_command(state.broker_pid, ack_command) do
+      :ok ->
         {:reply, :ok, state}
 
       {:error, reason} ->
