@@ -183,17 +183,19 @@ defmodule Pulsar.Consumer do
   end
 
   @doc """
-  Manually acknowledges a message.
+  Manually acknowledges one or more messages.
 
   Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+  Supports batching multiple message IDs in a single ACK command for better performance.
 
   ## Parameters
 
   - `consumer` - The consumer process PID
-  - `message_id` - The message ID to acknowledge (from the command structure)
+  - `message_ids` - A single message ID or a list of message IDs to acknowledge
 
   ## Examples
 
+      # Acknowledge a single message
       def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
         message_id = command.message_id
         # Process message...
@@ -203,29 +205,38 @@ defmodule Pulsar.Consumer do
         end)
         {:noreply, state}
       end
+
+      # Acknowledge multiple messages in batch (more efficient)
+      Pulsar.Consumer.ack(consumer_pid, [message_id1, message_id2, message_id3])
   """
-  @spec ack(pid(), Binary.MessageIdData.t()) :: :ok | {:error, term()}
+  @spec ack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
+  def ack(consumer, message_ids) when is_list(message_ids) do
+    GenServer.call(consumer, {:ack, message_ids})
+  end
+
   def ack(consumer, message_id) do
-    GenServer.call(consumer, {:ack, message_id})
+    ack(consumer, [message_id])
   end
 
   @doc """
-  Manually negatively acknowledges a message.
+  Manually negatively acknowledges one or more messages.
 
   Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
+  Supports batching multiple message IDs in a single NACK for better performance.
 
-  The message will be tracked for redelivery if `:redelivery_interval` is configured.
-  When the message is redelivered and the redelivery count exceeds `:max_redelivery`,
-  it will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
+  The messages will be tracked for redelivery if `:redelivery_interval` is configured.
+  When the messages are redelivered and the redelivery count exceeds `:max_redelivery`,
+  they will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
   regardless of whether you use manual or automatic acknowledgment.
 
   ## Parameters
 
   - `consumer` - The consumer process PID
-  - `message_id` - The message ID to negatively acknowledge (from the command structure)
+  - `message_ids` - A single message ID or a list of message IDs to negatively acknowledge
 
   ## Examples
 
+      # NACK a single message
       def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
         message_id = command.message_id
         case process_message() do
@@ -234,10 +245,17 @@ defmodule Pulsar.Consumer do
         end
         {:noreply, state}
       end
+
+      # NACK multiple messages in batch (more efficient)
+      Pulsar.Consumer.nack(consumer_pid, [message_id1, message_id2, message_id3])
   """
-  @spec nack(pid(), Binary.MessageIdData.t()) :: :ok | {:error, term()}
+  @spec nack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
+  def nack(consumer, message_ids) when is_list(message_ids) do
+    GenServer.call(consumer, {:nack, message_ids})
+  end
+
   def nack(consumer, message_id) do
-    GenServer.call(consumer, {:nack, message_id})
+    nack(consumer, [message_id])
   end
 
   ## GenServer Callbacks
@@ -678,11 +696,11 @@ defmodule Pulsar.Consumer do
     end
   end
 
-  def handle_call({:ack, message_id}, _from, state) do
+  def handle_call({:ack, message_ids}, _from, state) when is_list(message_ids) do
     ack_command = %Binary.CommandAck{
       consumer_id: state.consumer_id,
       ack_type: :Individual,
-      message_id: [message_id]
+      message_id: message_ids
     }
 
     case Pulsar.Broker.send_request(state.broker_pid, ack_command) do
@@ -694,7 +712,7 @@ defmodule Pulsar.Consumer do
     end
   end
 
-  def handle_call({:nack, message_id}, _from, state) do
+  def handle_call({:nack, message_ids}, _from, state) when is_list(message_ids) do
     # Manual NACK follows the same pattern as auto-NACK:
     # - Add to nacked_messages if redelivery_interval is configured (for periodic redelivery)
     # - Note: DLQ logic cannot be applied here since we don't have redelivery_count or payload
@@ -703,14 +721,16 @@ defmodule Pulsar.Consumer do
 
     new_nacked_messages =
       if state.redelivery_interval do
-        # Track for periodic redelivery
-        MapSet.put(state.nacked_messages, message_id)
+        # Track all messages for periodic redelivery
+        Enum.reduce(message_ids, state.nacked_messages, fn message_id, acc ->
+          MapSet.put(acc, message_id)
+        end)
       else
         # No periodic redelivery configured, so we don't track nacked messages
         # Note: Without redelivery_interval, messages won't be automatically redelivered
         # and DLQ won't be triggered. Consider configuring :redelivery_interval and
         # :dead_letter_policy for production use.
-        Logger.debug("NACKed message #{inspect(message_id)}, but no redelivery_interval configured")
+        Logger.debug("NACKed #{length(message_ids)} message(s), but no redelivery_interval configured")
         state.nacked_messages
       end
 
