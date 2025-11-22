@@ -76,13 +76,14 @@ defmodule Pulsar do
       # Start with custom configuration (single client)
       {:ok, pid} = Pulsar.start(
         host: "pulsar://localhost:6650",
-        startup_jitter_ms: 1000,
         consumers: [
           {:my_consumer, [
             topic: "my-topic",
             subscription_name: "my-subscription",
             callback_module: MyConsumerCallback,
-            subscription_type: :Shared
+            subscription_type: :Shared,
+            startup_delay_ms: 500,
+            startup_jitter_ms: 1000
           ]}
         ]
       )
@@ -116,12 +117,6 @@ defmodule Pulsar do
     producers =
       Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
 
-    start_delay_ms =
-      Keyword.get(opts, :start_delay_ms, Application.get_env(:pulsar, :start_delay_ms, 500))
-
-    startup_jitter_ms =
-      Keyword.get(opts, :startup_jitter_ms, Application.get_env(:pulsar, :startup_jitter_ms, 0))
-
     # Get client configurations - support both :clients (multi-client) and :host (single client)
     clients_config =
       case Keyword.get(opts, :clients, Application.get_env(:pulsar, :clients)) do
@@ -154,8 +149,6 @@ defmodule Pulsar do
       end
     end)
 
-    Process.sleep(start_delay_ms)
-
     # Start consumers
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
       topic = Keyword.fetch!(consumer_opts, :topic)
@@ -168,7 +161,6 @@ defmodule Pulsar do
         |> Keyword.delete(:topic)
         |> Keyword.delete(:subscription_name)
         |> Keyword.delete(:callback_module)
-        |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, consumer_name)
         |> Keyword.put(:client, client)
 
@@ -183,7 +175,6 @@ defmodule Pulsar do
       opts =
         producer_opts
         |> Keyword.delete(:topic)
-        |> Keyword.put(:startup_jitter_ms, startup_jitter_ms)
         |> Keyword.put(:name, producer_name)
         |> Keyword.put(:client, client)
 

@@ -79,7 +79,7 @@ defmodule Pulsar.Broker do
       name,
       broker_url,
       Keyword.get(opts, :socket_opts, verify: :verify_peer, cacerts: :public_key.cacerts_get()),
-      Keyword.get(opts, :conn_timeout, 5_000),
+      Keyword.get(opts, :conn_timeout, 1_000),
       Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: []),
       Keyword.get(opts, :actions, [])
     ]

@@ -287,13 +287,16 @@ defmodule Pulsar.Integration.ConsumerTest do
     :ok = Pulsar.stop_consumer(non_durable_consumer)
 
     # Start failing consumers first so they can fail in background while we test successful scenarios
+    # Disable startup delays so they fail quickly
     {:ok, exclusive_multi_group} =
       Pulsar.start_consumer(
         topic,
         @subscription_prefix <> "exclusive-multi-fail",
         @consumer_callback,
         subscription_type: :Exclusive,
-        consumer_count: 2
+        consumer_count: 2,
+        startup_delay_ms: 0,
+        startup_jitter_ms: 0
       )
 
     {:ok, no_force_create_group} =
@@ -302,7 +305,9 @@ defmodule Pulsar.Integration.ConsumerTest do
         @subscription_prefix <> "no-force-create",
         @consumer_callback,
         subscription_type: :Shared,
-        force_create_topic: false
+        force_create_topic: false,
+        startup_delay_ms: 0,
+        startup_jitter_ms: 0
       )
 
     # Wait for all failing/stopped consumers to complete their lifecycle

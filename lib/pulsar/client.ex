@@ -54,8 +54,6 @@ defmodule Pulsar.Client do
 
   - `:name` - Required. The name of the client (atom)
   - `:host` - Optional. Bootstrap broker URL
-  - `:start_delay_ms` - Optional. Delay before starting consumers/producers (default: 500)
-  - `:startup_jitter_ms` - Optional. Random jitter for consumer/producer startup (default: 0)
   - `:consumers` - Optional. List of consumers to start automatically
   - `:producers` - Optional. List of producers to start automatically
   - `:auth` - Optional. Authentication configuration
