@@ -857,7 +857,26 @@ defmodule Pulsar do
   end
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
-  defp check_partitioned_topic(topic, client) do
+  defp check_partitioned_topic(_topic, _client, attempts \\ 10, delay_ms \\ 500)
+
+  defp check_partitioned_topic(_topic, _client, 0, _delay_ms) do
+    {:error, :partition_check_failed}
+  end
+
+  defp check_partitioned_topic(topic, client, attempts, delay_ms) do
+    case do_check_partitioned_topic(topic, client) do
+      {:ok, response} ->
+        {:ok, response}
+
+      _error ->
+        Process.sleep(delay_ms)
+        check_partitioned_topic(topic, client, attempts - 1, delay_ms)
+    end
+  end
+
+  @spec do_check_partitioned_topic(String.t(), atom()) ::
+          {:ok, integer()} | {:error, term()}
+  defp do_check_partitioned_topic(topic, client) do
     broker = Pulsar.Utils.broker(client)
 
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
@@ -866,6 +885,10 @@ defmodule Pulsar do
 
       {:ok, %{response: :Failed, error: error}} ->
         {:error, {:partition_metadata_check_failed, error}}
+
+      {:error, reason} ->
+        Logger.warning("Error checking partitioned topic metadata for #{topic}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 end
