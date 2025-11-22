@@ -51,7 +51,12 @@ defmodule Pulsar.Producer do
   - `opts` - Additional options:
     - `:access_mode` - Producer access mode (default: :Shared)
     - `:compression` - Compression algorithm (default: :NONE)
-    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 0, disabled)
+    - `:startup_delay_ms` - Fixed startup delay in milliseconds before producer initialization (default: 1000, matches broker conn_timeout)
+    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
+
+  The total startup delay is `startup_delay_ms + random(0, startup_jitter_ms)`, applied on every producer start/restart.
+  The default `startup_delay_ms` matches the broker's `conn_timeout` to ensure the broker has time to reconnect
+  before producers start requesting topic lookups.
 
   The producer will automatically use service discovery to find the broker.
   The broker will assign a unique producer name.
@@ -59,12 +64,14 @@ defmodule Pulsar.Producer do
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
     {compression, genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
-    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 0)
+    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
+    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
 
     producer_config = %{
       topic: topic,
       access_mode: access_mode,
       compression: compression,
+      startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     }
 
@@ -100,6 +107,7 @@ defmodule Pulsar.Producer do
       topic: topic,
       access_mode: access_mode,
       compression: compression,
+      startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     } = producer_config
 
@@ -117,18 +125,21 @@ defmodule Pulsar.Producer do
 
     Logger.info("Starting producer for topic #{topic}")
 
-    if startup_jitter_ms > 0 do
-      {:ok, state, {:continue, {:startup_jitter, startup_jitter_ms}}}
+    total_startup_delay = startup_delay_ms + startup_jitter_ms
+
+    if total_startup_delay > 0 do
+      {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms}}}
     else
       {:ok, state, {:continue, :register_producer}}
     end
   end
 
   @impl true
-  def handle_continue({:startup_jitter, jitter_ms}, state) do
-    sleep_ms = :rand.uniform(jitter_ms)
-    Logger.debug("Producer sleeping for #{sleep_ms}ms jitter")
-    Process.sleep(sleep_ms)
+  def handle_continue({:startup_delay, base_delay_ms, jitter_ms}, state) do
+    jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
+    total_sleep_ms = base_delay_ms + jitter
+    Logger.debug("Producer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Process.sleep(total_sleep_ms)
     {:noreply, state, {:continue, :register_producer}}
   end
 

@@ -92,7 +92,12 @@ defmodule Pulsar.Consumer do
     - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
       - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
-    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 0, disabled)
+    - `:startup_delay_ms` - Fixed startup delay in milliseconds before consumer initialization (default: 1000, matches broker conn_timeout)
+    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
+
+  The total startup delay is `startup_delay_ms + random(0, startup_jitter_ms)`, applied on every consumer start/restart.
+  The default `startup_delay_ms` matches the broker's `conn_timeout` to ensure the broker has time to reconnect
+  before consumers start requesting topic lookups.
 
   The consumer will automatically use any available broker for service discovery.
   """
@@ -113,7 +118,8 @@ defmodule Pulsar.Consumer do
     {dead_letter_policy, genserver_opts} =
       Keyword.pop(genserver_opts, :dead_letter_policy, nil)
 
-    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 0)
+    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
+    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
@@ -132,6 +138,7 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
+      startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     }
 
@@ -278,6 +285,7 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
+      startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     } = consumer_config
 
@@ -308,18 +316,21 @@ defmodule Pulsar.Consumer do
 
     Logger.info("Starting consumer for topic #{state.topic}")
 
-    if startup_jitter_ms > 0 do
-      {:ok, state, {:continue, {:startup_jitter, startup_jitter_ms, init_args}}}
+    total_startup_delay = startup_delay_ms + startup_jitter_ms
+
+    if total_startup_delay > 0 do
+      {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}
     else
       {:ok, state, {:continue, {:init_callback, init_args}}}
     end
   end
 
   @impl true
-  def handle_continue({:startup_jitter, jitter_ms, init_args}, state) do
-    sleep_ms = :rand.uniform(jitter_ms)
-    Logger.debug("Consumer sleeping for #{sleep_ms}ms jitter")
-    Process.sleep(sleep_ms)
+  def handle_continue({:startup_delay, base_delay_ms, jitter_ms, init_args}, state) do
+    jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
+    total_sleep_ms = base_delay_ms + jitter
+    Logger.debug("Consumer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Process.sleep(total_sleep_ms)
     {:noreply, state, {:continue, {:init_callback, init_args}}}
   end
 
