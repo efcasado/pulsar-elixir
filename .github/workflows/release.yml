@@ -20,7 +20,7 @@ jobs:
       - uses: cycjimmy/semantic-release-action@v4.1.1
         with:
           extra_plugins: |
-            @insurgent/conventional-changelog-preset@9.0.1
+            @insurgent/conventional-changelog-preset@10.0.0
             @semantic-release/changelog@6.0.3
             @semantic-release/git@10.0.1
           branches: |
