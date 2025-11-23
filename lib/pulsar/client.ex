@@ -137,6 +137,27 @@ defmodule Pulsar.Client do
   end
 
   @doc """
+  Returns a random broker process from the specified client's broker supervisor.
+
+  Defaults to the `:default` client if no client is specified.
+
+  This is useful for operations that need any broker from a client (e.g., service discovery).
+  """
+  @spec random_broker(atom()) :: pid() | nil
+  def random_broker(client_name \\ :default) do
+    broker_supervisor = broker_supervisor(client_name)
+
+    case Supervisor.which_children(broker_supervisor) do
+      [] ->
+        nil
+
+      children ->
+        {_id, pid, _, _} = Enum.random(children)
+        pid
+    end
+  end
+
+  @doc """
   Starts a broker connection.
 
   If a broker for the given URL already exists, returns the existing broker.

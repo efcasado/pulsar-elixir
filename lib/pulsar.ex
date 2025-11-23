@@ -795,7 +795,7 @@ defmodule Pulsar do
   @spec do_check_partitioned_topic(String.t(), atom()) ::
           {:ok, integer()} | {:error, term()}
   defp do_check_partitioned_topic(topic, client) do
-    broker = Pulsar.Utils.broker(client)
+    broker = Pulsar.Client.random_broker(client)
 
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
       {:ok, %{response: :Success, partitions: partitions}} ->
