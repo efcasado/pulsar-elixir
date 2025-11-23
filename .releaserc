@@ -3,14 +3,16 @@
     [
       "@semantic-release/commit-analyzer",
       {
-        "config": "@insurgent/conventional-changelog-preset",
-        "releaseRules": "@insurgent/conventional-changelog-preset/release-rules"
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          {"type": "chore", "release": "patch"}
+        ]
       }
     ],
     [
       "@semantic-release/release-notes-generator",
       {
-        "config": "@insurgent/conventional-changelog-preset"
+        "preset": "conventionalcommits"
       }
     ],
     "@semantic-release/changelog",
