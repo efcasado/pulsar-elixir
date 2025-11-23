@@ -675,8 +675,6 @@ defmodule Pulsar.Consumer do
   end
 
   def terminate(reason, state) do
-    {:ok, _response} = close_consumer(state.broker_pid, state.consumer_id)
-
     # Call callback module's terminate function if it exists
     if function_exported?(state.callback_module, :terminate, 2) do
       try do
@@ -914,18 +912,6 @@ defmodule Pulsar.Consumer do
         {result, Map.merge(start_metadata, stop_metadata)}
       end
     )
-  end
-
-  defp close_consumer(nil, _consumer_id) do
-    {:ok, :skipped}
-  end
-
-  defp close_consumer(broker_pid, consumer_id) do
-    close_consumer_command = %Binary.CommandCloseConsumer{
-      consumer_id: consumer_id
-    }
-
-    Pulsar.Broker.send_request(broker_pid, close_consumer_command)
   end
 
   defp maybe_add_message_id(command, nil), do: command
