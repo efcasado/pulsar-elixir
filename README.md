@@ -58,7 +58,7 @@ The package can be installed by adding `pulsar` to your list of dependencies in 
 ```elixir
 def deps do
   [
-    {:pulsar, git: "https://github.com/efcasado/pulsar-elixir", tag: "v0.1.0"}
+    {:pulsar, git: "https://github.com/efcasado/pulsar-elixir", tag: "v1.0.1"}
   ]
 end
 ```
