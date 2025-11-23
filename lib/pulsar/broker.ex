@@ -460,15 +460,34 @@ defmodule Pulsar.Broker do
     {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
     {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
 
-    if consumer_id do
-      Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}")
-    end
+    updated_broker =
+      if consumer_id do
+        Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server")
+
+        close_consumer_command = %Binary.CommandCloseConsumer{
+          consumer_id: consumer_id,
+          request_id: System.unique_integer([:positive, :monotonic])
+        }
+
+        case send_command_internal(close_consumer_command, broker) do
+          {:ok, updated_broker} ->
+            updated_broker
+
+          {{:error, send_error}, updated_broker} ->
+            Logger.warning("Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}")
+
+            updated_broker
+        end
+      else
+        broker
+      end
 
     if producer_id do
       Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
+      # TODO: Send CloseProducer when implemented
     end
 
-    new_broker = %{broker | consumers: new_consumers, producers: new_producers}
+    new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
     {:keep_state, new_broker}
   end
 
