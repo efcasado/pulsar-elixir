@@ -15,8 +15,10 @@ defmodule Pulsar do
 
   ## Examples
 
-      # Start a broker connection (idempotent)
-      {:ok, broker_pid} = Pulsar.start_broker("pulsar://localhost:6650")
+      # Start a broker connection (idempotent per client)
+      # Brokers are automatically started by clients, but you can manually start
+      # additional brokers for service discovery
+      {:ok, broker_pid} = Pulsar.start_broker("pulsar://other-broker:6650")
 
       # Start a consumer for a regular topic
       {:ok, consumer_pid} = Pulsar.start_consumer(
@@ -129,7 +131,7 @@ defmodule Pulsar do
           clients
       end
 
-    # Start clients
+    # Start clients (brokers are now started within each client)
     children =
       Enum.map(clients_config, fn {client_name, client_opts} ->
         {Pulsar.Client, Keyword.put(client_opts, :name, client_name)}
@@ -137,17 +139,6 @@ defmodule Pulsar do
 
     sup_opts = [strategy: :one_for_one, name: @app_supervisor]
     {:ok, pid} = Supervisor.start_link(children, sup_opts)
-
-    # Start brokers for each client
-    Enum.each(clients_config, fn {client_name, client_opts} ->
-      case Keyword.get(client_opts, :host) do
-        nil ->
-          Logger.warning("Client #{inspect(client_name)} has no :host configured, skipping broker startup")
-
-        bootstrap_host ->
-          {:ok, _} = Pulsar.start_broker(bootstrap_host, client: client_name)
-      end
-    end)
 
     # Start consumers
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
@@ -192,99 +183,26 @@ defmodule Pulsar do
   @doc """
   Starts a broker connection.
 
-  If a broker for the given URL already exists, returns the existing broker.
-  Otherwise, starts a new broker connection with the provided options.
-
-  Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
-
-  ## Examples
-
-      iex> Pulsar.start_broker("pulsar://localhost:6650", socket_opts: [verify: :none])
-      {:ok, #PID<0.123.0>}
-
-      iex> Pulsar.start_broker("pulsar://localhost:6650", conn_timeout: 10_000)
-      {:ok, #PID<0.123.0>}
+  Delegates to `Pulsar.Client.start_broker/2`.
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def start_broker(broker_url, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-    broker_registry = Pulsar.Client.broker_registry(client)
-    broker_supervisor = Pulsar.Client.broker_supervisor(client)
-
-    case lookup_broker(broker_url, client: client) do
-      {:ok, broker_pid} ->
-        {:ok, broker_pid}
-
-      {:error, :not_found} ->
-        global_opts = Pulsar.Client.get_broker_opts(client)
-        merged_opts = Keyword.merge(global_opts, Keyword.delete(opts, :client))
-        registry_opts = [{:name, {:via, Registry, {broker_registry, broker_url}}} | merged_opts]
-
-        child_spec = %{
-          id: broker_url,
-          start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
-          # TO-DO: should be transient?
-          restart: :permanent
-        }
-
-        case DynamicSupervisor.start_child(broker_supervisor, child_spec) do
-          {:ok, broker_pid} ->
-            {:ok, broker_pid}
-
-          {:error, {:already_started, broker_pid}} ->
-            {:ok, broker_pid}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-    end
-  end
+  defdelegate start_broker(broker_url, opts \\ []), to: Pulsar.Client
 
   @doc """
   Looks up an existing broker connection by broker URL.
 
-  Returns `{:ok, broker_pid}` if found, `{:error, :not_found}` otherwise.
-
-  ## Examples
-
-      iex> Pulsar.lookup_broker("pulsar://localhost:6650")
-      {:ok, #PID<0.123.0>}
-
-      iex> Pulsar.lookup_broker("pulsar://unknown:6650")
-      {:error, :not_found}
+  Delegates to `Pulsar.Client.lookup_broker/2`.
   """
   @spec lookup_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup_broker(broker_url, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-    broker_registry = Pulsar.Client.broker_registry(client)
-
-    case Registry.lookup(broker_registry, broker_url) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> {:error, :not_found}
-    end
-  end
+  defdelegate lookup_broker(broker_url, opts \\ []), to: Pulsar.Client
 
   @doc """
   Stops a broker connection by broker URL.
 
-  Gracefully stops all connected consumers and producers before shutting down the broker.
-
-  ## Examples
-
-      iex> Pulsar.stop_broker("pulsar://localhost:6650")
-      :ok
+  Delegates to `Pulsar.Client.stop_broker/2`.
   """
   @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
-  def stop_broker(broker_url, opts \\ []) do
-    case lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} ->
-        Pulsar.Broker.stop(broker_pid)
-        :ok
-
-      {:error, :not_found} ->
-        {:error, :not_found}
-    end
-  end
+  defdelegate stop_broker(broker_url, opts \\ []), to: Pulsar.Client
 
   @doc """
   Starts a consumer for a topic (regular or partitioned).

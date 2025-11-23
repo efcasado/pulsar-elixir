@@ -167,7 +167,8 @@ children = [
 Supervisor.start_link(children, strategy: :one_for_one)
 
 # Later, start consumers and producers as needed
-# The client will automatically handle broker connections
+# The client automatically starts the bootstrap broker connection
+# Additional brokers are started automatically via service discovery
 {:ok, consumer_pid} = Pulsar.start_consumer(
   "persistent://my-tenant/my-namespace/my-topic",
   "my-subscription",

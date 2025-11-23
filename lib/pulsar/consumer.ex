@@ -21,6 +21,7 @@ defmodule Pulsar.Consumer do
   require Logger
 
   defstruct [
+    :client,
     :topic,
     :subscription_name,
     :subscription_type,
@@ -119,10 +120,12 @@ defmodule Pulsar.Consumer do
       Keyword.pop(genserver_opts, :dead_letter_policy, nil)
 
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
-    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
 
     # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
+      client: client,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -270,6 +273,7 @@ defmodule Pulsar.Consumer do
   @impl true
   def init(consumer_config) do
     %{
+      client: client,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -292,6 +296,7 @@ defmodule Pulsar.Consumer do
     {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(dead_letter_policy)
 
     state = %__MODULE__{
+      client: client,
       consumer_id: System.unique_integer([:positive, :monotonic]),
       consumer_name: nil,
       topic: topic,
@@ -345,7 +350,7 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_continue(:subscribe, state) do
-    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic),
+    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, response} <-
            subscribe_to_topic(

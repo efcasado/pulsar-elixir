@@ -53,16 +53,30 @@ defmodule Pulsar.Client do
   ## Options
 
   - `:name` - Required. The name of the client (atom)
-  - `:host` - Optional. Bootstrap broker URL
-  - `:consumers` - Optional. List of consumers to start automatically
-  - `:producers` - Optional. List of producers to start automatically
+  - `:host` - Required. Bootstrap broker URL
   - `:auth` - Optional. Authentication configuration
   - `:conn_timeout` - Optional. Connection timeout (default: 5000)
   - `:socket_opts` - Optional. Socket options
   """
   def start_link(opts) do
     name = Keyword.fetch!(opts, :name)
-    Supervisor.start_link(__MODULE__, opts, name: name)
+    bootstrap_host = Keyword.fetch!(opts, :host)
+
+    case Supervisor.start_link(__MODULE__, opts, name: name) do
+      {:ok, pid} = result ->
+        # Start the bootstrap broker after supervisor is running
+        case start_broker(bootstrap_host, client: name) do
+          {:ok, _broker_pid} ->
+            result
+
+          {:error, reason} ->
+            Supervisor.stop(pid)
+            {:error, {:broker_startup_failed, reason}}
+        end
+
+      error ->
+        error
+    end
   end
 
   @impl true
@@ -120,6 +134,79 @@ defmodule Pulsar.Client do
   @doc false
   def get_broker_opts(client_name) do
     :persistent_term.get({__MODULE__, client_name, :broker_opts}, [])
+  end
+
+  @doc """
+  Starts a broker connection.
+
+  If a broker for the given URL already exists, returns the existing broker.
+  Otherwise, starts a new broker connection with the provided options.
+
+  Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
+  """
+  @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_broker(broker_url, opts \\ []) do
+    client = Keyword.get(opts, :client, :default)
+    broker_registry = broker_registry(client)
+    broker_supervisor = broker_supervisor(client)
+
+    case lookup_broker(broker_url, client: client) do
+      {:ok, broker_pid} ->
+        {:ok, broker_pid}
+
+      {:error, :not_found} ->
+        global_opts = get_broker_opts(client)
+        merged_opts = Keyword.merge(global_opts, Keyword.delete(opts, :client))
+        registry_opts = [{:name, {:via, Registry, {broker_registry, broker_url}}} | merged_opts]
+
+        child_spec = %{
+          id: broker_url,
+          start: {Pulsar.Broker, :start_link, [broker_url, registry_opts]},
+          restart: :permanent
+        }
+
+        case DynamicSupervisor.start_child(broker_supervisor, child_spec) do
+          {:ok, broker_pid} ->
+            {:ok, broker_pid}
+
+          {:error, {:already_started, broker_pid}} ->
+            {:ok, broker_pid}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Looks up an existing broker connection by broker URL.
+
+  Returns `{:ok, broker_pid}` if found, `{:error, :not_found}` otherwise.
+  """
+  @spec lookup_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup_broker(broker_url, opts \\ []) do
+    client = Keyword.get(opts, :client, :default)
+    broker_registry = broker_registry(client)
+
+    case Registry.lookup(broker_registry, broker_url) do
+      [{pid, _value}] -> {:ok, pid}
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Stops a broker connection by broker URL.
+  """
+  @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
+  def stop_broker(broker_url, opts \\ []) do
+    case lookup_broker(broker_url, opts) do
+      {:ok, broker_pid} ->
+        Pulsar.Broker.stop(broker_pid)
+        :ok
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
   end
 
   ## Private Functions
