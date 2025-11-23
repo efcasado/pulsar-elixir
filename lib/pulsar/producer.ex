@@ -17,6 +17,7 @@ defmodule Pulsar.Producer do
   require Logger
 
   defstruct [
+    :client,
     :topic,
     :producer_id,
     :producer_name,
@@ -65,9 +66,11 @@ defmodule Pulsar.Producer do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
     {compression, genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
-    {startup_jitter_ms, _genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
 
     producer_config = %{
+      client: client,
       topic: topic,
       access_mode: access_mode,
       compression: compression,
@@ -104,6 +107,7 @@ defmodule Pulsar.Producer do
     Process.flag(:trap_exit, true)
 
     %{
+      client: client,
       topic: topic,
       access_mode: access_mode,
       compression: compression,
@@ -114,6 +118,7 @@ defmodule Pulsar.Producer do
     producer_id = System.unique_integer([:positive, :monotonic])
 
     state = %__MODULE__{
+      client: client,
       topic: topic,
       producer_id: producer_id,
       producer_name: nil,
@@ -144,7 +149,7 @@ defmodule Pulsar.Producer do
   end
 
   def handle_continue(:register_producer, state) do
-    case ServiceDiscovery.lookup_topic(state.topic) do
+    case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
         register_with_broker(state, broker_pid)
 
