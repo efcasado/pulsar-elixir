@@ -1,0 +1,29 @@
+name: release
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: cycjimmy/semantic-release-action@v4.2.0
+        with:
+          extra_plugins: |
+            @insurgent/conventional-changelog-preset@9.0.1
+            @semantic-release/changelog@6.0.3
+            @semantic-release/git@10.0.1
+          branches: |
+            [ 'main' ]
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
