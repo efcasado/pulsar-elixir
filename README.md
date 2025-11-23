@@ -1,3 +1,7 @@
+[![CI](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/efcasado/pulsar-elixir)](https://github.com/efcasado/pulsar-elixir/releases)
+
+
 # Elixir Client for Apache Pulsar
 
 > [!CAUTION]
