@@ -4,6 +4,11 @@ defmodule Pulsar.Test.Support.DummyConsumer do
 
   def init(opts) do
     fail_all = Keyword.get(opts, :fail_all, false)
+
+    if notify_pid = Keyword.get(opts, :notify_pid) do
+      send(notify_pid, {:consumer_ready, self()})
+    end
+
     {:ok, %{messages: [], count: 0, fail_all: fail_all}}
   end
 

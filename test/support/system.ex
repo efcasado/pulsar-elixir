@@ -38,32 +38,32 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
-  def broker_for_consumer(consumer) when is_pid(consumer) do
+  def broker_for_consumer(consumer, client \\ :default) when is_pid(consumer) do
     Enum.find(
       @brokers,
       nil,
       fn broker ->
         broker.service_url
-        |> Pulsar.Broker.get_consumers()
+        |> Pulsar.Broker.get_consumers(client: client)
         |> Enum.any?(fn {_id, pid} -> pid == consumer end)
       end
     )
   end
 
-  def broker_for_producer(producer) when is_pid(producer) do
+  def broker_for_producer(producer, client \\ :default) when is_pid(producer) do
     Enum.find(
       @brokers,
       nil,
       fn broker ->
         broker.service_url
-        |> Pulsar.Broker.get_producers()
+        |> Pulsar.Broker.get_producers(client: client)
         |> Enum.any?(fn {_id, pid} -> pid == producer end)
       end
     )
   end
 
-  def consumers_on(broker_url) when is_binary(broker_url) do
-    Pulsar.Broker.get_consumers(broker_url)
+  def consumers_on(broker_url, client \\ :default) when is_binary(broker_url) do
+    Pulsar.Broker.get_consumers(broker_url, client: client)
   end
 
   def start_pulsar do

@@ -82,7 +82,7 @@ jobs:
         echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
 
     - name: Run tests
-      run: mix coveralls.github --no-start
+      run: mix coveralls.github
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v2.2.0
