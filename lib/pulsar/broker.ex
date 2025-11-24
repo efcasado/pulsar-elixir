@@ -502,12 +502,7 @@ defmodule Pulsar.Broker do
       Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
     end
 
-    new_broker = %{
-      broker
-      | consumers: new_consumers,
-        producers: new_producers
-    }
-
+    new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
     {:keep_state, new_broker}
   end
 
