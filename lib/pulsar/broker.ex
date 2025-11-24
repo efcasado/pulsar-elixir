@@ -221,7 +221,6 @@ defmodule Pulsar.Broker do
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
-        # TODO: Add Pulsar.Producer.stop(producer_pid) when we implement producers
       end
     end)
 
@@ -321,7 +320,13 @@ defmodule Pulsar.Broker do
     full_socket_opts =
       filtered_socket_opts ++ [:binary, nodelay: true, active: true, keepalive: true]
 
-    case apply(mod, :connect, [host_charlist, port, full_socket_opts, conn_timeout]) do
+    result =
+      case mod do
+        :gen_tcp -> :gen_tcp.connect(host_charlist, port, full_socket_opts, conn_timeout)
+        :ssl -> :ssl.connect(host_charlist, port, full_socket_opts, conn_timeout)
+      end
+
+    case result do
       {:ok, socket} ->
         Logger.debug("Connection succeeded")
         actions = [{:next_event, :internal, :handshake}]
@@ -329,9 +334,7 @@ defmodule Pulsar.Broker do
 
       {:error, error} ->
         wait = next_backoff(broker)
-
         Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
-
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
     end
@@ -484,7 +487,6 @@ defmodule Pulsar.Broker do
 
     if producer_id do
       Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
-      # TODO: Send CloseProducer when implemented
     end
 
     new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
@@ -518,10 +520,15 @@ defmodule Pulsar.Broker do
   def connected({:call, from}, {:publish_message, command_send, message_metadata, payload}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
-    # Encode the message with payload
     encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
 
-    case apply(mod, :send, [socket, encoded_message]) do
+    result =
+      case mod do
+        :gen_tcp -> :gen_tcp.send(socket, encoded_message)
+        :ssl -> :ssl.send(socket, encoded_message)
+      end
+
+    case result do
       :ok ->
         actions = [{:reply, from, :ok}]
         {:keep_state, broker, actions}
@@ -817,7 +824,13 @@ defmodule Pulsar.Broker do
     try do
       encoded_command = Pulsar.Protocol.encode(command)
 
-      case apply(mod, :send, [socket, encoded_command]) do
+      result =
+        case mod do
+          :gen_tcp -> :gen_tcp.send(socket, encoded_command)
+          :ssl -> :ssl.send(socket, encoded_command)
+        end
+
+      case result do
         :ok -> {:ok, broker}
         {:error, reason} -> {{:error, reason}, broker}
       end
@@ -905,13 +918,13 @@ defmodule Pulsar.Broker do
   end
 
   defp get_auth_method_name(type: type, opts: opts) do
-    apply(type, :auth_method_name, [opts])
+    type.auth_method_name(opts)
   end
 
   defp get_auth_method_name(_), do: ""
 
   defp get_auth_data(type: type, opts: opts) do
-    apply(type, :auth_data, [opts])
+    type.auth_data(opts)
   end
 
   defp get_auth_data(_), do: ""
