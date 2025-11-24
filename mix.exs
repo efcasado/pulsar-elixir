@@ -13,6 +13,15 @@ defmodule Pulsar.MixProject do
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
         plt_add_apps: [:mix, :ex_unit]
       ],
+      test_coverage: [tool: ExCoveralls],
+      preferred_cli_env: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.post": :test,
+        "coveralls.html": :test,
+        "coveralls.cobertura": :test,
+        "coveralls.github": :test
+      ],
       aliases: aliases()
     ]
   end
@@ -38,6 +47,8 @@ defmodule Pulsar.MixProject do
       {:telemetry, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:excoveralls, "~> 0.18.5", only: :test},
+      {:junit_formatter, "~> 3.4", only: :test},
       {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
       {:telemetry_test, "~> 0.1.0", only: :test}
       # {:dep_from_hexpm, "~> 0.3.0"},
