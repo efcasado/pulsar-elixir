@@ -18,7 +18,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     if: "!contains(github.event.head_commit.message, '[skip tests]')"
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -51,6 +51,17 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-mix-
 
+    - name: Cache plt files
+      uses: actions/cache@v4
+      id: cache-plt
+      with:
+        path: |
+          priv/plts
+        key: |
+          plt-${{ runner.os }}-${{ hashFiles('**/mise.toml') }}-${{ hashFiles('**/mix.lock') }}
+        restore-keys: |
+          plt-${{ runner.os }}-${{ hashFiles('**/mise.toml') }}-
+
     - name: Get Mix dependencies
       run: mix deps.get
 
@@ -60,9 +71,12 @@ jobs:
     - name: Compile (warnings as errors)
       run: mix compile --warnings-as-errors
 
+    - name: Check Dialyzer
+      run: mix dialyzer --format github --format dialyxir
+
     - name: Add broker hostnames to /etc/hosts
       run: |
         echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
-      
+
     - name: Run tests
       run: mix test --no-start
