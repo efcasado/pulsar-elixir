@@ -622,15 +622,9 @@ defmodule Pulsar.Consumer do
           message_ids: nacked_list
         }
 
-        case Pulsar.Broker.send_command(state.broker_pid, redeliver_command) do
-          :ok ->
-            Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
-            %{state | nacked_messages: MapSet.new()}
-
-          {:error, reason} ->
-            Logger.error("Failed to send redelivery command: #{inspect(reason)}")
-            state
-        end
+        :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
+        Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
+        %{state | nacked_messages: MapSet.new()}
       else
         state
       end
@@ -700,14 +694,9 @@ defmodule Pulsar.Consumer do
       messagePermits: permits
     }
 
-    case Pulsar.Broker.send_command(state.broker_pid, flow_command) do
-      :ok ->
-        new_permits = state.flow_outstanding_permits + permits
-        {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
+    :ok = Pulsar.Broker.send_command(state.broker_pid, flow_command)
+    new_permits = state.flow_outstanding_permits + permits
+    {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
   end
 
   def handle_call({:ack, message_ids}, _from, state) when is_list(message_ids) do
@@ -717,13 +706,8 @@ defmodule Pulsar.Consumer do
       message_id: message_ids
     }
 
-    case Pulsar.Broker.send_command(state.broker_pid, ack_command) do
-      :ok ->
-        {:reply, :ok, state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
+    :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+    {:reply, :ok, state}
   end
 
   def handle_call({:nack, message_ids}, _from, state) when is_list(message_ids) do
@@ -907,12 +891,7 @@ defmodule Pulsar.Consumer do
       fn ->
         result = Pulsar.Broker.send_command(broker_pid, flow_command)
 
-        stop_metadata =
-          if result == :ok do
-            %{success: true, permits_after: outstanding_permits + permits}
-          else
-            %{success: false, permits_after: outstanding_permits}
-          end
+        stop_metadata = %{success: true, permits_after: outstanding_permits + permits}
 
         {result, Map.merge(start_metadata, stop_metadata)}
       end

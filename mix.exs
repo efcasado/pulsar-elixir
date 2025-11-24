@@ -9,6 +9,10 @@ defmodule Pulsar.MixProject do
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
+      dialyzer: [
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+        plt_add_apps: [:mix, :ex_unit]
+      ],
       aliases: aliases()
     ]
   end
@@ -31,8 +35,9 @@ defmodule Pulsar.MixProject do
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.13.0"},
       {:snappyer, "~> 1.2"},
-      {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
       {:telemetry, "~> 1.0"},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
       {:telemetry_test, "~> 0.1.0", only: :test}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}

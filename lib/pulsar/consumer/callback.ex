@@ -170,7 +170,8 @@ defmodule Pulsar.Consumer.Callback do
           command :: struct(),
           metadata :: struct(),
           payload :: {single_metadata :: struct() | nil, binary()},
-          broker_metadata :: term()
+          broker_metadata :: term(),
+          message_id_to_ack :: term()
         }
 
   @type init_arg :: term()

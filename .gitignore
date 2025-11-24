@@ -7,6 +7,8 @@
 /escripts/
 /tmp/
 /packages/
+/priv/plts/*.plt
+/priv/plts/*.plt.hash
 cache.ets
 erl_crash.dump
 *.ez
