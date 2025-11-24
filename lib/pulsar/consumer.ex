@@ -123,7 +123,6 @@ defmodule Pulsar.Consumer do
     {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
 
-    # TODO: add some validation to check opts are valid? (e.g. initial_permits > 0, etc)
     consumer_config = %{
       client: client,
       topic: topic,
@@ -340,7 +339,7 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_continue({:init_callback, init_args}, state) do
-    case apply(state.callback_module, :init, [init_args]) do
+    case state.callback_module.init(init_args) do
       {:ok, callback_state} ->
         {:noreply, %{state | callback_state: callback_state}, {:continue, :subscribe}}
 
@@ -488,129 +487,16 @@ defmodule Pulsar.Consumer do
     num_messages = length(payload)
     state = decrement_permits(state, num_messages)
 
-    # Check if entire batch should go to DLQ (redelivery count applies to whole batch)
-    if should_send_to_dead_letter?(state, redelivery_count) do
-      Logger.warning(
-        "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ"
-      )
+    new_state =
+      if should_send_to_dead_letter?(state, redelivery_count) do
+        process_dead_letter_batch(state, payload, base_message_id, redelivery_count)
+      else
+        process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
+      end
 
-      {final_callback_state, nacked_ids} =
-        payload
-        |> Enum.with_index()
-        |> Enum.reduce({state.callback_state, []}, fn {{_msg_metadata, msg_payload}, index},
-                                                      {callback_state, nacked_acc} ->
-          message_id_to_ack =
-            if index == 0 and length(payload) == 1 do
-              base_message_id
-            else
-              %{base_message_id | batch_index: index}
-            end
-
-          case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
-            :ok ->
-              # Successfully sent to DLQ, ACK the message asynchronously
-              ack_command = %Binary.CommandAck{
-                consumer_id: state.consumer_id,
-                ack_type: :Individual,
-                message_id: [message_id_to_ack]
-              }
-
-              :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-              {callback_state, nacked_acc}
-
-            {:error, dlq_reason} ->
-              Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-
-              {callback_state, [message_id_to_ack | nacked_acc]}
-          end
-        end)
-
-      state = check_and_refill_permits(state)
-
-      new_nacked_messages =
-        if state.redelivery_interval do
-          MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-        else
-          state.nacked_messages
-        end
-
-      new_state = %{
-        state
-        | callback_state: final_callback_state,
-          nacked_messages: new_nacked_messages
-      }
-
-      {:noreply, new_state}
-    else
-      # Process messages normally
-      {final_callback_state, nacked_ids} =
-        payload
-        |> Enum.with_index()
-        |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index},
-                                                      {callback_state, nacked_acc} ->
-          message_id_to_ack =
-            if msg_metadata == nil do
-              base_message_id
-            else
-              %{base_message_id | batch_index: index}
-            end
-
-          # Include message_id_to_ack for manual ACK/NACK use cases (e.g., Broadway)
-          msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata, message_id_to_ack}
-
-          result = apply(state.callback_module, :handle_message, [msg_args, callback_state])
-
-          case result do
-            {:ok, new_callback_state} ->
-              # ACK asynchronously - no need to wait for response
-              ack_command = %Binary.CommandAck{
-                consumer_id: state.consumer_id,
-                ack_type: :Individual,
-                message_id: [message_id_to_ack]
-              }
-
-              :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-
-              {new_callback_state, nacked_acc}
-
-            {:noreply, new_callback_state} ->
-              # Manual ACK mode - don't automatically ACK or NACK
-              {new_callback_state, nacked_acc}
-
-            {:error, reason, new_callback_state} ->
-              Logger.warning(
-                "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
-              )
-
-              {new_callback_state, [message_id_to_ack | nacked_acc]}
-
-            unexpected_result ->
-              Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-
-              {callback_state, nacked_acc}
-          end
-        end)
-
-      state = check_and_refill_permits(state)
-
-      new_nacked_messages =
-        if state.redelivery_interval do
-          MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-        else
-          state.nacked_messages
-        end
-
-      new_state = %{
-        state
-        | callback_state: final_callback_state,
-          nacked_messages: new_nacked_messages
-      }
-
-      {:noreply, new_state}
-    end
+    {:noreply, new_state}
   end
 
-  # Handle periodic redelivery
   @impl true
   def handle_info(:trigger_redelivery, state) do
     new_state =
@@ -633,7 +519,6 @@ defmodule Pulsar.Consumer do
     {:noreply, new_state}
   end
 
-  # Handle broker crashes - stop so supervisor can restart us with fresh lookup
   @impl true
   def handle_info(
         {:DOWN, monitor_ref, :process, broker_pid, reason},
@@ -647,24 +532,130 @@ defmodule Pulsar.Consumer do
   # Handle other info messages by delegating to callback module
   @impl true
   def handle_info(message, state) do
-    # Delegate to callback module if it implements handle_info
     if function_exported?(state.callback_module, :handle_info, 2) do
-      case apply(state.callback_module, :handle_info, [message, state.callback_state]) do
+      case state.callback_module.handle_info(message, state.callback_state) do
         {:noreply, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state}
+          {:noreply, %{state | callback_state: new_callback_state}}
 
         {:noreply, new_callback_state, timeout_or_hibernate} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state, timeout_or_hibernate}
+          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
         {:stop, reason, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:stop, reason, new_state}
+          {:stop, reason, %{state | callback_state: new_callback_state}}
       end
     else
-      # Default behavior - ignore unhandled info messages
       {:noreply, state}
+    end
+  end
+
+  defp process_dead_letter_batch(state, payload, base_message_id, redelivery_count) do
+    Logger.warning(
+      "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ"
+    )
+
+    {final_callback_state, nacked_ids} =
+      payload
+      |> Enum.with_index()
+      |> Enum.reduce({state.callback_state, []}, fn {{_msg_metadata, msg_payload}, index}, {callback_state, nacked_acc} ->
+        message_id_to_ack =
+          if index == 0 and length(payload) == 1 do
+            base_message_id
+          else
+            %{base_message_id | batch_index: index}
+          end
+
+        case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
+          :ok ->
+            ack_command = %Binary.CommandAck{
+              consumer_id: state.consumer_id,
+              ack_type: :Individual,
+              message_id: [message_id_to_ack]
+            }
+
+            :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+            {callback_state, nacked_acc}
+
+          {:error, dlq_reason} ->
+            Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
+            {callback_state, [message_id_to_ack | nacked_acc]}
+        end
+      end)
+
+    state = check_and_refill_permits(state)
+
+    new_nacked_messages =
+      if state.redelivery_interval do
+        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
+      else
+        state.nacked_messages
+      end
+
+    %{
+      state
+      | callback_state: final_callback_state,
+        nacked_messages: new_nacked_messages
+    }
+  end
+
+  defp process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count) do
+    {final_callback_state, nacked_ids} =
+      payload
+      |> Enum.with_index()
+      |> Enum.reduce({state.callback_state, []}, fn {{msg_metadata, msg_payload}, index}, {callback_state, nacked_acc} ->
+        message_id_to_ack =
+          if msg_metadata == nil do
+            base_message_id
+          else
+            %{base_message_id | batch_index: index}
+          end
+
+        msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata, message_id_to_ack}
+        process_single_message(state, msg_args, callback_state, message_id_to_ack, nacked_acc, redelivery_count)
+      end)
+
+    state = check_and_refill_permits(state)
+
+    new_nacked_messages =
+      if state.redelivery_interval do
+        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
+      else
+        state.nacked_messages
+      end
+
+    %{
+      state
+      | callback_state: final_callback_state,
+        nacked_messages: new_nacked_messages
+    }
+  end
+
+  defp process_single_message(state, msg_args, callback_state, message_id_to_ack, nacked_acc, redelivery_count) do
+    result = state.callback_module.handle_message(msg_args, callback_state)
+
+    case result do
+      {:ok, new_callback_state} ->
+        ack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: :Individual,
+          message_id: [message_id_to_ack]
+        }
+
+        :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+        {new_callback_state, nacked_acc}
+
+      {:noreply, new_callback_state} ->
+        {new_callback_state, nacked_acc}
+
+      {:error, reason, new_callback_state} ->
+        Logger.warning(
+          "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
+        )
+
+        {new_callback_state, [message_id_to_ack | nacked_acc]}
+
+      unexpected_result ->
+        Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
+        {callback_state, nacked_acc}
     end
   end
 
@@ -674,10 +665,9 @@ defmodule Pulsar.Consumer do
   end
 
   def terminate(reason, state) do
-    # Call callback module's terminate function if it exists
     if function_exported?(state.callback_module, :terminate, 2) do
       try do
-        apply(state.callback_module, :terminate, [reason, state.callback_state])
+        state.callback_module.terminate(reason, state.callback_state)
       rescue
         error ->
           Logger.warning("Error in callback terminate function: #{inspect(error)}")
@@ -736,58 +726,45 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_call(request, from, state) do
-    # Delegate to callback module if it implements handle_call
     if function_exported?(state.callback_module, :handle_call, 3) do
-      case apply(state.callback_module, :handle_call, [request, from, state.callback_state]) do
+      case state.callback_module.handle_call(request, from, state.callback_state) do
         {:reply, reply, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:reply, reply, new_state}
+          {:reply, reply, %{state | callback_state: new_callback_state}}
 
         {:reply, reply, new_callback_state, timeout_or_hibernate} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:reply, reply, new_state, timeout_or_hibernate}
+          {:reply, reply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
         {:noreply, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state}
+          {:noreply, %{state | callback_state: new_callback_state}}
 
         {:noreply, new_callback_state, timeout_or_hibernate} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state, timeout_or_hibernate}
+          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
         {:stop, reason, reply, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:stop, reason, reply, new_state}
+          {:stop, reason, reply, %{state | callback_state: new_callback_state}}
 
         {:stop, reason, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:stop, reason, new_state}
+          {:stop, reason, %{state | callback_state: new_callback_state}}
       end
     else
-      # Default behavior - return error for unhandled calls
       {:reply, {:error, :not_implemented}, state}
     end
   end
 
   @impl true
   def handle_cast(request, state) do
-    # Delegate to callback module if it implements handle_cast
     if function_exported?(state.callback_module, :handle_cast, 2) do
-      case apply(state.callback_module, :handle_cast, [request, state.callback_state]) do
+      case state.callback_module.handle_cast(request, state.callback_state) do
         {:noreply, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state}
+          {:noreply, %{state | callback_state: new_callback_state}}
 
         {:noreply, new_callback_state, timeout_or_hibernate} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:noreply, new_state, timeout_or_hibernate}
+          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
         {:stop, reason, new_callback_state} ->
-          new_state = %{state | callback_state: new_callback_state}
-          {:stop, reason, new_state}
+          {:stop, reason, %{state | callback_state: new_callback_state}}
       end
     else
-      # Default behavior - ignore unhandled casts
       {:noreply, state}
     end
   end
@@ -846,29 +823,30 @@ defmodule Pulsar.Consumer do
     send_flow_command(broker_pid, consumer_id, permits, 0)
   end
 
+  defp check_and_refill_permits(%{flow_initial: 0} = state) do
+    state
+  end
+
   defp check_and_refill_permits(state) do
-    # Only auto-refill if flow_initial > 0 (automatic flow control enabled)
-    if state.flow_initial == 0 do
-      # Manual flow control - don't auto-refill
-      state
+    refill_threshold = state.flow_threshold
+    refill_amount = state.flow_refill
+    current_permits = state.flow_outstanding_permits
+
+    if current_permits <= refill_threshold do
+      do_refill_permits(state, refill_amount, current_permits)
     else
-      refill_threshold = state.flow_threshold
-      refill_amount = state.flow_refill
-      current_permits = state.flow_outstanding_permits
+      state
+    end
+  end
 
-      if current_permits <= refill_threshold do
-        case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
-          :ok ->
-            new_permits = current_permits + refill_amount
-            %{state | flow_outstanding_permits: new_permits}
+  defp do_refill_permits(state, refill_amount, current_permits) do
+    case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+      :ok ->
+        %{state | flow_outstanding_permits: current_permits + refill_amount}
 
-          error ->
-            Logger.error("Failed to send flow command: #{inspect(error)}")
-            state
-        end
-      else
+      error ->
+        Logger.error("Failed to send flow command: #{inspect(error)}")
         state
-      end
     end
   end
 

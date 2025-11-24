@@ -36,6 +36,7 @@ defmodule Pulsar.MixProject do
       {:protobuf, "~> 0.13.0"},
       {:snappyer, "~> 1.2"},
       {:telemetry, "~> 1.0"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
       {:telemetry_test, "~> 0.1.0", only: :test}

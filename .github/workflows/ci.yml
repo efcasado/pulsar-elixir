@@ -71,6 +71,9 @@ jobs:
     - name: Compile (warnings as errors)
       run: mix compile --warnings-as-errors
 
+    - name: Check Credo
+      run: mix credo --strict
+
     - name: Check Dialyzer
       run: mix dialyzer --format github --format dialyxir
 
