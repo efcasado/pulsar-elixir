@@ -61,7 +61,7 @@ defmodule Pulsar.MixProject do
 
   defp aliases do
     [
-      test: ["test --no-start"]
+      test: ["test"]
     ]
   end
 end

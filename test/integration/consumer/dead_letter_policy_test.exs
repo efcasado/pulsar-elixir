@@ -1,5 +1,5 @@
-defmodule Pulsar.Integration.DeadLetterPolicyTest do
-  use ExUnit.Case
+defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
+  use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
@@ -8,35 +8,37 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
   require Logger
 
   @moduletag :integration
+  @client :dead_letter_policy_test_client
   @topic "persistent://public/default/dlq-test-topic"
-  @subscription_prefix "dlq-test-subscription-"
   @messages Enum.map(1..3, &"Message #{&1}")
 
   setup_all do
     broker = System.broker()
 
-    config = [
-      host: broker.service_url,
-      producers: [
-        test_producer: [
-          topic: @topic
-        ]
-      ]
-    ]
+    {:ok, client_pid} =
+      Pulsar.Client.start_link(
+        name: @client,
+        host: broker.service_url
+      )
 
-    {:ok, app_pid} = Pulsar.start(config)
+    {:ok, producer_pid} =
+      Pulsar.start_producer(
+        @topic,
+        client: @client,
+        name: :test_producer
+      )
 
-    Enum.each(@messages, &({:ok, _message_id} = Pulsar.send(:test_producer, &1)))
+    Enum.each(@messages, &({:ok, _message_id} = Pulsar.send(:test_producer, &1, client: @client)))
 
     on_exit(fn ->
-      Process.exit(app_pid, :shutdown)
-      Utils.wait_for(fn -> not Process.alive?(app_pid) end)
+      if Process.alive?(producer_pid), do: Pulsar.stop_producer(producer_pid)
+      if Process.alive?(client_pid), do: Supervisor.stop(client_pid, :normal)
     end)
   end
 
   test "dead letter policy with max_redelivery sends messages to DLQ after threshold" do
     topic = @topic
-    subscription = @subscription_prefix <> "failing"
+    subscription = "failing"
     dlq_topic = topic <> "-" <> subscription <> "-DLQ"
     max_redelivery = 3
 
@@ -46,6 +48,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
         subscription,
         DummyConsumer,
         init_args: [fail_all: true],
+        client: @client,
         initial_position: :earliest,
         subscription_type: :Shared,
         redelivery_interval: 100,
@@ -60,8 +63,9 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
     {:ok, dlq_consumer_group} =
       Pulsar.start_consumer(
         dlq_topic,
-        @subscription_prefix <> "dlq-consumer",
+        "dlq-consumer",
         DummyConsumer,
+        client: @client,
         subscription_type: :Shared,
         initial_position: :earliest
       )
@@ -89,7 +93,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
 
   test "dead letter policy with nil max_redelivery does not send to DLQ" do
     topic = @topic
-    subscription = @subscription_prefix <> "no-dlq"
+    subscription = "no-dlq"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
 
     {:ok, consumer_group} =
@@ -98,6 +102,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
         subscription,
         DummyConsumer,
         init_args: [fail_all: true],
+        client: @client,
         initial_position: :earliest,
         subscription_type: :Shared,
         redelivery_interval: 100,
@@ -121,7 +126,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
 
   test "dead letter policy with default DLQ topic name" do
     topic = @topic
-    subscription = @subscription_prefix <> "default-name"
+    subscription = "default-name"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
 
     {:ok, consumer_group} =
@@ -130,6 +135,7 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
         subscription,
         DummyConsumer,
         init_args: [fail_all: true],
+        client: @client,
         initial_position: :earliest,
         subscription_type: :Shared,
         redelivery_interval: 100,
@@ -143,8 +149,9 @@ defmodule Pulsar.Integration.DeadLetterPolicyTest do
     {:ok, dlq_consumer_group} =
       Pulsar.start_consumer(
         expected_dlq_topic,
-        @subscription_prefix <> "dlq-default-monitor",
+        "dlq-default-monitor",
         DummyConsumer,
+        client: @client,
         subscription_type: :Shared,
         initial_position: :earliest
       )
