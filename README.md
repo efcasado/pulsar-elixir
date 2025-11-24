@@ -1,4 +1,5 @@
 [![CI](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/efcasado/pulsar-elixir/badge.svg?branch=main)](https://coveralls.io/github/efcasado/pulsar-elixir?branch=main)
 [![Release](https://img.shields.io/github/v/release/efcasado/pulsar-elixir)](https://github.com/efcasado/pulsar-elixir/releases)
 
 

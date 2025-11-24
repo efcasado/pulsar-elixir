@@ -9,6 +9,7 @@
 /packages/
 /priv/plts/*.plt
 /priv/plts/*.plt.hash
+/test/reports/
 cache.ets
 erl_crash.dump
 *.ez
