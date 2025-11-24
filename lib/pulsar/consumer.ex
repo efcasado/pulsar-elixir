@@ -7,8 +7,20 @@ defmodule Pulsar.Consumer do
 
   ## Callback Module
 
-  The consumer requires a callback module that implements the `Pulsar.Consumer.Callback`
-  behaviour, providing stateful message processing capabilities.
+  The consumer requires a callback module that uses `Pulsar.Consumer.Callback`,
+  providing stateful message processing capabilities.
+
+  To create a callback module:
+
+      defmodule MyApp.MessageHandler do
+        use Pulsar.Consumer.Callback
+
+        def handle_message({_command, _metadata, {_single_metadata, payload}, _broker_metadata, _message_id}, state) do
+          # Process the message
+          IO.inspect(payload)
+          {:ok, state}
+        end
+      end
 
   See `Pulsar.Consumer.Callback` for detailed documentation and examples.
   """
@@ -82,7 +94,7 @@ defmodule Pulsar.Consumer do
   - `topic` - The topic to subscribe to
   - `subscription_name` - Name of the subscription
   - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
-  - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
+  - `callback_module` - Module that uses `Pulsar.Consumer.Callback`
   - `opts` - Additional options:
     - `:init_args` - Arguments passed to callback module's init/1 function
     - `:flow_initial` - Initial flow permits (default: 100). Set to 0 to disable automatic flow control and use `send_flow/2` manually.
@@ -532,19 +544,15 @@ defmodule Pulsar.Consumer do
   # Handle other info messages by delegating to callback module
   @impl true
   def handle_info(message, state) do
-    if function_exported?(state.callback_module, :handle_info, 2) do
-      case state.callback_module.handle_info(message, state.callback_state) do
-        {:noreply, new_callback_state} ->
-          {:noreply, %{state | callback_state: new_callback_state}}
+    case state.callback_module.handle_info(message, state.callback_state) do
+      {:noreply, new_callback_state} ->
+        {:noreply, %{state | callback_state: new_callback_state}}
 
-        {:noreply, new_callback_state, timeout_or_hibernate} ->
-          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+      {:noreply, new_callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-        {:stop, reason, new_callback_state} ->
-          {:stop, reason, %{state | callback_state: new_callback_state}}
-      end
-    else
-      {:noreply, state}
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 
@@ -665,13 +673,11 @@ defmodule Pulsar.Consumer do
   end
 
   def terminate(reason, state) do
-    if function_exported?(state.callback_module, :terminate, 2) do
-      try do
-        state.callback_module.terminate(reason, state.callback_state)
-      rescue
-        error ->
-          Logger.warning("Error in callback terminate function: #{inspect(error)}")
-      end
+    try do
+      state.callback_module.terminate(reason, state.callback_state)
+    rescue
+      error ->
+        Logger.warning("Error in callback terminate function: #{inspect(error)}")
     end
 
     :ok
@@ -726,46 +732,38 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_call(request, from, state) do
-    if function_exported?(state.callback_module, :handle_call, 3) do
-      case state.callback_module.handle_call(request, from, state.callback_state) do
-        {:reply, reply, new_callback_state} ->
-          {:reply, reply, %{state | callback_state: new_callback_state}}
+    case state.callback_module.handle_call(request, from, state.callback_state) do
+      {:reply, reply, new_callback_state} ->
+        {:reply, reply, %{state | callback_state: new_callback_state}}
 
-        {:reply, reply, new_callback_state, timeout_or_hibernate} ->
-          {:reply, reply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+      {:reply, reply, new_callback_state, timeout_or_hibernate} ->
+        {:reply, reply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-        {:noreply, new_callback_state} ->
-          {:noreply, %{state | callback_state: new_callback_state}}
+      {:noreply, new_callback_state} ->
+        {:noreply, %{state | callback_state: new_callback_state}}
 
-        {:noreply, new_callback_state, timeout_or_hibernate} ->
-          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+      {:noreply, new_callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-        {:stop, reason, reply, new_callback_state} ->
-          {:stop, reason, reply, %{state | callback_state: new_callback_state}}
+      {:stop, reason, reply, new_callback_state} ->
+        {:stop, reason, reply, %{state | callback_state: new_callback_state}}
 
-        {:stop, reason, new_callback_state} ->
-          {:stop, reason, %{state | callback_state: new_callback_state}}
-      end
-    else
-      {:reply, {:error, :not_implemented}, state}
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 
   @impl true
   def handle_cast(request, state) do
-    if function_exported?(state.callback_module, :handle_cast, 2) do
-      case state.callback_module.handle_cast(request, state.callback_state) do
-        {:noreply, new_callback_state} ->
-          {:noreply, %{state | callback_state: new_callback_state}}
+    case state.callback_module.handle_cast(request, state.callback_state) do
+      {:noreply, new_callback_state} ->
+        {:noreply, %{state | callback_state: new_callback_state}}
 
-        {:noreply, new_callback_state, timeout_or_hibernate} ->
-          {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+      {:noreply, new_callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-        {:stop, reason, new_callback_state} ->
-          {:stop, reason, %{state | callback_state: new_callback_state}}
-      end
-    else
-      {:noreply, state}
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 

@@ -1,15 +1,42 @@
 defmodule Pulsar.Consumer.Callback do
   @moduledoc """
-  Behaviour for Pulsar consumer callback modules that support internal state.
+  Macro for creating Pulsar consumer callback modules that support internal state.
 
-  This behaviour allows consumer callback modules to maintain their own internal state
-  without requiring external state management processes (like Agents or GenServers).
+  This module provides a `use` macro that sets up your module as a consumer callback
+  with default implementations for optional callbacks.
 
-  ## Callback Functions
+  ## Usage
 
-  - `init/1` - Initialize the callback module state
+  Use this module in your consumer callback:
+
+      defmodule MyApp.MessageCounter do
+        use Pulsar.Consumer.Callback
+
+        # Implement required callbacks
+        def handle_message(message, state) do
+          # Process message
+          {:ok, state}
+        end
+      end
+
+  When you `use Pulsar.Consumer.Callback`, your module automatically:
+  - Gets the `@behaviour Pulsar.Consumer.Callback` annotation
+  - Receives default implementations for all optional callbacks
+  - Can override any callback by simply defining it
+
+  ## Required Callbacks
+
   - `handle_message/2` - Handle incoming messages with current state
-  - `terminate/2` - Optional cleanup when consumer terminates
+
+  ## Optional Callbacks
+
+  All optional callbacks have sensible defaults that you can override:
+
+  - `init/1` - Initialize the callback module state (default: `{:ok, nil}`)
+  - `terminate/2` - Cleanup when consumer terminates (default: `:ok`)
+  - `handle_call/3` - Handle synchronous calls (default: `{:reply, {:error, :not_implemented}, state}`)
+  - `handle_cast/2` - Handle asynchronous casts (default: `{:noreply, state}`)
+  - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
 
   ## Message Format
 
@@ -41,7 +68,7 @@ defmodule Pulsar.Consumer.Callback do
   ## Example Implementation
 
       defmodule MyApp.MessageCounter do
-        @behaviour Pulsar.Consumer.Callback
+        use Pulsar.Consumer.Callback
 
         def init(opts) do
           max_messages = Keyword.get(opts, :max_messages, 1000)
@@ -85,18 +112,37 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Extending the Consumer
 
-  You can add custom functionality by implementing optional callbacks:
+  The consumer callback module has default implementations for all optional callbacks.
+  You can override these by simply defining the callback in your module:
 
-  - `handle_call/3` - Handle synchronous calls (GenServer.call)
-  - `handle_cast/2` - Handle asynchronous casts (GenServer.cast)
-  - `handle_info/2` - Handle other messages
+      defmodule MyApp.MessageCounter do
+        use Pulsar.Consumer.Callback
+
+        def init(opts) do
+          {:ok, %{count: 0, max: Keyword.get(opts, :max, 100)}}
+        end
+
+        def handle_message(message, state) do
+          {:ok, %{state | count: state.count + 1}}
+        end
+
+        # Override default handle_call to add custom functionality
+        def handle_call(:get_count, _from, state) do
+          {:reply, state.count, state}
+        end
+
+        # Override default handle_cast for custom async operations
+        def handle_cast(:reset, state) do
+          {:noreply, %{state | count: 0}}
+        end
+      end
 
   Example usage:
 
-      # Get current count
+      # Get current count via custom handle_call
       count = GenServer.call(consumer_pid, :get_count)
       
-      # Reset state
+      # Reset state via custom handle_cast
       GenServer.cast(consumer_pid, :reset)
 
   ## Multiple Consumers
@@ -121,7 +167,9 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Return Values
 
-  ### `init/1`
+  ### `init/1` (Optional)
+
+  If not implemented, defaults to `{:ok, nil}`.
 
   - `{:ok, state}` - Successful initialization with initial state
   - `{:error, reason}` - Initialization failed
@@ -133,7 +181,9 @@ defmodule Pulsar.Consumer.Callback do
   - `{:noreply, new_state}` - Message processed, but don't automatically ACK/NACK. Use `Pulsar.Consumer.ack/2` or `Pulsar.Consumer.nack/2` for manual acknowledgment
   - `{:stop, new_state}` - Message processed successfully, acknowledge, then stop consumer
 
-  ### `terminate/2`
+  ### `terminate/2` (Optional)
+
+  If not implemented, defaults to `:ok`.
 
   - `:ok` - Cleanup completed successfully
   - Any other value is ignored
@@ -185,7 +235,7 @@ defmodule Pulsar.Consumer.Callback do
               | {:noreply, state}
               | {:stop, state}
 
-  @optional_callbacks terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2
+  @optional_callbacks init: 1, terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2
   @callback terminate(reason, state) :: term()
   @callback handle_call(term(), GenServer.from(), state) ::
               {:reply, term(), state}
@@ -202,4 +252,29 @@ defmodule Pulsar.Consumer.Callback do
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
+
+  defmacro __using__(_opts) do
+    quote do
+      @behaviour Pulsar.Consumer.Callback
+
+      # Provide default implementations for optional callbacks
+      def init(_init_args), do: {:ok, nil}
+
+      def terminate(_reason, _state), do: :ok
+
+      def handle_call(_request, _from, state) do
+        {:reply, {:error, :not_implemented}, state}
+      end
+
+      def handle_cast(_request, state) do
+        {:noreply, state}
+      end
+
+      def handle_info(_message, state) do
+        {:noreply, state}
+      end
+
+      defoverridable init: 1, terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2
+    end
+  end
 end
