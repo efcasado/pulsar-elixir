@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/efcasado/pulsar-elixir/compare/v1.0.1...v1.1.0) (2025-11-24)
+
+### Features
+
+* promote consumer callback behavior to a macro ([c27a183](https://github.com/efcasado/pulsar-elixir/commit/c27a183eecd5a979d4fbd570ee07919f1392c9d2))
+
 ## [1.0.1](https://github.com/efcasado/pulsar-elixir/compare/v1.0.0...v1.0.1) (2025-11-23)
 
 ## 1.0.0 (2025-11-23)

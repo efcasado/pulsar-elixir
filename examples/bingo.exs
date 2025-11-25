@@ -1,5 +1,7 @@
 defmodule BingoPlayer do
   @moduledoc false
+  use Pulsar.Consumer.Callback
+
   require Logger
 
   def init([game_master, card_size]) do

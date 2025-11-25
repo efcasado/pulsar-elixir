@@ -1,6 +1,6 @@
 defmodule Pulsar.Test.Support.DummyConsumer do
   @moduledoc false
-  @behaviour Pulsar.Consumer.Callback
+  use Pulsar.Consumer.Callback
 
   def init(opts) do
     fail_all = Keyword.get(opts, :fail_all, false)
