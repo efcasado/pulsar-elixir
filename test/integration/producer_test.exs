@@ -183,7 +183,7 @@ defmodule Pulsar.Integration.ProducerTest do
     end
 
     test "producer recovers from broker-initiated topic unload" do
-      # TODO: support ExtensibleLoadManager config
+      # NOTE: in the future support ExtensibleLoadManager config
       # It adds a reassignment url to skip topic lookup
       # See: https://github.com/apache/pulsar/blob/master/pip/pip-307.md
       topic = "persistent://public/default/producer-unload-test"
