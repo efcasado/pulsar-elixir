@@ -20,6 +20,7 @@ defmodule Pulsar.Broker do
   @behaviour :gen_statem
 
   alias Pulsar.Config
+  alias Pulsar.Producer
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -109,6 +110,15 @@ defmodule Pulsar.Broker do
   @spec register_producer(GenServer.server(), integer(), pid()) :: :ok
   def register_producer(broker, producer_id, producer_pid) do
     :gen_statem.call(broker, {:register_producer, producer_id, producer_pid})
+  end
+
+  @doc """
+  Checks if the broker is in connected state.
+  Returns immediately without waiting.
+  """
+  @spec connected?(GenServer.server()) :: boolean()
+  def connected?(broker) do
+    :gen_statem.call(broker, :is_connected, 100)
   end
 
   @doc """
@@ -217,10 +227,11 @@ defmodule Pulsar.Broker do
       end
     end)
 
-    # Gracefully stop all producer processes (when we add Producer.stop/1)
+    # Gracefully stop all producer processes
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
+        Producer.stop(producer_pid)
       end
     end)
 
@@ -338,6 +349,11 @@ defmodule Pulsar.Broker do
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
     end
+  end
+
+  def disconnected({:call, from}, :is_connected, _broker) do
+    actions = [{:reply, from, false}]
+    {:keep_state_and_data, actions}
   end
 
   def disconnected({:call, from}, _request, _broker) do
@@ -485,12 +501,18 @@ defmodule Pulsar.Broker do
         broker
       end
 
+    # Also cleanup producer_names mapping if a producer exited
     if producer_id do
       Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
     end
 
     new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
     {:keep_state, new_broker}
+  end
+
+  def connected({:call, from}, :is_connected, broker) do
+    actions = [{:reply, from, true}]
+    {:keep_state, broker, actions}
   end
 
   def connected({:call, from}, {:register_producer, producer_id, producer_pid}, broker) do
@@ -699,23 +721,23 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {consumer_pid, _monitor_ref} ->
-        Logger.info("Broker requested consumer #{consumer_id} closure")
+        Logger.warning("Broker requested consumer #{consumer_id} closure")
 
         send(consumer_pid, {:broker_message, command})
         :keep_state_and_data
     end
   end
 
-  defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id}, broker) do
+  defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id} = command, broker) do
     case Map.get(broker.producers, producer_id) do
       nil ->
         Logger.warning("Received close command for unknown producer #{producer_id}")
         :keep_state_and_data
 
       {producer_pid, _monitor_ref} ->
-        Logger.info("Broker requested producer #{producer_id} closure, will restart with fresh lookup")
+        Logger.info("Broker requested producer #{producer_id} closure")
 
-        Process.exit(producer_pid, :broker_close_requested)
+        send(producer_pid, {:broker_message, command})
         :keep_state_and_data
     end
   end
@@ -744,18 +766,32 @@ defmodule Pulsar.Broker do
     end
   end
 
-  defp handle_command(command, broker) when is_map(command) do
-    # Handle responses with request_id
-    case Map.get(command, :request_id) do
-      nil ->
-        Logger.debug("Received command without request_id: #{inspect(command)}")
-        :keep_state_and_data
+  defp handle_command(%Binary.CommandProducerSuccess{} = command, broker) do
+    # CommandProducerSuccess can arrive twice for WaitForExclusive mode:
+    # 1. First with producer_ready: false (pending state, request_id in broker.requests)
+    # 2. Second with producer_ready: true (final state, request_id NOT in broker.requests, find pid by name)
+    request_id = command.request_id
 
-      request_id ->
-        reply = {:ok, command}
-        new_broker = reply_to_request(broker, request_id, reply)
-        {:keep_state, new_broker}
+    if Map.has_key?(broker.requests, request_id) do
+      # Initial registration response - request is still pending
+      # handle_producer_registration_response(command, broker, request_id)
+      new_broker = reply_to_request(broker, request_id, {:ok, command})
+      {:keep_state, new_broker}
+    else
+      # Subsequent notification - request was already completed
+      # handle_producer_ready_notification(command, broker)
+      Enum.each(broker.producers, fn {_id, {producer_pid, _ref}} ->
+        send(producer_pid, {:broker_message, command})
+      end)
+
+      :keep_state_and_data
     end
+  end
+
+  defp handle_command(%Binary.CommandAckResponse{request_id: request_id} = command, broker) do
+    reply = {:ok, command}
+    new_broker = reply_to_request(broker, request_id, reply)
+    {:keep_state, new_broker}
   end
 
   defp handle_command(command, _broker) do
