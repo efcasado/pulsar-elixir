@@ -337,7 +337,7 @@ defmodule Pulsar.Consumer do
     if total_startup_delay > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}
     else
-      {:ok, state, {:continue, {:init_callback, init_args}}}
+      {:ok, state, {:continue, {:subscribe, init_args}}}
     end
   end
 
@@ -347,20 +347,10 @@ defmodule Pulsar.Consumer do
     total_sleep_ms = base_delay_ms + jitter
     Logger.debug("Consumer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
     Process.sleep(total_sleep_ms)
-    {:noreply, state, {:continue, {:init_callback, init_args}}}
+    {:noreply, state, {:continue, {:subscribe, init_args}}}
   end
 
-  def handle_continue({:init_callback, init_args}, state) do
-    case state.callback_module.init(init_args) do
-      {:ok, callback_state} ->
-        {:noreply, %{state | callback_state: callback_state}, {:continue, :subscribe}}
-
-      {:error, reason} ->
-        {:stop, reason, nil}
-    end
-  end
-
-  def handle_continue(:subscribe, state) do
+  def handle_continue({:subscribe, init_args}, state) do
     with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, response} <-
@@ -382,14 +372,14 @@ defmodule Pulsar.Consumer do
          | consumer_id: state.consumer_id,
            consumer_name: consumer_name,
            broker_pid: broker_pid
-       }, {:continue, :seek_subscription}}
+       }, {:continue, {:seek_subscription, init_args}}}
     else
       {:error, reason} ->
         {:stop, reason, state}
     end
   end
 
-  def handle_continue(:seek_subscription, state) do
+  def handle_continue({:seek_subscription, init_args}, state) do
     case maybe_seek_subscription(
            state.broker_pid,
            state.consumer_id,
@@ -397,20 +387,20 @@ defmodule Pulsar.Consumer do
            state.start_timestamp
          ) do
       {:ok, :skipped} ->
-        {:noreply, state, {:continue, :send_initial_flow}}
+        {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
 
       {:ok, _response} ->
-        {:noreply, state, {:continue, :resubscribe}}
+        {:noreply, state, {:continue, {:resubscribe, init_args}}}
 
       {:error, {:UnknownError, "Reset subscription to publish time error: Failed to fence subscription"}} ->
-        {:noreply, state, {:continue, :resubscribe}}
+        {:noreply, state, {:continue, {:resubscribe, init_args}}}
 
       {:error, reason} ->
         {:stop, reason, state}
     end
   end
 
-  def handle_continue(:resubscribe, state) do
+  def handle_continue({:resubscribe, init_args}, state) do
     receive do
       # When sending a Seek, we expect the broker to send a CloseConsumer
       {:broker_message, %Binary.CommandCloseConsumer{}} ->
@@ -425,7 +415,7 @@ defmodule Pulsar.Consumer do
                force_create_topic: state.force_create_topic
              ) do
           {:ok, _response} ->
-            {:noreply, state, {:continue, :send_initial_flow}}
+            {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
 
           {:error, reason} ->
             {:stop, reason, state}
@@ -437,7 +427,7 @@ defmodule Pulsar.Consumer do
     end
   end
 
-  def handle_continue(:send_initial_flow, state) do
+  def handle_continue({:send_initial_flow, init_args}, state) do
     # Only send initial flow if flow_initial > 0 (automatic flow control enabled)
     result =
       if state.flow_initial > 0 do
@@ -457,26 +447,36 @@ defmodule Pulsar.Consumer do
            state
            | broker_monitor: broker_monitor,
              flow_outstanding_permits: state.flow_initial
-         }, {:continue, :init_dead_letter_producer}}
+         }, {:continue, {:init_dead_letter_producer, init_args}}}
 
       {:error, reason} ->
         {:stop, reason, state}
     end
   end
 
-  def handle_continue(:init_dead_letter_producer, state) do
+  def handle_continue({:init_dead_letter_producer, init_args}, state) do
     if should_init_dead_letter_producer?(state) do
       case start_dead_letter_producer(state) do
         {:ok, producer_pid} ->
           Logger.info("Started dead letter producer for consumer on topic #{state.topic}")
-          {:noreply, %{state | dead_letter_producer_pid: producer_pid}}
+          {:noreply, %{state | dead_letter_producer_pid: producer_pid}, {:continue, {:init_callback, init_args}}}
 
         {:error, reason} ->
           Logger.error("Failed to start dead letter producer: #{inspect(reason)}")
           {:stop, reason, state}
       end
     else
-      {:noreply, state}
+      {:noreply, state, {:continue, {:init_callback, init_args}}}
+    end
+  end
+
+  def handle_continue({:init_callback, init_args}, state) do
+    case state.callback_module.init(init_args) do
+      {:ok, callback_state} ->
+        {:noreply, %{state | callback_state: callback_state}}
+
+      {:error, reason} ->
+        {:stop, reason, nil}
     end
   end
 
