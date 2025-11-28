@@ -160,14 +160,17 @@ defmodule Pulsar.Broker do
   Gets the list of registered consumers.
 
   Accepts either a broker PID or a broker URL string.
+  When passing a broker URL, you can optionally specify the client via the `:client` option.
   """
-  @spec get_consumers(GenServer.server() | String.t()) :: %{integer() => pid()}
-  def get_consumers(broker) when is_pid(broker) do
+  @spec get_consumers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
+  def get_consumers(broker, opts \\ [])
+
+  def get_consumers(broker, _opts) when is_pid(broker) do
     :gen_statem.call(broker, :get_consumers)
   end
 
-  def get_consumers(broker_url) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url) do
+  def get_consumers(broker_url, opts) when is_binary(broker_url) do
+    case Pulsar.lookup_broker(broker_url, opts) do
       {:ok, broker_pid} -> get_consumers(broker_pid)
       {:error, :not_found} -> %{}
     end
@@ -177,14 +180,17 @@ defmodule Pulsar.Broker do
   Gets the list of registered producers.
 
   Accepts either a broker PID or a broker URL string.
+  When passing a broker URL, you can optionally specify the client via the `:client` option.
   """
-  @spec get_producers(GenServer.server() | String.t()) :: %{integer() => pid()}
-  def get_producers(broker) when is_pid(broker) do
+  @spec get_producers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
+  def get_producers(broker, opts \\ [])
+
+  def get_producers(broker, _opts) when is_pid(broker) do
     :gen_statem.call(broker, :get_producers)
   end
 
-  def get_producers(broker_url) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url) do
+  def get_producers(broker_url, opts) when is_binary(broker_url) do
+    case Pulsar.lookup_broker(broker_url, opts) do
       {:ok, broker_pid} -> get_producers(broker_pid)
       {:error, :not_found} -> %{}
     end
