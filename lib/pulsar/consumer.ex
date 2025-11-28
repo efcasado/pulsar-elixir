@@ -919,8 +919,8 @@ defmodule Pulsar.Consumer do
       state.dead_letter_topic ||
         "#{state.topic}-#{state.subscription_name}-DLQ"
 
-    # Start a producer for the dead letter topic
-    Pulsar.Producer.start_link(dead_letter_topic, [])
+    # Start a producer for the dead letter topic with the same client as the consumer
+    Pulsar.Producer.start_link(dead_letter_topic, client: state.client)
   end
 
   defp should_send_to_dead_letter?(state, redelivery_count) do
