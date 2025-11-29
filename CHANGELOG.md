@@ -1,3 +1,15 @@
+## [1.2.0](https://github.com/efcasado/pulsar-elixir/compare/v1.1.0...v1.2.0) (2025-11-29)
+
+### Features
+
+* exec callback's init upon successful subscription ([0dd20ee](https://github.com/efcasado/pulsar-elixir/commit/0dd20ee06e6cf73ea9cf6ef8f7e61f9ffaa9afbc))
+* graceful client shutdown ([ff6b1ec](https://github.com/efcasado/pulsar-elixir/commit/ff6b1ec014f549087e0be5d19247fcc30007cfce))
+
+### Bug Fixes
+
+* broker api does not support non-default clients ([e4fbf76](https://github.com/efcasado/pulsar-elixir/commit/e4fbf7603ca378ad4c9ae1573bbdc6c220be875e))
+* dlq producer started within wrong client ([7019c32](https://github.com/efcasado/pulsar-elixir/commit/7019c32f3746c180123c0438cc03dce8c91ef331))
+
 ## [1.1.0](https://github.com/efcasado/pulsar-elixir/compare/v1.0.1...v1.1.0) (2025-11-24)
 
 ### Features
