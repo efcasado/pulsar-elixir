@@ -142,9 +142,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       consumer_count: count,
       flow_initial: initial,
       flow_threshold: threshold,
-      flow_refill: refill,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0
+      flow_refill: refill
     ]
   end
 end

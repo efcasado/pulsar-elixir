@@ -27,6 +27,7 @@ defmodule Pulsar.Consumer do
 
   use GenServer
 
+  alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
 
@@ -131,8 +132,8 @@ defmodule Pulsar.Consumer do
     {dead_letter_policy, genserver_opts} =
       Keyword.pop(genserver_opts, :dead_letter_policy, nil)
 
-    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
-    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
+    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
 
     consumer_config = %{

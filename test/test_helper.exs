@@ -6,6 +6,9 @@ Application.put_env(:junit_formatter, :report_dir, "test/reports")
 Application.put_env(:junit_formatter, :report_file, "junit.xml")
 Application.put_env(:junit_formatter, :automatic_create_dir?, true)
 
+Application.put_env(:pulsar, :startup_delay_ms, 100)
+Application.put_env(:pulsar, :startup_jitter_ms, 100)
+
 Application.ensure_all_started(:telemetry_test)
 
 :ok = System.start_pulsar()
