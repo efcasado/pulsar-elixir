@@ -15,13 +15,13 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   setup_all do
     broker = System.broker()
 
-    {:ok, client_pid} =
+    {:ok, _client_pid} =
       Pulsar.Client.start_link(
         name: @client,
         host: broker.service_url
       )
 
-    {:ok, producer_pid} =
+    {:ok, _producer_pid} =
       Pulsar.start_producer(
         @topic,
         client: @client,
@@ -31,8 +31,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     Enum.each(@messages, &({:ok, _message_id} = Pulsar.send(:test_producer, &1, client: @client)))
 
     on_exit(fn ->
-      if Process.alive?(producer_pid), do: Pulsar.stop_producer(producer_pid)
-      if Process.alive?(client_pid), do: Supervisor.stop(client_pid, :normal)
+      Pulsar.Client.stop(@client)
     end)
   end
 

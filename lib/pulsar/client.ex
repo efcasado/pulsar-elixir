@@ -230,6 +230,34 @@ defmodule Pulsar.Client do
     end
   end
 
+  @doc """
+  Stops a client and all its resources gracefully.
+
+  This stops all producers, consumers, brokers, and the client supervisor.
+
+  ## Options
+
+  - `:timeout` - Maximum time to wait for shutdown (default: 5000ms)
+
+  ## Examples
+
+      Pulsar.Client.stop(:my_client)
+
+  """
+  @spec stop(atom(), keyword()) :: :ok
+  def stop(client_name, opts \\ []) when is_atom(client_name) do
+    timeout = Keyword.get(opts, :timeout, 5000)
+
+    try do
+      Supervisor.stop(client_name, :normal, timeout)
+    catch
+      :exit, _ -> :ok
+    end
+
+    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
+    :ok
+  end
+
   ## Private Functions
 
   defp build_broker_opts(opts) do

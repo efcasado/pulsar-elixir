@@ -22,7 +22,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     System.create_topic(@topic, 3)
 
-    {:ok, client_pid} =
+    {:ok, _client_pid} =
       Pulsar.Client.start_link(
         name: @client,
         host: broker.service_url
@@ -31,9 +31,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     System.produce_messages(@topic, @messages)
 
     on_exit(fn ->
-      if Process.alive?(client_pid) do
-        Supervisor.stop(client_pid, :normal)
-      end
+      Pulsar.Client.stop(@client)
     end)
 
     {:ok, expected_count: Enum.count(@messages)}

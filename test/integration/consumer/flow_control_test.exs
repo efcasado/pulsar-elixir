@@ -22,13 +22,13 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   setup_all do
     broker = System.broker()
 
-    {:ok, client_pid} =
+    {:ok, _client_pid} =
       Pulsar.Client.start_link(
         name: @client,
         host: broker.service_url
       )
 
-    {:ok, producer_pid} =
+    {:ok, _producer_pid} =
       Pulsar.start_producer(
         @topic,
         client: @client,
@@ -40,8 +40,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     end
 
     on_exit(fn ->
-      if Process.alive?(producer_pid), do: Pulsar.stop_producer(producer_pid)
-      if Process.alive?(client_pid), do: Supervisor.stop(client_pid, :normal)
+      Pulsar.Client.stop(@client)
     end)
 
     {:ok, expected_count: Enum.count(@messages)}

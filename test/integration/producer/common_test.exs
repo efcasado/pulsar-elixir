@@ -14,16 +14,14 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     :ok = System.create_topic(@topic)
 
-    {:ok, client_pid} =
+    {:ok, _client_pid} =
       Pulsar.Client.start_link(
         name: @client,
         host: broker.service_url
       )
 
     on_exit(fn ->
-      if Process.alive?(client_pid) do
-        Supervisor.stop(client_pid, :normal)
-      end
+      Pulsar.Client.stop(@client)
     end)
   end
 
