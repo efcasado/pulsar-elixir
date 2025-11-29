@@ -28,10 +28,14 @@ defmodule Pulsar.Test.Support.Utils do
   @doc """
   Collects lookup telemetry events and returns aggregated statistics.
   Returns a map with total, success, and failure counts.
+  Filters by client (defaults to :default).
   """
-  def collect_lookup_stats do
+  def collect_lookup_stats(opts \\ []) do
+    client = Keyword.get(opts, :client, :default)
+
     [:pulsar, :service_discovery, :lookup_topic, :stop]
     |> collect_events()
+    |> filter_by_client(client)
     |> aggregate_success_stats()
   end
 
@@ -76,6 +80,12 @@ defmodule Pulsar.Test.Support.Utils do
       }
 
       {consumer_id, stats}
+    end)
+  end
+
+  defp filter_by_client(events, client) do
+    Enum.filter(events, fn event ->
+      Map.get(event, :client) == client
     end)
   end
 

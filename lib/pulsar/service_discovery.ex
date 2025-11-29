@@ -21,7 +21,7 @@ defmodule Pulsar.ServiceDiscovery do
       fn ->
         result = lookup_topic(Pulsar.Client.random_broker(client), topic, false, client)
 
-        metadata = %{success: match?({:ok, _}, result)}
+        metadata = %{success: match?({:ok, _}, result), client: client}
         {result, metadata}
       end
     )
