@@ -33,9 +33,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
       Pulsar.start_producer(
         @topic,
         client: @client,
-        name: :subscription_options_producer,
-        startup_delay_ms: 0,
-        startup_jitter_ms: 0
+        name: :subscription_options_producer
       )
 
     for {key, payload} <- @messages do
@@ -253,9 +251,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     [
       client: @client,
       subscription_type: :Exclusive,
-      initial_position: initial_position,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0
+      initial_position: initial_position
     ] ++ opts
   end
 

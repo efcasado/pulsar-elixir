@@ -119,17 +119,13 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
   defp subscription_options do
     [
-      client: @client,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0
+      client: @client
     ]
   end
 
   defp producer_options do
     [
-      client: @client,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0
+      client: @client
     ]
   end
 end

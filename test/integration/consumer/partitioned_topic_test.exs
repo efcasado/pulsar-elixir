@@ -82,9 +82,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       consumer_count: count,
       flow_initial: 1,
       flow_threshold: 0,
-      flow_refill: 1,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0
+      flow_refill: 1
     ]
   end
 end

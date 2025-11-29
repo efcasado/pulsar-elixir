@@ -11,6 +11,7 @@ defmodule Pulsar.Producer do
 
   use GenServer
 
+  alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
 
@@ -65,8 +66,8 @@ defmodule Pulsar.Producer do
   def start_link(topic, opts \\ []) do
     {access_mode, genserver_opts} = Keyword.pop(opts, :access_mode, :Shared)
     {compression, genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
-    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, 1000)
-    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, 1000)
+    {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
+    {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
 
     producer_config = %{

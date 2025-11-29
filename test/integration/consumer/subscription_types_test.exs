@@ -30,9 +30,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       Pulsar.start_producer(
         @topic,
         client: @client,
-        name: :subscription_types_producer,
-        startup_delay_ms: 0,
-        startup_jitter_ms: 0
+        name: :subscription_types_producer
       )
 
     for {key, payload} <- @messages do
@@ -178,8 +176,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       subscription_type: type,
       initial_position: :earliest,
       consumer_count: count,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0,
       flow_initial: 1,
       flow_threshold: 0,
       flow_refill: 1,
