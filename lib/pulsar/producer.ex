@@ -367,7 +367,13 @@ defmodule Pulsar.Producer do
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
                {:ok, response} <- create_producer(broker_pid, state) do
             if not is_nil(response.topic_epoch) do
-              ProducerEpochStore.put(state.client, state.topic, response.producer_name, state.access_mode, response.topic_epoch)
+              ProducerEpochStore.put(
+                state.client,
+                state.topic,
+                response.producer_name,
+                state.access_mode,
+                response.topic_epoch
+              )
             end
 
             state =
