@@ -7,7 +7,7 @@ defmodule Pulsar.PartitionedConsumer do
   while maintaining the individual consumer group architecture underneath.
 
   The supervisor manages one consumer group per partition, with the number of
-  partitions provided by the caller (typically from `Pulsar.check_partitioned_topic/1`).
+  partitions provided by the caller.
   """
 
   use Supervisor
