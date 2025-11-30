@@ -348,11 +348,6 @@ defmodule Pulsar.Broker do
     end
   end
 
-  def disconnected({:call, from}, :is_connected, _broker) do
-    actions = [{:reply, from, false}]
-    {:keep_state_and_data, actions}
-  end
-
   def disconnected({:call, from}, _request, _broker) do
     actions = [{:reply, from, {:error, :disconnected}}]
     {:keep_state_and_data, actions}
@@ -522,11 +517,6 @@ defmodule Pulsar.Broker do
 
     new_broker = %{broker_after_producer | consumers: new_consumers, producers: new_producers}
     {:keep_state, new_broker}
-  end
-
-  def connected({:call, from}, :is_connected, broker) do
-    actions = [{:reply, from, true}]
-    {:keep_state, broker, actions}
   end
 
   def connected({:call, from}, {:register_producer, producer_id, producer_pid}, broker) do
