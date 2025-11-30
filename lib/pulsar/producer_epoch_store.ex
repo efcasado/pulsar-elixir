@@ -6,27 +6,39 @@ defmodule Pulsar.ProducerEpochStore do
   topic epochs for producers. The epochs are used to detect when a producer has
   been fenced by a newer producer with ExclusiveWithFencing access mode.
 
-  The store is initialized when the Pulsar application starts and persists for
-  the lifetime of the application.
+  Each client maintains its own isolated epoch store, created when the client
+  starts and cleaned up when the client stops.
   """
 
-  @table_name :pulsar_producer_epochs
+  @doc """
+  Returns the ETS table name for a given client.
+  """
+  @spec table_name(atom()) :: atom()
+  def table_name(client_name) do
+    Module.concat([__MODULE__, client_name])
+  end
 
   @doc """
-  Initializes the epoch store.
+  Initializes the epoch store for a client.
 
-  Creates the ETS table if it doesn't already exist. This should be called
-  once when the Pulsar application starts.
+  Creates the ETS table if it doesn't already exist. This is called
+  when a Pulsar client starts.
+
+  ## Parameters
+
+  - `client_name` - The name of the client
 
   ## Returns
 
   `:ok`
   """
-  @spec init() :: :ok
-  def init do
-    case :ets.whereis(@table_name) do
+  @spec init(atom()) :: :ok
+  def init(client_name) do
+    table = table_name(client_name)
+
+    case :ets.whereis(table) do
       :undefined ->
-        :ets.new(@table_name, [:set, :public, :named_table])
+        :ets.new(table, [:set, :public, :named_table])
         :ok
 
       _ ->
@@ -39,6 +51,7 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Parameters
 
+  - `client_name` - The name of the client
   - `topic` - The topic name
   - `producer_name` - The producer name
   - `access_mode` - The producer access mode
@@ -50,15 +63,17 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.get("my-topic", "my-producer", :Exclusive)
+      iex> ProducerEpochStore.get(:default, "my-topic", "my-producer", :Exclusive)
       {:ok, 5}
 
-      iex> ProducerEpochStore.get("new-topic", "new-producer", :Shared)
+      iex> ProducerEpochStore.get(:default, "new-topic", "new-producer", :Shared)
       :error
   """
-  @spec get(String.t(), String.t(), atom()) :: {:ok, integer()} | :error
-  def get(topic, producer_name, access_mode) do
-    case :ets.lookup(@table_name, {topic, producer_name, access_mode}) do
+  @spec get(atom(), String.t(), String.t(), atom()) :: {:ok, integer()} | :error
+  def get(client_name, topic, producer_name, access_mode) do
+    table = table_name(client_name)
+
+    case :ets.lookup(table, {topic, producer_name, access_mode}) do
       [{_, epoch}] -> {:ok, epoch}
       [] -> :error
     end
@@ -69,6 +84,7 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Parameters
 
+  - `client_name` - The name of the client
   - `topic` - The topic name
   - `producer_name` - The producer name
   - `access_mode` - The producer access mode
@@ -80,15 +96,17 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.put("my-topic", "my-producer", :Exclusive, 5)
+      iex> ProducerEpochStore.put(:default, "my-topic", "my-producer", :Exclusive, 5)
       :ok
   """
-  @spec put(String.t(), String.t(), atom(), integer()) :: :ok | :error
-  def put(topic, producer_name, access_mode, epoch) do
-    if :ets.whereis(@table_name) == :undefined do
+  @spec put(atom(), String.t(), String.t(), atom(), integer()) :: :ok | :error
+  def put(client_name, topic, producer_name, access_mode, epoch) do
+    table = table_name(client_name)
+
+    if :ets.whereis(table) == :undefined do
       :error
     else
-      :ets.insert(@table_name, {{topic, producer_name, access_mode}, epoch})
+      :ets.insert(table, {{topic, producer_name, access_mode}, epoch})
       :ok
     end
   end
@@ -98,6 +116,7 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Parameters
 
+  - `client_name` - The name of the client
   - `topic` - The topic name
   - `producer_name` - The producer name
   - `access_mode` - The producer access mode
@@ -108,34 +127,18 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.delete("my-topic", "my-producer", :Exclusive)
+      iex> ProducerEpochStore.delete(:default, "my-topic", "my-producer", :Exclusive)
       :ok
   """
-  @spec delete(String.t(), String.t(), atom()) :: :ok | :error
-  def delete(topic, producer_name, access_mode) do
-    if :ets.whereis(@table_name) == :undefined do
+  @spec delete(atom(), String.t(), String.t(), atom()) :: :ok | :error
+  def delete(client_name, topic, producer_name, access_mode) do
+    table = table_name(client_name)
+
+    if :ets.whereis(table) == :undefined do
       :error
     else
-      :ets.delete(@table_name, {topic, producer_name, access_mode})
+      :ets.delete(table, {topic, producer_name, access_mode})
       :ok
     end
-  end
-
-  @doc """
-  Cleans up the epoch store.
-
-  Deletes the ETS table. This should be called when the Pulsar application stops.
-
-  ## Returns
-
-  `:ok`
-  """
-  @spec cleanup() :: :ok
-  def cleanup do
-    if :ets.whereis(@table_name) != :undefined do
-      :ets.delete(@table_name)
-    end
-
-    :ok
   end
 end

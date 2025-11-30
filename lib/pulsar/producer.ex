@@ -154,7 +154,7 @@ defmodule Pulsar.Producer do
 
     # Try to restore topic_epoch from ETS if this producer is restarting
     topic_epoch =
-      case ProducerEpochStore.get(topic, name, access_mode) do
+      case ProducerEpochStore.get(client, topic, name, access_mode) do
         {:ok, epoch} -> epoch
         :error -> nil
       end
@@ -203,11 +203,6 @@ defmodule Pulsar.Producer do
     case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
         register_with_broker(state, broker_pid)
-
-      {:error, :disconnected} ->
-        Logger.debug("Broker disconnected during topic lookup, retrying in 1s")
-        Process.send_after(self(), :retry_registration, 1000)
-        {:noreply, %{state | ready: false}}
 
       {:error, reason} ->
         Logger.error("Topic lookup failed: #{inspect(reason)}")
@@ -316,7 +311,7 @@ defmodule Pulsar.Producer do
   def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
     if state.registration_request_id == command.request_id do
       if not is_nil(command.topic_epoch) do
-        ProducerEpochStore.put(state.topic, state.producer_name, state.access_mode, command.topic_epoch)
+        ProducerEpochStore.put(state.client, state.topic, state.producer_name, state.access_mode, command.topic_epoch)
       end
 
       {:noreply, %{state | ready: command.producer_ready, topic_epoch: command.topic_epoch}}
@@ -372,7 +367,7 @@ defmodule Pulsar.Producer do
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
                {:ok, response} <- create_producer(broker_pid, state) do
             if not is_nil(response.topic_epoch) do
-              ProducerEpochStore.put(state.topic, response.producer_name, state.access_mode, response.topic_epoch)
+              ProducerEpochStore.put(state.client, state.topic, response.producer_name, state.access_mode, response.topic_epoch)
             end
 
             state =
@@ -423,7 +418,7 @@ defmodule Pulsar.Producer do
         {:noreply, new_state, {:continue, :monitor_broker}}
 
       {:error, {:ProducerFenced, _msg}} ->
-        ProducerEpochStore.delete(state.topic, state.producer_name, state.access_mode)
+        ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
         {:stop, {:shutdown, :producer_fenced}, state}
 
       {:error, reason} ->
