@@ -3,7 +3,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
   import TelemetryTest
 
-  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
@@ -106,12 +105,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     [_message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
 
     # Start consumer from second message
+    message_id = {message2.command.message_id.ledgerId, message2.command.message_id.entryId}
+
     {:ok, message_id_group} =
       Pulsar.start_consumer(
         @topic,
         "from-message-id",
         @consumer_callback,
-        subscription_options(:earliest, start_message_id: message2.id)
+        subscription_options(:earliest, start_message_id: message_id)
       )
 
     [message_id_consumer] = Pulsar.get_consumers(message_id_group)
@@ -254,13 +255,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     ] ++ opts
   end
 
-  defp publish_time_from_message(message) do
-    %{
-      metadata: %Binary.MessageMetadata{
-        publish_time: publish_time
-      }
-    } = message
-
-    publish_time
+  defp publish_time_from_message(%Pulsar.Message{metadata: metadata}) do
+    metadata.publish_time
   end
 end

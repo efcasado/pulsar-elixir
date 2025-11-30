@@ -12,25 +12,13 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     {:ok, %{messages: [], count: 0, fail_all: fail_all}}
   end
 
-  def handle_message({command, metadata, {_single_metadata, payload}, _broker_metadata, _message_id_to_ack}, state) do
-    # Build a message structure similar to the old format for compatibility
-    message = %{
-      id: {command.message_id.ledgerId, command.message_id.entryId},
-      metadata: metadata,
-      payload: payload,
-      partition_key: metadata.partition_key,
-      producer_name: metadata.producer_name,
-      publish_time: metadata.publish_time,
-      redelivery_count: command.redelivery_count
-    }
-
+  def handle_message(%Pulsar.Message{} = message, state) do
     new_state = %{
       state
       | messages: [message | state.messages],
         count: state.count + 1
     }
 
-    # Fail all messages if fail_all is true
     if state.fail_all do
       {:error, :intentional_failure, new_state}
     else
