@@ -256,7 +256,6 @@ defmodule Pulsar.Client do
       :exit, _ -> :ok
     end
 
-    # Cleanup persistent_term (ETS table is automatically deleted when owner process terminates)
     :persistent_term.erase({__MODULE__, client_name, :broker_opts})
     :ok
   end
