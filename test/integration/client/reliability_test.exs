@@ -33,7 +33,10 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     [producer_pid_before_crash] = Pulsar.get_producers(group_pid)
 
-    :ok = Utils.wait_for(fn -> System.broker_for_producer(producer_pid_before_crash, @client) != nil end)
+    :ok =
+      Utils.wait_for(fn ->
+        System.broker_for_producer(producer_pid_before_crash, @client) != nil
+      end)
 
     broker = System.broker_for_producer(producer_pid_before_crash, @client)
 
@@ -56,6 +59,31 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     assert producer_pid_before_crash != producer_pid_after_crash
   end
 
+  test "producer recovers from broker-initiated topic unload" do
+    # NOTE: add support the ExtensibleLoadManager config in the future
+    # It adds a reassignment url to skip topic lookup
+    # See: https://github.com/apache/pulsar/blob/master/pip/pip-307.md
+    topic = "persistent://public/default/producer-unload-test"
+
+    {:ok, group_pid} = Pulsar.start_producer(topic, producer_options())
+    [producer_pid_before_unload] = Pulsar.get_producers(group_pid)
+
+    Utils.wait_for(fn -> :sys.get_state(producer_pid_before_unload).producer_name != nil end)
+
+    :ok = System.unload_topic(topic)
+
+    Utils.wait_for(fn -> not Process.alive?(producer_pid_before_unload) end)
+
+    [producer_pid_after_unload] = Pulsar.get_producers(group_pid)
+
+    refute Process.alive?(producer_pid_before_unload)
+    assert Process.alive?(group_pid)
+    assert Process.alive?(producer_pid_after_unload)
+    assert producer_pid_before_unload != producer_pid_after_unload
+
+    Pulsar.stop_producer(group_pid)
+  end
+
   test "consumer recovers from broker crash" do
     {:ok, group_pid} =
       Pulsar.start_consumer(
@@ -67,7 +95,9 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     [consumer_pid_before_crash] = Pulsar.get_consumers(group_pid, client: @client)
 
-    Utils.wait_for(fn -> System.broker_for_consumer(consumer_pid_before_crash, @client) != nil end)
+    Utils.wait_for(fn ->
+      System.broker_for_consumer(consumer_pid_before_crash, @client) != nil
+    end)
 
     broker = System.broker_for_consumer(consumer_pid_before_crash, @client)
 
