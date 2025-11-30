@@ -33,6 +33,20 @@
               }
             ],
             "countMatches": true
+          },
+          {
+            "files": ["mix.exs"],
+            "from": 'version: ".*"',
+            "to": 'version: "${nextRelease.version}"',
+            "results": [
+              {
+                "file": "mix.exs",
+                "hasChanged": true,
+                "numMatches": 1,
+                "numReplacements": 1
+              }
+            ],
+            "countMatches": true
           }
         ]
       }
