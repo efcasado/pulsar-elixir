@@ -167,13 +167,10 @@ defmodule Pulsar.Integration.AccessModesTest do
     [producer_1] = Pulsar.get_producers(group_pid_1)
     Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
 
-    # First producer should have epoch 0
     assert :sys.get_state(producer_1).topic_epoch == 0
-
-    # Verify original producer can send
     assert {:ok, _} = Pulsar.send(group_pid_1, "Message from original producer", client: @client)
 
-    # Step 2: Start second producer with :ExclusiveWithFencing - should fence out first
+    # Step 2: Start second producer with :ExclusiveWithFencing. It should fence out first
     {:ok, group_pid_2} =
       Pulsar.start_producer(@exclusive_with_fencing_topic,
         access_mode: :ExclusiveWithFencing,
@@ -184,7 +181,6 @@ defmodule Pulsar.Integration.AccessModesTest do
     [producer_2] = Pulsar.get_producers(group_pid_2)
     Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
 
-    # Second producer should have epoch 1
     producer_2_state = :sys.get_state(producer_2)
     assert producer_2_state.topic_epoch == 1
 
@@ -193,7 +189,6 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert Process.alive?(producer_2)
 
     # Step 3: Try to send from the fenced (original) producer
-    # Keep trying until the connection closes and the producer dies
     Utils.wait_for(fn ->
       match?({:error, {:producer_died, _}}, Pulsar.send(group_pid_1, "Message from fenced producer", client: @client))
     end)

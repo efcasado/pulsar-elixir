@@ -173,10 +173,10 @@ defmodule Pulsar.Producer do
       topic_epoch: topic_epoch
     }
 
-    if topic_epoch do
-      Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
-    else
+    if is_nil(topic_epoch) do
       Logger.info("Starting producer #{producer_id} for topic #{topic}")
+    else
+      Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
     end
 
     total_startup_delay = startup_delay_ms + startup_jitter_ms
@@ -371,13 +371,17 @@ defmodule Pulsar.Producer do
         result =
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
                {:ok, response} <- create_producer(broker_pid, state) do
+            if not is_nil(response.topic_epoch) do
+              ProducerEpochStore.put(state.topic, response.producer_name, state.access_mode, response.topic_epoch)
+            end
+
             state =
               state
               |> Map.put(:broker_pid, broker_pid)
-              |> Map.put(:producer_name, Map.get(response, :producer_name))
+              |> Map.put(:producer_name, response.producer_name)
               |> Map.put(:registration_request_id, response.request_id)
               |> Map.put(:ready, Map.get(response, :producer_ready, true))
-              |> Map.put(:topic_epoch, Map.get(response, :topic_epoch))
+              |> Map.put(:topic_epoch, response.topic_epoch)
 
             {:ok, state}
           else
