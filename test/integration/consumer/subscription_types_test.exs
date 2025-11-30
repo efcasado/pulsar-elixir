@@ -100,7 +100,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     # Extract partition keys to verify no key overlap
     extract_keys = fn messages ->
       messages
-      |> Enum.map(& &1.partition_key)
+      |> Enum.map(& &1.metadata.partition_key)
       |> Enum.filter(&(&1 != nil))
       |> MapSet.new()
     end

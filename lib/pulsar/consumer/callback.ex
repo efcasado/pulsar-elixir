@@ -40,28 +40,21 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Message Format
 
-  `handle_message/2` receives a tuple containing the command, metadata, payload, broker metadata, and message_id_to_ack:
+  `handle_message/2` receives a `Pulsar.Message` struct containing all message information.
+  See `Pulsar.Message` for detailed field documentation.
 
-      {command, metadata, payload, broker_metadata, message_id_to_ack}
+  You can pattern match on the struct:
 
-  Where:
-  - `command` - %Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage{}
-  - `metadata` - %Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata{}
-  - `payload` - A tuple {single_metadata, binary} where:
-    - `single_metadata` - Single message metadata (nil for single messages, struct for batch messages)
-    - `binary` - The actual message payload
-  - `broker_metadata` - Additional broker information
-  - `message_id_to_ack` - The message ID to use for ACK/NACK (includes batch_index if from a batch)
+      def handle_message(%Pulsar.Message{payload: payload}, state) do
+        # Process the payload
+        {:ok, state}
+      end
 
-  Note: Both single messages and batch messages use the same normalized format.
-  For single messages, single_metadata will be nil.
-  For batch messages, single_metadata contains the individual message metadata.
+  Or access fields directly:
 
-  You can extract message information like this:
-
-      def handle_message({command, metadata, {single_metadata, payload}, _broker_metadata, message_id_to_ack}, state) do
-        # Use message_id_to_ack for manual ACK/NACK
-        # payload is always the binary message content
+      def handle_message(%Pulsar.Message{} = message, state) do
+        payload = message.payload
+        message_id = message.message_id_to_ack
         {:ok, state}
       end
 
@@ -75,7 +68,7 @@ defmodule Pulsar.Consumer.Callback do
           {:ok, %{count: 0, max_messages: max_messages, messages: []}}
         end
 
-      def handle_message({command, _metadata, {_single_metadata, payload}, _broker_metadata, _message_id_to_ack}, callback_state) do
+        def handle_message(%Pulsar.Message{payload: payload}, callback_state) do
           new_state = %{
             callback_state
             | count: callback_state.count + 1,
@@ -200,7 +193,7 @@ defmodule Pulsar.Consumer.Callback do
 
   Example with manual ACK:
 
-      def handle_message({command, _metadata, {_single_metadata, payload}, _broker_metadata, message_id_to_ack}, state) do
+      def handle_message(%Pulsar.Message{payload: payload, message_id_to_ack: message_id_to_ack}, state) do
         # Use message_id_to_ack (not command.message_id) for manual ACK/NACK
         # This ensures batch messages are ACKed with the correct batch_index
         
@@ -216,13 +209,7 @@ defmodule Pulsar.Consumer.Callback do
       end
   """
 
-  @type message_args :: {
-          command :: struct(),
-          metadata :: struct(),
-          payload :: {single_metadata :: struct() | nil, binary()},
-          broker_metadata :: term(),
-          message_id_to_ack :: term()
-        }
+  @type message_args :: Pulsar.Message.t()
 
   @type init_arg :: term()
   @type state :: term()

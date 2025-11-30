@@ -15,7 +15,7 @@ defmodule Pulsar.Consumer do
       defmodule MyApp.MessageHandler do
         use Pulsar.Consumer.Callback
 
-        def handle_message({_command, _metadata, {_single_metadata, payload}, _broker_metadata, _message_id}, state) do
+        def handle_message(%Pulsar.Message{payload: payload}, state) do
           # Process the message
           IO.inspect(payload)
           {:ok, state}
@@ -618,7 +618,15 @@ defmodule Pulsar.Consumer do
             %{base_message_id | batch_index: index}
           end
 
-        msg_args = {command, metadata, {msg_metadata, msg_payload}, broker_metadata, message_id_to_ack}
+        msg_args = %Pulsar.Message{
+          command: command,
+          metadata: metadata,
+          payload: msg_payload,
+          single_metadata: msg_metadata,
+          broker_metadata: broker_metadata,
+          message_id_to_ack: message_id_to_ack
+        }
+
         process_single_message(state, msg_args, callback_state, message_id_to_ack, nacked_acc, redelivery_count)
       end)
 

@@ -10,9 +10,7 @@ defmodule BingoPlayer do
     {:ok, {game_master, card}}
   end
 
-  def handle_message(message, {game_master, card}) do
-    {_command, _metadata, {_single_metadata, payload}, _broker_metadata, _message_id_to_ack} = message
-
+  def handle_message(%Pulsar.Message{payload: payload}, {game_master, card}) do
     number = String.to_integer(payload)
 
     updated_card = scratch(number, card)
