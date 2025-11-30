@@ -1,3 +1,13 @@
+## [2.0.0](https://github.com/efcasado/pulsar-elixir/compare/v1.2.1...v2.0.0) (2025-11-30)
+
+### ⚠ BREAKING CHANGES
+
+* use struct for consumed messages
+
+### Features
+
+* use struct for consumed messages ([8b0b6cd](https://github.com/efcasado/pulsar-elixir/commit/8b0b6cd2f451b7135389d072fb58aa8ed94c70d4))
+
 ## [1.2.1](https://github.com/efcasado/pulsar-elixir/compare/v1.2.0...v1.2.1) (2025-11-29)
 
 ## [1.2.0](https://github.com/efcasado/pulsar-elixir/compare/v1.1.0...v1.2.0) (2025-11-29)
