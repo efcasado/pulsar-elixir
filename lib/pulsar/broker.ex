@@ -113,15 +113,6 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Checks if the broker is in connected state.
-  Returns immediately without waiting.
-  """
-  @spec connected?(GenServer.server()) :: boolean()
-  def connected?(broker) do
-    :gen_statem.call(broker, :is_connected, 100)
-  end
-
-  @doc """
   Sends a command to the broker without expecting a response.
   """
   @spec send_command(GenServer.server(), struct()) :: :ok | {:error, term()}
@@ -368,9 +359,7 @@ defmodule Pulsar.Broker do
   end
 
   def disconnected(event_type, event_data, _broker) do
-    Logger.warning(
-      "Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state"
-    )
+    Logger.warning("Discarding #{inspect(event_type)} #{inspect(event_data)} in disconnected state")
 
     :keep_state_and_data
   end
@@ -487,11 +476,9 @@ defmodule Pulsar.Broker do
     {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
     {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
 
-    updated_broker =
+    broker_after_consumer =
       if consumer_id do
-        Logger.info(
-          "Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server"
-        )
+        Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server")
 
         close_consumer_command = %Binary.CommandCloseConsumer{
           consumer_id: consumer_id,
@@ -503,9 +490,7 @@ defmodule Pulsar.Broker do
             updated_broker
 
           {{:error, send_error}, updated_broker} ->
-            Logger.warning(
-              "Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}"
-            )
+            Logger.warning("Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}")
 
             updated_broker
         end
@@ -513,11 +498,29 @@ defmodule Pulsar.Broker do
         broker
       end
 
-    if producer_id do
-      Logger.info("Producer #{producer_id} exited: #{inspect(reason)}")
-    end
+    broker_after_producer =
+      if producer_id do
+        Logger.info("Producer #{producer_id} exited: #{inspect(reason)}, sending CloseProducer to server")
 
-    new_broker = %{updated_broker | consumers: new_consumers, producers: new_producers}
+        close_producer_command = %Binary.CommandCloseProducer{
+          producer_id: producer_id,
+          request_id: System.unique_integer([:positive, :monotonic])
+        }
+
+        case send_command_internal(close_producer_command, broker_after_consumer) do
+          {:ok, updated_broker} ->
+            updated_broker
+
+          {{:error, send_error}, updated_broker} ->
+            Logger.warning("Failed to send CloseProducer for producer #{producer_id}: #{inspect(send_error)}")
+
+            updated_broker
+        end
+      else
+        broker_after_consumer
+      end
+
+    new_broker = %{broker_after_producer | consumers: new_consumers, producers: new_producers}
     {:keep_state, new_broker}
   end
 
@@ -550,11 +553,7 @@ defmodule Pulsar.Broker do
     end
   end
 
-  def connected(
-        {:call, from},
-        {:publish_message, command_send, message_metadata, payload},
-        broker
-      ) do
+  def connected({:call, from}, {:publish_message, command_send, message_metadata, payload}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
     encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
@@ -689,19 +688,13 @@ defmodule Pulsar.Broker do
     :keep_state_and_data
   end
 
-  defp handle_command(
-         %Binary.CommandLookupTopicResponse{request_id: request_id} = command,
-         broker
-       ) do
+  defp handle_command(%Binary.CommandLookupTopicResponse{request_id: request_id} = command, broker) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
   end
 
-  defp handle_command(
-         %Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command,
-         broker
-       ) do
+  defp handle_command(%Binary.CommandPartitionedTopicMetadataResponse{request_id: request_id} = command, broker) do
     reply = {:ok, command}
     new_broker = reply_to_request(broker, request_id, reply)
     {:keep_state, new_broker}
@@ -720,8 +713,7 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_command(
-         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload,
-          broker_metadata},
+         {%Binary.CommandMessage{consumer_id: consumer_id} = command, metadata, payload, broker_metadata},
          broker
        ) do
     case Map.get(broker.consumers, consumer_id) do
@@ -757,7 +749,7 @@ defmodule Pulsar.Broker do
         :keep_state_and_data
 
       {producer_pid, _monitor_ref} ->
-        Logger.info("Broker requested producer #{producer_id} closure")
+        Logger.warning("Broker requested producer #{producer_id} closure")
 
         send(producer_pid, {:broker_message, command})
         :keep_state_and_data
@@ -800,8 +792,7 @@ defmodule Pulsar.Broker do
       new_broker = reply_to_request(broker, request_id, {:ok, command})
       {:keep_state, new_broker}
     else
-      # Subsequent notification - request was already completed
-      # handle_producer_ready_notification(command, broker)
+      # Subsequent notification: broadcast to all producers and let the correct one handle it
       Enum.each(broker.producers, fn {_id, {producer_pid, _ref}} ->
         send(producer_pid, {:broker_message, command})
       end)
@@ -1007,56 +998,5 @@ defmodule Pulsar.Broker do
           {found_id, acc_map}
         end
     end)
-  end
-
-  # Handle initial producer registration response (request_id present)
-  defp handle_producer_registration_response(command, broker, request_id) do
-    producer_name = command.producer_name
-    {{producer_pid, _ref}, _timestamp} = Map.get(broker.requests, request_id)
-
-    # Find the producer_id for the producer that made this request
-    producer_id =
-      Enum.find_value(broker.producers, fn
-        {producer_id, {pid, _ref}} when pid == producer_pid -> producer_id
-        _ -> nil
-      end)
-
-    updated_broker =
-      if producer_id do
-        # Store the producer_name -> producer_id mapping for lookups
-        new_producer_names = Map.put(broker.producer_names, producer_name, producer_id)
-        %{broker | producer_names: new_producer_names}
-      else
-        Logger.warning("Could not find producer_id for request #{request_id}")
-        broker
-      end
-
-    new_broker = reply_to_request(updated_broker, request_id, {:ok, command})
-    {:keep_state, new_broker}
-  end
-
-  # Handle subsequent producer ready notification
-  defp handle_producer_ready_notification(command, broker) do
-    producer_name = command.producer_name
-
-    case Map.get(broker.producer_names, producer_name) do
-      nil ->
-        Logger.warning(
-          "Received CommandProducerSuccess for unknown producer_name: #{producer_name}"
-        )
-
-        :keep_state_and_data
-
-      producer_id ->
-        case Map.get(broker.producers, producer_id) do
-          {producer_pid, _ref} ->
-            send(producer_pid, {:broker_message, command})
-            :keep_state_and_data
-
-          nil ->
-            Logger.warning("Producer #{producer_id} not found for producer_name #{producer_name}")
-            :keep_state_and_data
-        end
-    end
   end
 end

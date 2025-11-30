@@ -42,35 +42,53 @@ defmodule Pulsar.Test.Support.Utils do
   @doc """
   Collects producer opened telemetry events and returns aggregated statistics.
   Returns a map with total, success, and failure counts.
+
+  ## Options
+    - `:producer_names` - list of producer names to filter by (optional)
   """
-  def collect_producer_opened_stats do
+  def collect_producer_opened_stats(opts \\ []) do
     [:pulsar, :producer, :opened, :stop]
-    |> collect_events()
+    |> collect_events(opts)
     |> aggregate_success_stats()
   end
 
-  def collect_producer_closed_stats do
+  @doc """
+  Collects producer closed telemetry events and returns aggregated statistics.
+  Returns a map with total, success, and failure counts.
+
+  ## Options
+    - `:producer_names` - list of producer names to filter by (optional)
+  """
+  def collect_producer_closed_stats(opts \\ []) do
     [:pulsar, :producer, :closed, :stop]
-    |> collect_events()
+    |> collect_events(opts)
     |> aggregate_success_stats()
   end
 
   @doc """
   Collects message published telemetry events and returns aggregated statistics.
   Returns a map with total count.
+
+  ## Options
+    - `:producer_names` - list of producer names to filter by (optional)
   """
-  def collect_message_published_stats do
+  def collect_message_published_stats(opts \\ []) do
     [:pulsar, :producer, :message, :published]
-    |> collect_events()
+    |> collect_events(opts)
     |> then(fn events -> %{total_count: length(events)} end)
   end
 
   @doc """
   Collects all raw telemetry events for the given event name.
   Returns a list of events with merged measurements and metadata.
+
+  ## Options
+    - `:producer_names` - list of producer names to filter by (optional)
   """
-  def collect_events(event_name) do
-    collect_events(event_name, [])
+  def collect_events(event_name, opts \\ []) do
+    event_name
+    |> do_collect_events([])
+    |> filter_by_producer_names(opts)
   end
 
   defp aggregate_flow_stats(events) do
@@ -93,6 +111,18 @@ defmodule Pulsar.Test.Support.Utils do
     end)
   end
 
+  defp filter_by_producer_names(events, opts) do
+    case Keyword.get(opts, :producer_names) do
+      nil ->
+        events
+
+      names when is_list(names) ->
+        Enum.filter(events, fn event ->
+          Map.get(event, :producer_name) in names
+        end)
+    end
+  end
+
   defp aggregate_success_stats(events) do
     %{
       total_count: length(events),
@@ -101,7 +131,7 @@ defmodule Pulsar.Test.Support.Utils do
     }
   end
 
-  defp collect_events(event_name, acc) do
+  defp do_collect_events(event_name, acc) do
     receive do
       {:telemetry_event,
        %{
@@ -110,7 +140,7 @@ defmodule Pulsar.Test.Support.Utils do
          metadata: metadata
        }} ->
         event = Map.merge(measurements, metadata)
-        collect_events(event_name, [event | acc])
+        do_collect_events(event_name, [event | acc])
     after
       0 -> Enum.reverse(acc)
     end

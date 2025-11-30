@@ -11,8 +11,8 @@ defmodule Pulsar.Producer do
 
   use GenServer
 
-  alias Pulsar.ProducerEpochStore
   alias Pulsar.Config
+  alias Pulsar.ProducerEpochStore
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
 
@@ -65,7 +65,7 @@ defmodule Pulsar.Producer do
         it will receive an error immediately. The old producer is evicted if it experiences
         a network partition with the broker.
       - `:WaitForExclusive` - If there is already a producer, wait until exclusive access is granted
-      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed immediately
+      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed (fenced out)
     - `:compression` - Compression algorithm (default: :NONE)
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before producer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
@@ -174,9 +174,7 @@ defmodule Pulsar.Producer do
     }
 
     if topic_epoch do
-      Logger.info(
-        "Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})"
-      )
+      Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
     else
       Logger.info("Starting producer #{producer_id} for topic #{topic}")
     end
@@ -195,9 +193,7 @@ defmodule Pulsar.Producer do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
     total_sleep_ms = base_delay_ms + jitter
 
-    Logger.debug(
-      "Producer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)"
-    )
+    Logger.debug("Producer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
 
     Process.sleep(total_sleep_ms)
     {:noreply, state, {:continue, :register_producer}}
@@ -206,13 +202,7 @@ defmodule Pulsar.Producer do
   def handle_continue(:register_producer, state) do
     case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
-        if Pulsar.Broker.connected?(broker_pid) do
-          register_with_broker(state, broker_pid)
-        else
-          Logger.debug("Broker disconnected, retrying producer registration in 1s")
-          Process.send_after(self(), :retry_registration, 1000)
-          {:noreply, %{state | broker_pid: broker_pid, ready: false}}
-        end
+        register_with_broker(state, broker_pid)
 
       {:error, :disconnected} ->
         Logger.debug("Broker disconnected during topic lookup, retrying in 1s")
@@ -233,7 +223,6 @@ defmodule Pulsar.Producer do
 
   @impl true
   def handle_call({:send_message, _}, _from, %{ready: false} = state) do
-    # If we send while Producer has no access, Pulsar closes the connection
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}
   end
@@ -285,9 +274,7 @@ defmodule Pulsar.Producer do
         {:DOWN, monitor_ref, :process, broker_pid, reason},
         %__MODULE__{broker_monitor: monitor_ref, broker_pid: broker_pid} = state
       ) do
-    Logger.info(
-      "Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, producer will restart"
-    )
+    Logger.info("Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, producer will restart")
 
     {:stop, :broker_crashed, state}
   end
@@ -328,14 +315,8 @@ defmodule Pulsar.Producer do
   @impl true
   def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
     if state.registration_request_id == command.request_id do
-      # Save topic_epoch if we received one (for ExclusiveWithFencing producers)
-      if command.topic_epoch do
-        ProducerEpochStore.put(
-          state.topic,
-          state.producer_name,
-          state.access_mode,
-          command.topic_epoch
-        )
+      if not is_nil(command.topic_epoch) do
+        ProducerEpochStore.put(state.topic, state.producer_name, state.access_mode, command.topic_epoch)
       end
 
       {:noreply, %{state | ready: command.producer_ready, topic_epoch: command.topic_epoch}}
@@ -350,46 +331,25 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
-  def handle_info(:retry_registration, state) do
-    # Retry registration by triggering continue
-    {:noreply, state, {:continue, :register_producer}}
-  end
-
-  @impl true
   def terminate(_reason, nil) do
     :ok
   end
 
-  @impl true
   def terminate(reason, state) do
-    Logger.debug("Terminating producer: #{inspect(state.producer_name)}")
+    # CloseProducer is sent by the broker's DOWN handler
+    Logger.debug("Producer #{inspect(state.producer_name)} terminating: #{inspect(reason)}")
 
-    # Clean up epoch entry if producer is being permanently stopped (fenced or normal shutdown)
-    if reason in [:shutdown, {:shutdown, :producer_fenced}, :normal] do
-      ProducerEpochStore.delete(state.topic, state.producer_name, state.access_mode)
-    end
-
-    start_metadata = %{
+    metadata = %{
       topic: state.topic,
-      producer_name: state.producer_name
+      producer_name: state.producer_name,
+      reason: reason
     }
 
     :telemetry.span(
       [:pulsar, :producer, :closed],
-      start_metadata,
+      metadata,
       fn ->
-        result =
-          case close_producer(state.broker_pid, state.producer_id) do
-            {:ok, _response} ->
-              :ok
-
-            {:error, reason} = error ->
-              Logger.error("Producer close failed: #{inspect(reason)}")
-              error
-          end
-
-        stop_metadata = Map.put(start_metadata, :success, match?(:ok, result))
-        {result, stop_metadata}
+        {:ok, Map.put(metadata, :success, true)}
       end
     )
 
@@ -441,7 +401,13 @@ defmodule Pulsar.Producer do
               }
 
             {:error, reason} ->
-              %{success: false, error: reason}
+              %{
+                success: false,
+                error: reason,
+                producer_id: state.producer_id,
+                access_mode: state.access_mode,
+                topic: state.topic
+              }
           end
 
         stop_metadata = Map.merge(start_metadata, stop_metadata_extra)
@@ -453,6 +419,7 @@ defmodule Pulsar.Producer do
         {:noreply, new_state, {:continue, :monitor_broker}}
 
       {:error, {:ProducerFenced, _msg}} ->
+        ProducerEpochStore.delete(state.topic, state.producer_name, state.access_mode)
         {:stop, {:shutdown, :producer_fenced}, state}
 
       {:error, reason} ->
@@ -472,18 +439,6 @@ defmodule Pulsar.Producer do
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
-  end
-
-  defp close_producer(nil, _producer_id) do
-    {:ok, :skipped}
-  end
-
-  defp close_producer(broker_pid, producer_id) do
-    close_producer_command = %Binary.CommandCloseProducer{
-      producer_id: producer_id
-    }
-
-    Pulsar.Broker.send_request(broker_pid, close_producer_command)
   end
 
   defp maybe_compress(%Binary.MessageMetadata{compression: :NONE}, payload) do

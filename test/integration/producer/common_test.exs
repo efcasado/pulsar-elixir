@@ -57,7 +57,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
         state.producer_name != nil
       end)
 
-    stats = Utils.collect_producer_opened_stats()
+    stats = Utils.collect_producer_opened_stats(producer_names: [producer_group_name])
     assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
 
     assert {:ok, message_id_data} = Pulsar.send(producer_group_name, "Hello, Pulsar!", client: @client)
@@ -67,13 +67,13 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     assert {:ok, _message_id_data2} = Pulsar.send(group_pid, "Another message with pid!")
 
-    publish_stats = Utils.collect_message_published_stats()
+    publish_stats = Utils.collect_message_published_stats(producer_names: [producer_group_name])
     assert %{total_count: 2} = publish_stats
 
     assert :ok = Pulsar.stop_producer(group_pid)
     Utils.wait_for(fn -> not Process.alive?(producer) end)
 
-    close_stats = Utils.collect_producer_closed_stats()
+    close_stats = Utils.collect_producer_closed_stats(producer_names: [producer_group_name])
     assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
   end
 end
