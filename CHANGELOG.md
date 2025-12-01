@@ -1,3 +1,9 @@
+## [2.1.0](https://github.com/efcasado/pulsar-elixir/compare/v2.0.0...v2.1.0) (2025-12-01)
+
+### Features
+
+* producer access modes ([#38](https://github.com/efcasado/pulsar-elixir/issues/38)) ([b0eebbb](https://github.com/efcasado/pulsar-elixir/commit/b0eebbb03cce4af6fe13b3f143818fe763091ee8))
+
 ## [2.0.0](https://github.com/efcasado/pulsar-elixir/compare/v1.2.1...v2.0.0) (2025-11-30)
 
 ### ⚠ BREAKING CHANGES
