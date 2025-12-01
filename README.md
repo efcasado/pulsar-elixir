@@ -27,6 +27,8 @@ Pulsar.Supervisor
     │   ├── ConsumerRegistry
     │   └── ProducerRegistry
     │
+    ├── ProducerEpochStore (ETS)
+    │
     ├── BrokerSupervisor
     │   ├── Broker 1
     │   │   ├── monitors: C1, C2, DLQ-P1, P1
@@ -262,7 +264,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Compression                        | ✅        |
 | Producer  | Schema                             | ❌        |
 | Producer  | Partitioned topics                 | ❌        |
-| Producer  | Access modes                       | ❌        |
+| Producer  | Access modes                       | ✅        |
 | Consumer  | ACK                                | ✅        |
 | Consumer  | Batch-index ACK                    | ✅        |
 | Consumer  | NACK                               | ✅        |

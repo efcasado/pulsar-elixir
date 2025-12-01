@@ -15,3 +15,5 @@ erl_crash.dump
 *.ez
 pulsar-*.tar
 *~
+.elixir_ls/
+.DS_Store
