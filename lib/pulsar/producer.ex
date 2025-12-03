@@ -127,10 +127,24 @@ defmodule Pulsar.Producer do
   Sends a message through this producer.
   Waits for acknowledgment from the broker.
   Returns `{:ok, message_id}` on success or `{:error, reason}` on failure.
+
+  ## Parameters
+
+  - `producer_pid` - The producer process PID
+  - `message` - Binary message payload
+  - `opts` - Optional parameters:
+    - `:timeout` - Timeout in milliseconds (default: 5000)
+    - `:key` - Partition routing key (string)
+    - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
+    - `:properties` - Custom message metadata as a map (e.g., `%{"trace_id" => "abc"}`)
+    - `:event_time` - Application event timestamp (DateTime or milliseconds since epoch)
+    - `:deliver_at_time` - Absolute delayed delivery time (DateTime or milliseconds since epoch)
+    - `:deliver_after` - Relative delayed delivery in milliseconds from now
   """
-  @spec send_message(pid(), binary(), timeout()) :: {:ok, map()} | {:error, term()}
-  def send_message(producer_pid, payload, timeout \\ 5000) do
-    GenServer.call(producer_pid, {:send_message, payload}, timeout)
+  @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  def send_message(producer_pid, message, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 5000)
+    GenServer.call(producer_pid, {:send_message, message, opts}, timeout)
   end
 
   ## GenServer Callbacks
@@ -217,31 +231,33 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
-  def handle_call({:send_message, _}, _from, %{ready: false} = state) do
+  def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}
   end
 
-  def handle_call({:send_message, payload}, from, state) do
+  def handle_call({:send_message, payload, opts}, from, state) do
     sequence_id = state.sequence_id + 1
 
-    # Create CommandSend
     command_send = %Binary.CommandSend{producer_id: state.producer_id, sequence_id: sequence_id}
 
-    # Create MessageMetadata
     message_metadata = %Binary.MessageMetadata{
       producer_name: state.producer_name,
       sequence_id: sequence_id,
       publish_time: System.system_time(:millisecond),
       uncompressed_size: byte_size(payload),
-      compression: state.compression
+      compression: state.compression,
+      partition_key: Keyword.get(opts, :key),
+      ordering_key: Keyword.get(opts, :ordering_key),
+      properties: to_key_value_list(Keyword.get(opts, :properties)),
+      event_time: to_timestamp(Keyword.get(opts, :event_time)),
+      deliver_at_time: resolve_deliver_at_time(opts)
     }
 
     payload = maybe_compress(message_metadata, payload)
 
     case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, payload) do
       :ok ->
-        # Emit telemetry event for message published
         :telemetry.execute(
           [:pulsar, :producer, :message, :published],
           %{count: 1},
@@ -465,5 +481,28 @@ defmodule Pulsar.Producer do
   defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
     {:ok, payload} = :snappyer.compress(compressed_payload)
     payload
+  end
+
+  # Convert a map of properties to a list of KeyValue structs
+  defp to_key_value_list(nil), do: []
+
+  defp to_key_value_list(props) when is_map(props) do
+    Enum.map(props, fn {k, v} ->
+      %Binary.KeyValue{key: to_string(k), value: to_string(v)}
+    end)
+  end
+
+  # Convert DateTime or milliseconds to milliseconds timestamp
+  defp to_timestamp(nil), do: nil
+  defp to_timestamp(%DateTime{} = dt), do: DateTime.to_unix(dt, :millisecond)
+  defp to_timestamp(ms) when is_integer(ms), do: ms
+
+  # Resolve deliver_at_time from either absolute or relative delay option
+  defp resolve_deliver_at_time(opts) do
+    case {Keyword.get(opts, :deliver_at_time), Keyword.get(opts, :deliver_after)} do
+      {nil, nil} -> nil
+      {dt, _} when not is_nil(dt) -> to_timestamp(dt)
+      {nil, ms} when is_integer(ms) -> System.system_time(:millisecond) + ms
+    end
   end
 end

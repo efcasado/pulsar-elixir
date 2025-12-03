@@ -758,10 +758,30 @@ defmodule Pulsar do
   - `message` - Binary message payload
   - `opts` - Optional parameters:
     - `:timeout` - Timeout in milliseconds (default: 5000)
+    - `:key` - Partition routing key (string)
+    - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
+    - `:properties` - Custom message metadata as a map (e.g., `%{"trace_id" => "abc"}`)
+    - `:event_time` - Application event timestamp (DateTime or milliseconds since epoch)
+    - `:deliver_at_time` - Absolute delayed delivery time (DateTime or milliseconds since epoch)
+    - `:deliver_after` - Relative delayed delivery in milliseconds from now
 
   ## Return Values
 
   Returns `{:ok, message_id_data}` on success or `{:error, reason}` on failure.
+
+  ## Examples
+
+      # Basic send
+      Pulsar.send(producer, "payload")
+
+      # With message key for partitioning
+      Pulsar.send(producer, "payload", key: "user-123")
+
+      # With custom properties
+      Pulsar.send(producer, "payload", properties: %{"trace_id" => "abc"})
+
+      # With delayed delivery (60 seconds from now)
+      Pulsar.send(producer, "payload", deliver_after: 60_000)
 
   """
   @spec send(String.t() | pid(), binary(), keyword()) ::
@@ -769,17 +789,15 @@ defmodule Pulsar do
   def send(producer_group_pid_or_name, message, opts \\ [])
 
   def send(producer_group_pid, message, opts) when is_pid(producer_group_pid) do
-    timeout = Keyword.get(opts, :timeout, 5000)
-    Pulsar.ProducerGroup.send_message(producer_group_pid, message, timeout)
+    Pulsar.ProducerGroup.send_message(producer_group_pid, message, opts)
   end
 
   def send(producer_group_name, message, opts) when is_binary(message) do
-    timeout = Keyword.get(opts, :timeout, 5000)
     client = Keyword.get(opts, :client, @default_client)
 
     case lookup_producer(producer_group_name, client: client) do
       {:ok, group_pid} ->
-        Pulsar.ProducerGroup.send_message(group_pid, message, timeout)
+        Pulsar.ProducerGroup.send_message(group_pid, message, opts)
 
       {:error, :not_found} ->
         {:error, :producer_not_found}
