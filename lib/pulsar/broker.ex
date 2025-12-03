@@ -841,7 +841,7 @@ defmodule Pulsar.Broker do
       :gen_statem.reply(from, {:error, :timeout})
     end)
 
-    if length(stale_requests) > 0 do
+    if !Enum.empty?(stale_requests) do
       Logger.info("Cleaned up #{length(stale_requests)} stale requests")
     end
 
