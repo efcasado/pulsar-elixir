@@ -483,7 +483,6 @@ defmodule Pulsar.Producer do
     payload
   end
 
-  # Convert a map of properties to a list of KeyValue structs
   defp to_key_value_list(nil), do: []
 
   defp to_key_value_list(props) when is_map(props) do
@@ -492,12 +491,9 @@ defmodule Pulsar.Producer do
     end)
   end
 
-  # Convert DateTime or milliseconds to milliseconds timestamp
-  defp to_timestamp(nil), do: nil
   defp to_timestamp(%DateTime{} = dt), do: DateTime.to_unix(dt, :millisecond)
-  defp to_timestamp(ms) when is_integer(ms), do: ms
+  defp to_timestamp(ms), do: ms
 
-  # Resolve deliver_at_time from either absolute or relative delay option
   defp resolve_deliver_at_time(opts) do
     case {Keyword.get(opts, :deliver_at_time), Keyword.get(opts, :deliver_after)} do
       {nil, nil} -> nil
