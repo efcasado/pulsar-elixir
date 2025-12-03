@@ -76,18 +76,31 @@ defmodule Pulsar.ProducerGroup do
   @doc """
   Sends a message through the producer in this group.
 
+  ## Parameters
+
+  - `group_pid` - The producer group supervisor PID
+  - `message` - Binary message payload
+  - `opts` - Optional parameters:
+    - `:timeout` - Timeout in milliseconds (default: 5000)
+    - `:key` - Partition routing key (string)
+    - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
+    - `:properties` - Custom message metadata as a map
+    - `:event_time` - Application event timestamp (DateTime or milliseconds)
+    - `:deliver_at_time` - Absolute delayed delivery time (DateTime or milliseconds)
+    - `:deliver_after` - Relative delayed delivery in milliseconds from now
+
   Returns `{:error, :no_producers_available}` if all producers in the group are dead or restarting.
   Returns `{:error, :producer_died}` if the producer crashes during the send operation.
   """
-  @spec send_message(pid(), binary(), timeout()) :: {:ok, map()} | {:error, term()}
-  def send_message(group_pid, payload, timeout \\ 5000) do
+  @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  def send_message(group_pid, message, opts \\ []) do
     case get_producers(group_pid) do
       [] ->
         {:error, :no_producers_available}
 
       [producer_pid | _] ->
         try do
-          Pulsar.Producer.send_message(producer_pid, payload, timeout)
+          Pulsar.Producer.send_message(producer_pid, message, opts)
         catch
           :exit, reason ->
             {:error, {:producer_died, reason}}
