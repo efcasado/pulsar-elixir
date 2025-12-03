@@ -1,3 +1,9 @@
+## [2.2.1](https://github.com/efcasado/pulsar-elixir/compare/v2.2.0...v2.2.1) (2025-12-03)
+
+### Bug Fixes
+
+* **broadway:** stale consumer when using DLQ policy ([b03d3f8](https://github.com/efcasado/pulsar-elixir/commit/b03d3f81e46b2703c7c7fe908836c00cbbbe7ee1))
+
 ## [2.2.0](https://github.com/efcasado/pulsar-elixir/compare/v2.1.1...v2.2.0) (2025-12-03)
 
 ### Features
