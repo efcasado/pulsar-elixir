@@ -1,3 +1,9 @@
+## [2.2.0](https://github.com/efcasado/pulsar-elixir/compare/v2.1.1...v2.2.0) (2025-12-03)
+
+### Features
+
+* **producer:** support additional delivery options ([#76](https://github.com/efcasado/pulsar-elixir/issues/76)) ([fcff5ae](https://github.com/efcasado/pulsar-elixir/commit/fcff5ae3ccecc66f1fe0351eb2d572d258bd521f))
+
 ## [2.1.1](https://github.com/efcasado/pulsar-elixir/compare/v2.1.0...v2.1.1) (2025-12-03)
 
 ## [2.1.0](https://github.com/efcasado/pulsar-elixir/compare/v2.0.0...v2.1.0) (2025-12-01)
