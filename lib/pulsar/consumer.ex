@@ -501,11 +501,9 @@ defmodule Pulsar.Consumer do
     state = decrement_permits(state, num_messages)
 
     new_state =
-      if should_send_to_dead_letter?(state, redelivery_count) do
-        process_dead_letter_batch(state, payload, base_message_id, redelivery_count)
-      else
-        process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
-      end
+      process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
+
+    new_state = maybe_send_batch_to_dead_letter(new_state, payload, base_message_id, redelivery_count)
 
     {:noreply, new_state}
   end
@@ -557,15 +555,21 @@ defmodule Pulsar.Consumer do
     end
   end
 
-  defp process_dead_letter_batch(state, payload, base_message_id, redelivery_count) do
+  defp maybe_send_batch_to_dead_letter(state, _payload, _base_message_id, redelivery_count)
+       when is_nil(state.max_redelivery) or state.max_redelivery < 1 or redelivery_count < state.max_redelivery or
+              is_nil(state.dead_letter_producer_pid) do
+    state
+  end
+
+  defp maybe_send_batch_to_dead_letter(state, payload, base_message_id, redelivery_count) do
     Logger.warning(
-      "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ"
+      "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ "
     )
 
-    {final_callback_state, nacked_ids} =
+    nacked_ids =
       payload
       |> Enum.with_index()
-      |> Enum.reduce({state.callback_state, []}, fn {{_msg_metadata, msg_payload}, index}, {callback_state, nacked_acc} ->
+      |> Enum.reduce([], fn {{_msg_metadata, msg_payload}, index}, nacked_acc ->
         message_id_to_ack =
           if index == 0 and length(payload) == 1 do
             base_message_id
@@ -575,6 +579,7 @@ defmodule Pulsar.Consumer do
 
         case send_to_dead_letter(state, msg_payload, message_id_to_ack) do
           :ok ->
+            # ACK the message since it's now in DLQ
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
               ack_type: :Individual,
@@ -582,16 +587,15 @@ defmodule Pulsar.Consumer do
             }
 
             :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-            {callback_state, nacked_acc}
+            nacked_acc
 
           {:error, dlq_reason} ->
             Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            {callback_state, [message_id_to_ack | nacked_acc]}
+            [message_id_to_ack | nacked_acc]
         end
       end)
 
-    state = check_and_refill_permits(state)
-
+    # Add failed DLQ sends to nacked messages for redelivery
     new_nacked_messages =
       if state.redelivery_interval do
         MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
@@ -599,11 +603,7 @@ defmodule Pulsar.Consumer do
         state.nacked_messages
       end
 
-    %{
-      state
-      | callback_state: final_callback_state,
-        nacked_messages: new_nacked_messages
-    }
+    %{state | nacked_messages: new_nacked_messages}
   end
 
   defp process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count) do
@@ -930,13 +930,6 @@ defmodule Pulsar.Consumer do
 
     # Start a producer for the dead letter topic with the same client as the consumer
     Pulsar.Producer.start_link(dead_letter_topic, client: state.client)
-  end
-
-  defp should_send_to_dead_letter?(state, redelivery_count) do
-    state.max_redelivery != nil and
-      state.max_redelivery >= 1 and
-      redelivery_count > state.max_redelivery and
-      state.dead_letter_producer_pid != nil
   end
 
   defp send_to_dead_letter(state, payload, _message_id) do
