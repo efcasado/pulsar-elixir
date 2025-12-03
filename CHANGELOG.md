@@ -1,3 +1,5 @@
+## [2.1.1](https://github.com/efcasado/pulsar-elixir/compare/v2.1.0...v2.1.1) (2025-12-03)
+
 ## [2.1.0](https://github.com/efcasado/pulsar-elixir/compare/v2.0.0...v2.1.0) (2025-12-01)
 
 ### Features
