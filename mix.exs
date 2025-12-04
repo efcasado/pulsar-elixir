@@ -46,6 +46,7 @@ defmodule Pulsar.MixProject do
   defp deps do
     [
       {:crc32cer, "~> 1.1"},
+      {:castore, "~> 1.0"},
       {:ezstd, "~> 1.2"},
       {:jason, "~> 1.4"},
       {:nimble_lz4, "~> 1.1"},
