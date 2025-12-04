@@ -4,7 +4,7 @@ defmodule Pulsar.MixProject do
   def project do
     [
       app: :pulsar,
-      version: "2.2.3",
+      version: "2.2.4",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
