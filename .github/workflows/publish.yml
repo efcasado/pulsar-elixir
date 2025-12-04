@@ -1,0 +1,28 @@
+name: Publish
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  publish:
+    name: Publish package to Hex
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install mise
+      uses: jdx/mise-action@v2
+      with:
+        experimental: true
+
+    - name: Install tools with mise
+      run: mise install
+
+    - name: Publish package to Hex
+      shell: 'script -q -e -c "bash --noprofile --norc -eo pipefail {0}"'
+      run: make publish
+      env:
+        HEX_API_KEY: ${{ secrets.HEX_API_KEY }}

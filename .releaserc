@@ -22,8 +22,8 @@
         "replacements": [
           {
             "files": ["README.md"],
-            "from": 'tag: "v.*"',
-            "to": 'tag: "v${nextRelease.version}"',
+            "from": '{:pulsar_elixir, "~> .*"}',
+            "to": '{:pulsar_elixir, "~> ${nextRelease.version}"}',
             "results": [
               {
                 "file": "README.md",
