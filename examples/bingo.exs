@@ -68,7 +68,6 @@ defmodule Main do
 
     config = [
       host: @broker,
-      socket_opts: [verify: :verify_none],
       producers: [
         game_master: [
           topic: @topic

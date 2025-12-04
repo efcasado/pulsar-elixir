@@ -105,7 +105,6 @@ You can configure the client by adding the following configuration to your `conf
 ```elixir
 config :pulsar,
   host: "pulsar://localhost:6650",
-  socket_opts: [verify: :verify_none],
   auth: [
     type: Pulsar.Auth.OAuth2,
     opts: [
@@ -150,12 +149,10 @@ You can also configure multiple clients to connect to different Pulsar clusters:
 config :pulsar,
   clients: [
     default: [
-      host: "pulsar://localhost:6650",
-      socket_opts: [verify: :verify_none]
+      host: "pulsar://localhost:6650"
     ],
     cluster_2: [
       host: "pulsar://other-cluster:6650",
-      socket_opts: [verify: :verify_none],
       auth: [
         type: Pulsar.Auth.OAuth2,
         opts: [
@@ -228,7 +225,6 @@ Then, to produce message to a topic you can do as follows:
 ```elixir
 {:ok, message_id} = Pulsar.send(:my-producer, "Hello, Pulsar!")
 ```
-
 
 ## Testing
 
