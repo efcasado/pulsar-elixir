@@ -1,7 +1,7 @@
 [![CI](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/efcasado/pulsar-elixir/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/efcasado/pulsar-elixir/badge.svg?branch=main)](https://coveralls.io/github/efcasado/pulsar-elixir?branch=main)
-[![Release](https://img.shields.io/github/v/release/efcasado/pulsar-elixir)](https://github.com/efcasado/pulsar-elixir/releases)
-
+[![Package Version](https://img.shields.io/hexpm/v/pulsar_elixir.svg)](https://hex.pm/packages/pulsar_elixir)
+[![hexdocs.pm](https://img.shields.io/badge/hex-docs-purple.svg)](https://hexdocs.pm/pulsar_elixir/)
 
 # Elixir Client for Apache Pulsar
 
@@ -11,14 +11,14 @@ If you are interested in using this library together with [Broadway](https://git
 check our [Broadway producer for Pulsar](https://github.com/efcasado/off_broadway_pulsar).
 
 
-## Usage
+## Installation
 
-The package can be installed by adding `pulsar` to your list of dependencies in `mix.exs`:
+Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:pulsar, git: "https://github.com/efcasado/pulsar-elixir", tag: "v2.2.1"}
+    {:pulsar_elixir, "~> 2.2.1"}
   ]
 end
 ```

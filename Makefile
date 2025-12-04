@@ -1,6 +1,6 @@
 .PHONY: all deps setup compile shell test
 .PHONY: up down
-.PHONY: clean
+.PHONY: clean publish
 
 ## Targets
 ##=========================≈===============================================
@@ -31,3 +31,7 @@ down:
 
 clean:
 	mix clean
+
+publish: deps
+	mix local.hex --force
+	mix hex.publish --yes

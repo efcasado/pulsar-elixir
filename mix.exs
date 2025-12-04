@@ -24,6 +24,8 @@ defmodule Pulsar.MixProject do
       ],
       aliases: aliases(),
       name: "Pulsar",
+      description: description(),
+      package: package(),
       source_url: "https://github.com/efcasado/pulsar-elixir",
       docs: [
         main: "Pulsar",
@@ -67,6 +69,22 @@ defmodule Pulsar.MixProject do
   defp aliases do
     [
       test: ["test"]
+    ]
+  end
+
+  defp description do
+    "An Elixir client for Apache Pulsar."
+  end
+
+  defp package do
+    [
+      name: "pulsar_elixir",
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md),
+      licenses: ~w(MIT),
+      links: %{
+        "GitHub" => "https://github.com/efcasado/pulsar-elixir",
+        "Changelog" => "https://github.com/efcasado/pulsar-elixir/blob/main/CHANGELOG.md"
+      }
     ]
   end
 end
