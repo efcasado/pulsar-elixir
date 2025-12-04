@@ -5,14 +5,58 @@
 
 # Elixir Client for Apache Pulsar
 
-> [!CAUTION]
-> This project is a prototype in very early development. APIs are likely to break often
-> until the project reaches its first stable release.
-
 An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 
 If you are interested in using this library together with [Broadway](https://github.com/dashbitco/broadway),
 check our [Broadway producer for Pulsar](https://github.com/efcasado/off_broadway_pulsar).
+
+
+## Usage
+
+The package can be installed by adding `pulsar` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:pulsar, git: "https://github.com/efcasado/pulsar-elixir", tag: "v2.2.1"}
+  ]
+end
+```
+
+
+## Quick Start
+
+```elixir
+config :pulsar,
+  host: "pulsar://localhost:6650",
+  consumers: [
+    my_consumer: [
+        topic: "persistent://my-tenant/my-namespace/my-topic",
+        subscription_name: "my-subscription",
+        callback_module: MyPulsarConsumer
+    ]
+  ],
+  producers: [
+    my_producer: [
+        topic: "persistent://my-tenant/my-namespace/my-topic"
+    ]
+  ]
+```
+
+```elixir
+defmodule MyPulsarConsumer do
+  use Pulsar.Consumer.Callback
+
+  def handle_message(message, _state) do
+    IO.puts("Received: #{message.payload}")
+  end
+end
+```
+
+```elixir
+Pulsar.send(:my_producer, "Hello, Pulsar!")
+```
+
 
 ## Architecture
 
@@ -53,18 +97,6 @@ Pulsar.Supervisor
             └── P1
 ```
 
-
-## Usage
-
-The package can be installed by adding `pulsar` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:pulsar, git: "https://github.com/efcasado/pulsar-elixir", tag: "v2.2.1"}
-  ]
-end
-```
 
 ### Single Client Configuration
 
