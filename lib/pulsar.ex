@@ -501,18 +501,38 @@ defmodule Pulsar do
     producer_supervisor = Pulsar.Client.producer_supervisor(client)
     {name, producer_opts} = Keyword.pop(opts, :name, "#{topic}-producer")
 
-    child_spec = %{
-      id: name,
-      start: {
-        Pulsar.ProducerGroup,
-        :start_link,
-        [name, topic, producer_opts]
-      },
-      restart: :transient,
-      type: :supervisor
-    }
+    case check_partitioned_topic(topic, client) do
+      {:ok, 0} ->
+        child_spec = %{
+          id: name,
+          start: {
+            Pulsar.ProducerGroup,
+            :start_link,
+            [name, topic, producer_opts]
+          },
+          restart: :transient,
+          type: :supervisor
+        }
 
-    DynamicSupervisor.start_child(producer_supervisor, child_spec)
+        DynamicSupervisor.start_child(producer_supervisor, child_spec)
+
+      {:ok, partitions} when partitions > 0 ->
+        child_spec = %{
+          id: name,
+          start: {
+            Pulsar.PartitionedProducer,
+            :start_link,
+            [name, topic, partitions, producer_opts]
+          },
+          restart: :transient,
+          type: :supervisor
+        }
+
+        DynamicSupervisor.start_child(producer_supervisor, child_spec)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -541,7 +561,7 @@ defmodule Pulsar do
   def stop_producer(group_pid, opts \\ [])
 
   def stop_producer(group_pid, _opts) when is_pid(group_pid) do
-    Pulsar.ProducerGroup.stop(group_pid)
+    Supervisor.stop(group_pid)
   end
 
   def stop_producer(group_pid, opts) when is_binary(group_pid) do
@@ -601,7 +621,19 @@ defmodule Pulsar do
   def get_producers(group_pid, opts \\ [])
 
   def get_producers(group_pid, _opts) when is_pid(group_pid) do
-    Pulsar.ProducerGroup.get_producers(group_pid)
+    # Check which type of supervisor this is based on child type
+    case Supervisor.which_children(group_pid) do
+      [] ->
+        []
+
+      [{_id, _, :supervisor, _} | _] ->
+        # PartitionedProducer (children are ProducerGroups - supervisors)
+        Pulsar.PartitionedProducer.get_producers(group_pid)
+
+      [{_id, _, :worker, _} | _] ->
+        # ProducerGroup (children are Producer workers)
+        Pulsar.ProducerGroup.get_producers(group_pid)
+    end
   end
 
   def get_producers(group_id, opts) when is_binary(group_id) do
@@ -758,7 +790,7 @@ defmodule Pulsar do
   - `message` - Binary message payload
   - `opts` - Optional parameters:
     - `:timeout` - Timeout in milliseconds (default: 5000)
-    - `:key` - Partition routing key (string)
+    - `:partition_key` - Partition routing key (string)
     - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
     - `:properties` - Custom message metadata as a map (e.g., `%{"trace_id" => "abc"}`)
     - `:event_time` - Application event timestamp (DateTime or milliseconds since epoch)
@@ -789,7 +821,7 @@ defmodule Pulsar do
   def send(producer_group_pid_or_name, message, opts \\ [])
 
   def send(producer_group_pid, message, opts) when is_pid(producer_group_pid) do
-    Pulsar.ProducerGroup.send_message(producer_group_pid, message, opts)
+    send_to_producer(producer_group_pid, message, opts)
   end
 
   def send(producer_group_name, message, opts) when is_binary(message) do
@@ -797,10 +829,17 @@ defmodule Pulsar do
 
     case lookup_producer(producer_group_name, client: client) do
       {:ok, group_pid} ->
-        Pulsar.ProducerGroup.send_message(group_pid, message, opts)
+        send_to_producer(group_pid, message, opts)
 
       {:error, :not_found} ->
         {:error, :producer_not_found}
+    end
+  end
+
+  defp send_to_producer(producer_pid, message, opts) do
+    case Supervisor.which_children(producer_pid) do
+      [{_id, _, :supervisor, _} | _] -> Pulsar.PartitionedProducer.send_message(producer_pid, message, opts)
+      _ -> Pulsar.ProducerGroup.send_message(producer_pid, message, opts)
     end
   end
 

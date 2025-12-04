@@ -134,7 +134,7 @@ defmodule Pulsar.Producer do
   - `message` - Binary message payload
   - `opts` - Optional parameters:
     - `:timeout` - Timeout in milliseconds (default: 5000)
-    - `:key` - Partition routing key (string)
+    - `:partition_key` - Partition routing key (string)
     - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
     - `:properties` - Custom message metadata as a map (e.g., `%{"trace_id" => "abc"}`)
     - `:event_time` - Application event timestamp (DateTime or milliseconds since epoch)
@@ -247,7 +247,7 @@ defmodule Pulsar.Producer do
       publish_time: System.system_time(:millisecond),
       uncompressed_size: byte_size(payload),
       compression: state.compression,
-      partition_key: Keyword.get(opts, :key),
+      partition_key: Keyword.get(opts, :partition_key),
       ordering_key: Keyword.get(opts, :ordering_key),
       properties: to_key_value_list(Keyword.get(opts, :properties)),
       event_time: to_timestamp(Keyword.get(opts, :event_time)),

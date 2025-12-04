@@ -82,7 +82,7 @@ defmodule Pulsar.ProducerGroup do
   - `message` - Binary message payload
   - `opts` - Optional parameters:
     - `:timeout` - Timeout in milliseconds (default: 5000)
-    - `:key` - Partition routing key (string)
+    - `:partition_key` - Partition routing key (string)
     - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
     - `:properties` - Custom message metadata as a map
     - `:event_time` - Application event timestamp (DateTime or milliseconds)
