@@ -93,8 +93,16 @@ Pulsar.Supervisor
     │           └── C4
     │
     └── ProducerSupervisor
-        └── ProducerGroup: my-topic
-            └── P1
+        ├── ProducerGroup: my-topic
+        │   └── P1
+        │
+        └── PartitionedProducer: my-partitioned-topic
+            ├── ProducerGroup partition-0
+            │   └── P2
+            ├── ProducerGroup partition-1
+            │   └── P3
+            └── ProducerGroup partition-2
+                └── P4
 ```
 
 
@@ -291,7 +299,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Chunking                           | ❌        |
 | Producer  | Compression                        | ✅        |
 | Producer  | Schema                             | ❌        |
-| Producer  | Partitioned topics                 | ❌        |
+| Producer  | Partitioned topics                 | ✅        |
 | Producer  | Access modes                       | ✅        |
 | Consumer  | ACK                                | ✅        |
 | Consumer  | Batch-index ACK                    | ✅        |
