@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
   test "send message with partition key", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "payload with key", key: "user-123", client: @client)
+             Pulsar.send(producer, "payload with key", partition_key: "user-123", client: @client)
 
     message = wait_for_message(consumer, "payload with key")
     assert message.metadata.partition_key == "user-123"
@@ -148,7 +148,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
     assert {:ok, _message_id} =
              Pulsar.send(producer, "complex payload",
-               key: "user-999",
+               partition_key: "user-999",
                ordering_key: "order-888",
                properties: properties,
                event_time: event_time,
