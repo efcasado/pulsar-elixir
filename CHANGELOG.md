@@ -1,3 +1,9 @@
+## [2.2.3](https://github.com/efcasado/pulsar-elixir/compare/v2.2.2...v2.2.3) (2025-12-04)
+
+### Bug Fixes
+
+* better ssl defaults using castore ([1c20a54](https://github.com/efcasado/pulsar-elixir/commit/1c20a54e70eb0b80720a3cfe97985af4578332ae))
+
 ## [2.2.2](https://github.com/efcasado/pulsar-elixir/compare/v2.2.1...v2.2.2) (2025-12-04)
 
 ## [2.2.1](https://github.com/efcasado/pulsar-elixir/compare/v2.2.0...v2.2.1) (2025-12-03)
