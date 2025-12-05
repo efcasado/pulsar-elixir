@@ -3,7 +3,7 @@ defmodule Pulsar.MixProject do
 
   def project do
     [
-      app: :pulsar,
+      app: :pulsar_elixir,
       version: "2.2.6",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,

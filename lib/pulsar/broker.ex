@@ -951,7 +951,7 @@ defmodule Pulsar.Broker do
 
   defp next_backoff(%__MODULE__{prev_backoff: prev}) do
     next = round(prev * 2)
-    max_backoff = Application.get_env(:pulsar, :max_backoff, 30_000)
+    max_backoff = Application.get_env(:pulsar_elixir, :max_backoff, 30_000)
     next = min(next, max_backoff)
     next + :rand.uniform(100)
   end

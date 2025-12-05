@@ -27,7 +27,7 @@ end
 ## Quick Start
 
 ```elixir
-config :pulsar,
+config :pulsar_elixir,
   host: "pulsar://localhost:6650",
   consumers: [
     my_consumer: [
@@ -103,7 +103,7 @@ Pulsar.Supervisor
 You can configure the client by adding the following configuration to your `config/config.exs`:
 
 ```elixir
-config :pulsar,
+config :pulsar_elixir,
   host: "pulsar://localhost:6650",
   auth: [
     type: Pulsar.Auth.OAuth2,
@@ -146,7 +146,7 @@ config :pulsar,
 You can also configure multiple clients to connect to different Pulsar clusters:
 
 ```elixir
-config :pulsar,
+config :pulsar_elixir,
   clients: [
     default: [
       host: "pulsar://localhost:6650"

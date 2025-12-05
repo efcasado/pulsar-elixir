@@ -14,7 +14,7 @@ defmodule Pulsar.Client do
   When using `Pulsar.start/1`, a default client is automatically created:
 
       # config.exs
-      config :pulsar,
+      config :pulsar_elixir,
         host: "pulsar://localhost:6650",
         consumers: [...]
 
@@ -265,7 +265,7 @@ defmodule Pulsar.Client do
   defp build_broker_opts(opts) do
     app_opts =
       @supported_broker_opts
-      |> Enum.map(fn key -> {key, Application.get_env(:pulsar, key)} end)
+      |> Enum.map(fn key -> {key, Application.get_env(:pulsar_elixir, key)} end)
       |> Enum.reject(fn {_, v} -> is_nil(v) end)
 
     passed_opts =

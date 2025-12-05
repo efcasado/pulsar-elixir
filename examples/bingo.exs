@@ -63,7 +63,7 @@ defmodule Main do
   end
 
   def run do
-    deps = Application.spec(:pulsar, :applications)
+    deps = Application.spec(:pulsar_elixir, :applications)
     Enum.each(deps, &Application.ensure_all_started/1)
 
     config = [

@@ -114,17 +114,17 @@ defmodule Pulsar do
   @impl true
   def start(_type, opts) do
     consumers =
-      Keyword.get(opts, :consumers, Application.get_env(:pulsar, :consumers, []))
+      Keyword.get(opts, :consumers, Application.get_env(:pulsar_elixir, :consumers, []))
 
     producers =
-      Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
+      Keyword.get(opts, :producers, Application.get_env(:pulsar_elixir, :producers, []))
 
     # Get client configurations - support both :clients (multi-client) and :host (single client)
     clients_config =
-      case Keyword.get(opts, :clients, Application.get_env(:pulsar, :clients)) do
+      case Keyword.get(opts, :clients, Application.get_env(:pulsar_elixir, :clients)) do
         nil ->
           # Fallback to legacy single-client mode with :host
-          bootstrap_host = Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
+          bootstrap_host = Keyword.get(opts, :host, Application.get_env(:pulsar_elixir, :host))
           if bootstrap_host, do: [{@default_client, [host: bootstrap_host] ++ opts}], else: []
 
         clients when is_list(clients) ->
