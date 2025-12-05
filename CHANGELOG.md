@@ -1,3 +1,10 @@
+## [2.2.6](https://github.com/efcasado/pulsar-elixir/compare/v2.2.5...v2.2.6) (2025-12-05)
+
+### Bug Fixes
+
+* **build:** wrong protoc-gen-elixir path ([099b4b6](https://github.com/efcasado/pulsar-elixir/commit/099b4b633bac78d8e49156c9ce45e0dab2151c58))
+* regenerate protobuf models ([e9c4225](https://github.com/efcasado/pulsar-elixir/commit/e9c42253184e03db060a7c85be4244171a3fc633))
+
 ## [2.2.5](https://github.com/efcasado/pulsar-elixir/compare/v2.2.4...v2.2.5) (2025-12-05)
 
 ## [2.2.4](https://github.com/efcasado/pulsar-elixir/compare/v2.2.3...v2.2.4) (2025-12-04)
