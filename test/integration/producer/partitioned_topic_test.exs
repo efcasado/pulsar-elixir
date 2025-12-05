@@ -12,7 +12,6 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
   setup_all do
     broker = System.broker()
 
-    # Create a partitioned topic with 3 partitions
     System.create_topic(@topic, 3)
 
     {:ok, _client_pid} =
@@ -71,7 +70,6 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     consumers = wait_for_consumer_ready(3)
 
-    # Send messages with the same partition_key (should go to the same partition)
     partition_key = "same-partition-key-#{test_id}"
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
 

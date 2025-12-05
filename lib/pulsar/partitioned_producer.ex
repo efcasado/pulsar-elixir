@@ -129,7 +129,6 @@ defmodule Pulsar.PartitionedProducer do
         partition_topic = "#{topic}-partition-#{partition_index}"
         partition_group_name = "#{name}-partition-#{partition_index}"
 
-        # Create ProducerGroup spec for this partition
         %{
           id: partition_topic,
           start: {
