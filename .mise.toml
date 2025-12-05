@@ -19,12 +19,12 @@ run = "curl -o pulsar.proto https://raw.githubusercontent.com/apache/pulsar/refs
 
 [tasks."proto:install-plugin"]
 description = "Install protobuf Elixir plugin"
-run = "mix escript.install hex protobuf 0.13.0 --force"
+run = "mix escript.install hex protobuf 0.15.0 --force"
 
 [tasks."proto:generate"]
 description = "Generate Elixir code from protobuf"
 run = [
-    "protoc --plugin=${HOME}/.mix/escripts/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
+    "protoc --plugin=$(mise where elixir)/.mix/escripts/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
     "mv lib/pulsar.pb.ex lib/pulsar/protocol/binary.ex"
 ]
 depends = ["proto:download", "proto:install-plugin"]
