@@ -22,8 +22,8 @@
         "replacements": [
           {
             "files": ["README.md"],
-            "from": '{:pulsar_elixir, "~> .*"}',
-            "to": '{:pulsar_elixir, "~> ${nextRelease.version}"}',
+            "from": '{:pulsar, "~> .*", hex: :pulsar_elixir}',
+            "to": '{:pulsar, "~> ${nextRelease.version}", hex: :pulsar_elixir}',
             "results": [
               {
                 "file": "README.md",
