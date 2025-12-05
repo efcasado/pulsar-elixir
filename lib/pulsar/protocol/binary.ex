@@ -1,7 +1,7 @@
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CompressionType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:NONE, 0)
   field(:LZ4, 1)
@@ -13,7 +13,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ProducerAccessMode do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Shared, 0)
   field(:Exclusive, 1)
@@ -24,7 +24,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ServerError do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:UnknownError, 0)
   field(:MetadataError, 1)
@@ -57,7 +57,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.AuthMethod do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:AuthMethodNone, 0)
   field(:AuthMethodYcaV1, 1)
@@ -67,7 +67,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ProtocolVersion do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:v0, 0)
   field(:v1, 1)
@@ -96,7 +96,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.KeySharedMode do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:AUTO_SPLIT, 0)
   field(:STICKY, 1)
@@ -105,7 +105,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.TxnAction do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:COMMIT, 0)
   field(:ABORT, 1)
@@ -114,7 +114,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.Schema.Type do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:None, 0)
   field(:String, 1)
@@ -143,7 +143,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe.SubType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Exclusive, 0)
   field(:Shared, 1)
@@ -154,7 +154,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe.InitialPosition do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Latest, 0)
   field(:Earliest, 1)
@@ -163,7 +163,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandPartitionedTopicMetadataResponse.LookupType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Success, 0)
   field(:Failed, 1)
@@ -172,7 +172,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopicResponse.LookupType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Redirect, 0)
   field(:Connect, 1)
@@ -182,7 +182,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAck.AckType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Individual, 0)
   field(:Cumulative, 1)
@@ -191,7 +191,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAck.ValidationError do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:UncompressedSizeCorruption, 0)
   field(:DecompressionError, 1)
@@ -203,7 +203,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTopicMigrated.ResourceType do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:Producer, 0)
   field(:Consumer, 1)
@@ -212,7 +212,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespace.Mode do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:PERSISTENT, 0)
   field(:NON_PERSISTENT, 1)
@@ -222,7 +222,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand.Type do
   @moduledoc false
 
-  use Protobuf, enum: true, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, enum: true, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:CONNECT, 2)
   field(:CONNECTED, 3)
@@ -287,10 +287,10 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.Schema do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:name, 1, required: true, type: :string)
-  field(:schema_data, 3, required: true, type: :bytes)
+  field(:schema_data, 3, required: true, type: :bytes, json_name: "schemaData")
 
   field(:type, 4,
     required: true,
@@ -304,25 +304,26 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:ledgerId, 1, required: true, type: :uint64)
   field(:entryId, 2, required: true, type: :uint64)
   field(:partition, 3, optional: true, type: :int32, default: -1)
-  field(:batch_index, 4, optional: true, type: :int32, default: -1)
-  field(:ack_set, 5, repeated: true, type: :int64)
-  field(:batch_size, 6, optional: true, type: :int32)
+  field(:batch_index, 4, optional: true, type: :int32, json_name: "batchIndex", default: -1)
+  field(:ack_set, 5, repeated: true, type: :int64, json_name: "ackSet")
+  field(:batch_size, 6, optional: true, type: :int32, json_name: "batchSize")
 
   field(:first_chunk_message_id, 7,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "firstChunkMessageId"
   )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:key, 1, required: true, type: :string)
   field(:value, 2, required: true, type: :string)
@@ -331,7 +332,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.KeyLongValue do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:key, 1, required: true, type: :string)
   field(:value, 2, required: true, type: :uint64)
@@ -340,7 +341,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.IntRange do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:start, 1, required: true, type: :int32)
   field(:end, 2, required: true, type: :int32)
@@ -349,7 +350,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.EncryptionKeys do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:key, 1, required: true, type: :string)
   field(:value, 2, required: true, type: :bytes)
@@ -359,15 +360,15 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:producer_name, 1, required: true, type: :string)
-  field(:sequence_id, 2, required: true, type: :uint64)
-  field(:publish_time, 3, required: true, type: :uint64)
+  field(:producer_name, 1, required: true, type: :string, json_name: "producerName")
+  field(:sequence_id, 2, required: true, type: :uint64, json_name: "sequenceId")
+  field(:publish_time, 3, required: true, type: :uint64, json_name: "publishTime")
   field(:properties, 4, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
-  field(:replicated_from, 5, optional: true, type: :string)
-  field(:partition_key, 6, optional: true, type: :string)
-  field(:replicate_to, 7, repeated: true, type: :string)
+  field(:replicated_from, 5, optional: true, type: :string, json_name: "replicatedFrom")
+  field(:partition_key, 6, optional: true, type: :string, json_name: "partitionKey")
+  field(:replicate_to, 7, repeated: true, type: :string, json_name: "replicateTo")
 
   field(:compression, 8,
     optional: true,
@@ -376,101 +377,180 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata do
     enum: true
   )
 
-  field(:uncompressed_size, 9, optional: true, type: :uint32, default: 0)
-  field(:num_messages_in_batch, 11, optional: true, type: :int32, default: 1)
-  field(:event_time, 12, optional: true, type: :uint64, default: 0)
+  field(:uncompressed_size, 9,
+    optional: true,
+    type: :uint32,
+    json_name: "uncompressedSize",
+    default: 0
+  )
+
+  field(:num_messages_in_batch, 11,
+    optional: true,
+    type: :int32,
+    json_name: "numMessagesInBatch",
+    default: 1
+  )
+
+  field(:event_time, 12, optional: true, type: :uint64, json_name: "eventTime", default: 0)
 
   field(:encryption_keys, 13,
     repeated: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.EncryptionKeys
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.EncryptionKeys,
+    json_name: "encryptionKeys"
   )
 
-  field(:encryption_algo, 14, optional: true, type: :string)
-  field(:encryption_param, 15, optional: true, type: :bytes)
-  field(:schema_version, 16, optional: true, type: :bytes)
-  field(:partition_key_b64_encoded, 17, optional: true, type: :bool, default: false)
-  field(:ordering_key, 18, optional: true, type: :bytes)
-  field(:deliver_at_time, 19, optional: true, type: :int64)
-  field(:marker_type, 20, optional: true, type: :int32)
-  field(:txnid_least_bits, 22, optional: true, type: :uint64)
-  field(:txnid_most_bits, 23, optional: true, type: :uint64)
-  field(:highest_sequence_id, 24, optional: true, type: :uint64, default: 0)
-  field(:null_value, 25, optional: true, type: :bool, default: false)
+  field(:encryption_algo, 14, optional: true, type: :string, json_name: "encryptionAlgo")
+  field(:encryption_param, 15, optional: true, type: :bytes, json_name: "encryptionParam")
+  field(:schema_version, 16, optional: true, type: :bytes, json_name: "schemaVersion")
+
+  field(:partition_key_b64_encoded, 17,
+    optional: true,
+    type: :bool,
+    json_name: "partitionKeyB64Encoded",
+    default: false
+  )
+
+  field(:ordering_key, 18, optional: true, type: :bytes, json_name: "orderingKey")
+  field(:deliver_at_time, 19, optional: true, type: :int64, json_name: "deliverAtTime")
+  field(:marker_type, 20, optional: true, type: :int32, json_name: "markerType")
+  field(:txnid_least_bits, 22, optional: true, type: :uint64, json_name: "txnidLeastBits")
+  field(:txnid_most_bits, 23, optional: true, type: :uint64, json_name: "txnidMostBits")
+
+  field(:highest_sequence_id, 24,
+    optional: true,
+    type: :uint64,
+    json_name: "highestSequenceId",
+    default: 0
+  )
+
+  field(:null_value, 25, optional: true, type: :bool, json_name: "nullValue", default: false)
   field(:uuid, 26, optional: true, type: :string)
-  field(:num_chunks_from_msg, 27, optional: true, type: :int32)
-  field(:total_chunk_msg_size, 28, optional: true, type: :int32)
-  field(:chunk_id, 29, optional: true, type: :int32)
-  field(:null_partition_key, 30, optional: true, type: :bool, default: false)
+  field(:num_chunks_from_msg, 27, optional: true, type: :int32, json_name: "numChunksFromMsg")
+  field(:total_chunk_msg_size, 28, optional: true, type: :int32, json_name: "totalChunkMsgSize")
+  field(:chunk_id, 29, optional: true, type: :int32, json_name: "chunkId")
+
+  field(:null_partition_key, 30,
+    optional: true,
+    type: :bool,
+    json_name: "nullPartitionKey",
+    default: false
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.SingleMessageMetadata do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:properties, 1, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
-  field(:partition_key, 2, optional: true, type: :string)
-  field(:payload_size, 3, required: true, type: :int32)
-  field(:compacted_out, 4, optional: true, type: :bool, default: false)
-  field(:event_time, 5, optional: true, type: :uint64, default: 0)
-  field(:partition_key_b64_encoded, 6, optional: true, type: :bool, default: false)
-  field(:ordering_key, 7, optional: true, type: :bytes)
-  field(:sequence_id, 8, optional: true, type: :uint64)
-  field(:null_value, 9, optional: true, type: :bool, default: false)
-  field(:null_partition_key, 10, optional: true, type: :bool, default: false)
+  field(:partition_key, 2, optional: true, type: :string, json_name: "partitionKey")
+  field(:payload_size, 3, required: true, type: :int32, json_name: "payloadSize")
+  field(:compacted_out, 4, optional: true, type: :bool, json_name: "compactedOut", default: false)
+  field(:event_time, 5, optional: true, type: :uint64, json_name: "eventTime", default: 0)
+
+  field(:partition_key_b64_encoded, 6,
+    optional: true,
+    type: :bool,
+    json_name: "partitionKeyB64Encoded",
+    default: false
+  )
+
+  field(:ordering_key, 7, optional: true, type: :bytes, json_name: "orderingKey")
+  field(:sequence_id, 8, optional: true, type: :uint64, json_name: "sequenceId")
+  field(:null_value, 9, optional: true, type: :bool, json_name: "nullValue", default: false)
+
+  field(:null_partition_key, 10,
+    optional: true,
+    type: :bool,
+    json_name: "nullPartitionKey",
+    default: false
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BrokerEntryMetadata do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:broker_timestamp, 1, optional: true, type: :uint64)
+  field(:broker_timestamp, 1, optional: true, type: :uint64, json_name: "brokerTimestamp")
   field(:index, 2, optional: true, type: :uint64)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandConnect do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:client_version, 1, required: true, type: :string)
+  field(:client_version, 1, required: true, type: :string, json_name: "clientVersion")
 
   field(:auth_method, 2,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.AuthMethod,
+    json_name: "authMethod",
     enum: true
   )
 
-  field(:auth_method_name, 5, optional: true, type: :string)
-  field(:auth_data, 3, optional: true, type: :bytes)
-  field(:protocol_version, 4, optional: true, type: :int32, default: 0)
-  field(:proxy_to_broker_url, 6, optional: true, type: :string)
-  field(:original_principal, 7, optional: true, type: :string)
-  field(:original_auth_data, 8, optional: true, type: :string)
-  field(:original_auth_method, 9, optional: true, type: :string)
+  field(:auth_method_name, 5, optional: true, type: :string, json_name: "authMethodName")
+  field(:auth_data, 3, optional: true, type: :bytes, json_name: "authData")
+
+  field(:protocol_version, 4,
+    optional: true,
+    type: :int32,
+    json_name: "protocolVersion",
+    default: 0
+  )
+
+  field(:proxy_to_broker_url, 6, optional: true, type: :string, json_name: "proxyToBrokerUrl")
+  field(:original_principal, 7, optional: true, type: :string, json_name: "originalPrincipal")
+  field(:original_auth_data, 8, optional: true, type: :string, json_name: "originalAuthData")
+  field(:original_auth_method, 9, optional: true, type: :string, json_name: "originalAuthMethod")
 
   field(:feature_flags, 10,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags,
+    json_name: "featureFlags"
   )
 
-  field(:proxy_version, 11, optional: true, type: :string)
+  field(:proxy_version, 11, optional: true, type: :string, json_name: "proxyVersion")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:supports_auth_refresh, 1, optional: true, type: :bool, default: false)
-  field(:supports_broker_entry_metadata, 2, optional: true, type: :bool, default: false)
-  field(:supports_partial_producer, 3, optional: true, type: :bool, default: false)
-  field(:supports_topic_watchers, 4, optional: true, type: :bool, default: false)
+  field(:supports_auth_refresh, 1,
+    optional: true,
+    type: :bool,
+    json_name: "supportsAuthRefresh",
+    default: false
+  )
+
+  field(:supports_broker_entry_metadata, 2,
+    optional: true,
+    type: :bool,
+    json_name: "supportsBrokerEntryMetadata",
+    default: false
+  )
+
+  field(:supports_partial_producer, 3,
+    optional: true,
+    type: :bool,
+    json_name: "supportsPartialProducer",
+    default: false
+  )
+
+  field(:supports_topic_watchers, 4,
+    optional: true,
+    type: :bool,
+    json_name: "supportsTopicWatchers",
+    default: false
+  )
 
   field(:supports_get_partitioned_metadata_without_auto_creation, 5,
     optional: true,
     type: :bool,
+    json_name: "supportsGetPartitionedMetadataWithoutAutoCreation",
     default: false
   )
 end
@@ -478,47 +558,71 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandConnected do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:server_version, 1, required: true, type: :string)
-  field(:protocol_version, 2, optional: true, type: :int32, default: 0)
-  field(:max_message_size, 3, optional: true, type: :int32)
-  field(:feature_flags, 4, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags)
+  field(:server_version, 1, required: true, type: :string, json_name: "serverVersion")
+
+  field(:protocol_version, 2,
+    optional: true,
+    type: :int32,
+    json_name: "protocolVersion",
+    default: 0
+  )
+
+  field(:max_message_size, 3, optional: true, type: :int32, json_name: "maxMessageSize")
+
+  field(:feature_flags, 4,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags,
+    json_name: "featureFlags"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAuthResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:client_version, 1, optional: true, type: :string)
+  field(:client_version, 1, optional: true, type: :string, json_name: "clientVersion")
   field(:response, 2, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.AuthData)
-  field(:protocol_version, 3, optional: true, type: :int32, default: 0)
+
+  field(:protocol_version, 3,
+    optional: true,
+    type: :int32,
+    json_name: "protocolVersion",
+    default: 0
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAuthChallenge do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:server_version, 1, optional: true, type: :string)
+  field(:server_version, 1, optional: true, type: :string, json_name: "serverVersion")
   field(:challenge, 2, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.AuthData)
-  field(:protocol_version, 3, optional: true, type: :int32, default: 0)
+
+  field(:protocol_version, 3,
+    optional: true,
+    type: :int32,
+    json_name: "protocolVersion",
+    default: 0
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.AuthData do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:auth_method_name, 1, optional: true, type: :string)
-  field(:auth_data, 2, optional: true, type: :bytes)
+  field(:auth_method_name, 1, optional: true, type: :string, json_name: "authMethodName")
+  field(:auth_data, 2, optional: true, type: :bytes, json_name: "authData")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.KeySharedMeta do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:keySharedMode, 1,
     required: true,
@@ -533,7 +637,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue
 
@@ -546,19 +650,20 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
     enum: true
   )
 
-  field(:consumer_id, 4, required: true, type: :uint64)
-  field(:request_id, 5, required: true, type: :uint64)
-  field(:consumer_name, 6, optional: true, type: :string)
-  field(:priority_level, 7, optional: true, type: :int32)
+  field(:consumer_id, 4, required: true, type: :uint64, json_name: "consumerId")
+  field(:request_id, 5, required: true, type: :uint64, json_name: "requestId")
+  field(:consumer_name, 6, optional: true, type: :string, json_name: "consumerName")
+  field(:priority_level, 7, optional: true, type: :int32, json_name: "priorityLevel")
   field(:durable, 8, optional: true, type: :bool, default: true)
 
   field(:start_message_id, 9,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "startMessageId"
   )
 
   field(:metadata, 10, repeated: true, type: KeyValue)
-  field(:read_compacted, 11, optional: true, type: :bool)
+  field(:read_compacted, 11, optional: true, type: :bool, json_name: "readCompacted")
   field(:schema, 12, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
 
   field(:initialPosition, 13,
@@ -568,9 +673,25 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
     enum: true
   )
 
-  field(:replicate_subscription_state, 14, optional: true, type: :bool)
-  field(:force_topic_creation, 15, optional: true, type: :bool, default: true)
-  field(:start_message_rollback_duration_sec, 16, optional: true, type: :uint64, default: 0)
+  field(:replicate_subscription_state, 14,
+    optional: true,
+    type: :bool,
+    json_name: "replicateSubscriptionState"
+  )
+
+  field(:force_topic_creation, 15,
+    optional: true,
+    type: :bool,
+    json_name: "forceTopicCreation",
+    default: true
+  )
+
+  field(:start_message_rollback_duration_sec, 16,
+    optional: true,
+    type: :uint64,
+    json_name: "startMessageRollbackDurationSec",
+    default: 0
+  )
 
   field(:keySharedMeta, 17,
     optional: true,
@@ -579,32 +700,39 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe do
 
   field(:subscription_properties, 18,
     repeated: true,
-    type: KeyValue
+    type: KeyValue,
+    json_name: "subscriptionProperties"
   )
 
-  field(:consumer_epoch, 19, optional: true, type: :uint64)
+  field(:consumer_epoch, 19, optional: true, type: :uint64, json_name: "consumerEpoch")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandPartitionedTopicMetadata do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:topic, 1, required: true, type: :string)
-  field(:request_id, 2, required: true, type: :uint64)
-  field(:original_principal, 3, optional: true, type: :string)
-  field(:original_auth_data, 4, optional: true, type: :string)
-  field(:original_auth_method, 5, optional: true, type: :string)
-  field(:metadata_auto_creation_enabled, 6, optional: true, type: :bool, default: true)
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
+  field(:original_principal, 3, optional: true, type: :string, json_name: "originalPrincipal")
+  field(:original_auth_data, 4, optional: true, type: :string, json_name: "originalAuthData")
+  field(:original_auth_method, 5, optional: true, type: :string, json_name: "originalAuthMethod")
+
+  field(:metadata_auto_creation_enabled, 6,
+    optional: true,
+    type: :bool,
+    json_name: "metadataAutoCreationEnabled",
+    default: true
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandPartitionedTopicMetadataResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:partitions, 1, optional: true, type: :uint32)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
 
   field(:response, 3,
     optional: true,
@@ -624,21 +752,26 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopic do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:topic, 1, required: true, type: :string)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
   field(:authoritative, 3, optional: true, type: :bool, default: false)
-  field(:original_principal, 4, optional: true, type: :string)
-  field(:original_auth_data, 5, optional: true, type: :string)
-  field(:original_auth_method, 6, optional: true, type: :string)
-  field(:advertised_listener_name, 7, optional: true, type: :string)
+  field(:original_principal, 4, optional: true, type: :string, json_name: "originalPrincipal")
+  field(:original_auth_data, 5, optional: true, type: :string, json_name: "originalAuthData")
+  field(:original_auth_method, 6, optional: true, type: :string, json_name: "originalAuthMethod")
+
+  field(:advertised_listener_name, 7,
+    optional: true,
+    type: :string,
+    json_name: "advertisedListenerName"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopicResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:brokerServiceUrl, 1, optional: true, type: :string)
   field(:brokerServiceUrlTls, 2, optional: true, type: :string)
@@ -649,7 +782,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopicResponse do
     enum: true
   )
 
-  field(:request_id, 4, required: true, type: :uint64)
+  field(:request_id, 4, required: true, type: :uint64, json_name: "requestId")
   field(:authoritative, 5, optional: true, type: :bool, default: false)
 
   field(:error, 6,
@@ -659,70 +792,118 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopicResponse do
   )
 
   field(:message, 7, optional: true, type: :string)
-  field(:proxy_through_service_url, 8, optional: true, type: :bool, default: false)
+
+  field(:proxy_through_service_url, 8,
+    optional: true,
+    type: :bool,
+    json_name: "proxyThroughServiceUrl",
+    default: false
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandProducer do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:topic, 1, required: true, type: :string)
-  field(:producer_id, 2, required: true, type: :uint64)
-  field(:request_id, 3, required: true, type: :uint64)
-  field(:producer_name, 4, optional: true, type: :string)
+  field(:producer_id, 2, required: true, type: :uint64, json_name: "producerId")
+  field(:request_id, 3, required: true, type: :uint64, json_name: "requestId")
+  field(:producer_name, 4, optional: true, type: :string, json_name: "producerName")
   field(:encrypted, 5, optional: true, type: :bool, default: false)
   field(:metadata, 6, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
   field(:schema, 7, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
   field(:epoch, 8, optional: true, type: :uint64, default: 0)
-  field(:user_provided_producer_name, 9, optional: true, type: :bool, default: true)
+
+  field(:user_provided_producer_name, 9,
+    optional: true,
+    type: :bool,
+    json_name: "userProvidedProducerName",
+    default: true
+  )
 
   field(:producer_access_mode, 10,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.ProducerAccessMode,
+    json_name: "producerAccessMode",
     default: :Shared,
     enum: true
   )
 
-  field(:topic_epoch, 11, optional: true, type: :uint64)
-  field(:txn_enabled, 12, optional: true, type: :bool, default: false)
-  field(:initial_subscription_name, 13, optional: true, type: :string)
+  field(:topic_epoch, 11, optional: true, type: :uint64, json_name: "topicEpoch")
+  field(:txn_enabled, 12, optional: true, type: :bool, json_name: "txnEnabled", default: false)
+
+  field(:initial_subscription_name, 13,
+    optional: true,
+    type: :string,
+    json_name: "initialSubscriptionName"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSend do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:producer_id, 1, required: true, type: :uint64)
-  field(:sequence_id, 2, required: true, type: :uint64)
-  field(:num_messages, 3, optional: true, type: :int32, default: 1)
-  field(:txnid_least_bits, 4, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 5, optional: true, type: :uint64, default: 0)
-  field(:highest_sequence_id, 6, optional: true, type: :uint64, default: 0)
-  field(:is_chunk, 7, optional: true, type: :bool, default: false)
+  field(:producer_id, 1, required: true, type: :uint64, json_name: "producerId")
+  field(:sequence_id, 2, required: true, type: :uint64, json_name: "sequenceId")
+  field(:num_messages, 3, optional: true, type: :int32, json_name: "numMessages", default: 1)
+
+  field(:txnid_least_bits, 4,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 5, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
+
+  field(:highest_sequence_id, 6,
+    optional: true,
+    type: :uint64,
+    json_name: "highestSequenceId",
+    default: 0
+  )
+
+  field(:is_chunk, 7, optional: true, type: :bool, json_name: "isChunk", default: false)
   field(:marker, 8, optional: true, type: :bool, default: false)
-  field(:message_id, 9, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
+
+  field(:message_id, 9,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageId"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendReceipt do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:producer_id, 1, required: true, type: :uint64)
-  field(:sequence_id, 2, required: true, type: :uint64)
-  field(:message_id, 3, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
-  field(:highest_sequence_id, 4, optional: true, type: :uint64, default: 0)
+  field(:producer_id, 1, required: true, type: :uint64, json_name: "producerId")
+  field(:sequence_id, 2, required: true, type: :uint64, json_name: "sequenceId")
+
+  field(:message_id, 3,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageId"
+  )
+
+  field(:highest_sequence_id, 4,
+    optional: true,
+    type: :uint64,
+    json_name: "highestSequenceId",
+    default: 0
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendError do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:producer_id, 1, required: true, type: :uint64)
-  field(:sequence_id, 2, required: true, type: :uint64)
+  field(:producer_id, 1, required: true, type: :uint64, json_name: "producerId")
+  field(:sequence_id, 2, required: true, type: :uint64, json_name: "sequenceId")
 
   field(:error, 3,
     required: true,
@@ -736,50 +917,82 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:message_id, 2, required: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
-  field(:redelivery_count, 3, optional: true, type: :uint32, default: 0)
-  field(:ack_set, 4, repeated: true, type: :int64)
-  field(:consumer_epoch, 5, optional: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+
+  field(:message_id, 2,
+    required: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageId"
+  )
+
+  field(:redelivery_count, 3,
+    optional: true,
+    type: :uint32,
+    json_name: "redeliveryCount",
+    default: 0
+  )
+
+  field(:ack_set, 4, repeated: true, type: :int64, json_name: "ackSet")
+  field(:consumer_epoch, 5, optional: true, type: :uint64, json_name: "consumerEpoch")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAck do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
 
   field(:ack_type, 2,
     required: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandAck.AckType,
+    json_name: "ackType",
     enum: true
   )
 
-  field(:message_id, 3, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
+  field(:message_id, 3,
+    repeated: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageId"
+  )
 
   field(:validation_error, 4,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandAck.ValidationError,
+    json_name: "validationError",
     enum: true
   )
 
   field(:properties, 5, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyLongValue)
-  field(:txnid_least_bits, 6, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 7, optional: true, type: :uint64, default: 0)
-  field(:request_id, 8, optional: true, type: :uint64)
+
+  field(:txnid_least_bits, 6,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 7, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
+  field(:request_id, 8, optional: true, type: :uint64, json_name: "requestId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAckResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -788,66 +1001,73 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAckResponse do
   )
 
   field(:message, 5, optional: true, type: :string)
-  field(:request_id, 6, optional: true, type: :uint64)
+  field(:request_id, 6, optional: true, type: :uint64, json_name: "requestId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandActiveConsumerChange do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:is_active, 2, optional: true, type: :bool, default: false)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+  field(:is_active, 2, optional: true, type: :bool, json_name: "isActive", default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandFlow do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
   field(:messagePermits, 2, required: true, type: :uint32)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandUnsubscribe do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
   field(:force, 3, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSeek do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:request_id, 2, required: true, type: :uint64)
-  field(:message_id, 3, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
-  field(:message_publish_time, 4, optional: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
+
+  field(:message_id, 3,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageId"
+  )
+
+  field(:message_publish_time, 4, optional: true, type: :uint64, json_name: "messagePublishTime")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandReachedEndOfTopic do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTopicMigrated do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:resource_id, 1, required: true, type: :uint64)
+  field(:resource_id, 1, required: true, type: :uint64, json_name: "resourceId")
 
   field(:resource_type, 2,
     required: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandTopicMigrated.ResourceType,
+    json_name: "resourceType",
     enum: true
   )
 
@@ -858,10 +1078,10 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseProducer do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:producer_id, 1, required: true, type: :uint64)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:producer_id, 1, required: true, type: :uint64, json_name: "producerId")
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
   field(:assignedBrokerServiceUrl, 3, optional: true, type: :string)
   field(:assignedBrokerServiceUrlTls, 4, optional: true, type: :string)
 end
@@ -869,10 +1089,10 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseConsumer do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
   field(:assignedBrokerServiceUrl, 3, optional: true, type: :string)
   field(:assignedBrokerServiceUrlTls, 4, optional: true, type: :string)
 end
@@ -880,41 +1100,54 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandRedeliverUnacknowledgedMessages do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:message_ids, 2, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData)
-  field(:consumer_epoch, 3, optional: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+
+  field(:message_ids, 2,
+    repeated: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData,
+    json_name: "messageIds"
+  )
+
+  field(:consumer_epoch, 3, optional: true, type: :uint64, json_name: "consumerEpoch")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSuccess do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:schema, 2, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandProducerSuccess do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:producer_name, 2, required: true, type: :string)
-  field(:last_sequence_id, 3, optional: true, type: :int64, default: -1)
-  field(:schema_version, 4, optional: true, type: :bytes)
-  field(:topic_epoch, 5, optional: true, type: :uint64)
-  field(:producer_ready, 6, optional: true, type: :bool, default: true)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:producer_name, 2, required: true, type: :string, json_name: "producerName")
+
+  field(:last_sequence_id, 3,
+    optional: true,
+    type: :int64,
+    json_name: "lastSequenceId",
+    default: -1
+  )
+
+  field(:schema_version, 4, optional: true, type: :bytes, json_name: "schemaVersion")
+  field(:topic_epoch, 5, optional: true, type: :uint64, json_name: "topicEpoch")
+  field(:producer_ready, 6, optional: true, type: :bool, json_name: "producerReady", default: true)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandError do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
 
   field(:error, 2,
     required: true,
@@ -928,38 +1161,39 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandPing do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandPong do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandConsumerStats do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:consumer_id, 4, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:consumer_id, 4, required: true, type: :uint64, json_name: "consumerId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandConsumerStatsResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
 
   field(:error_code, 2,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    json_name: "errorCode",
     enum: true
   )
 
-  field(:error_message, 3, optional: true, type: :string)
+  field(:error_message, 3, optional: true, type: :string, json_name: "errorMessage")
   field(:msgRateOut, 4, optional: true, type: :double)
   field(:msgThroughputOut, 5, optional: true, type: :double)
   field(:msgRateRedeliver, 6, optional: true, type: :double)
@@ -978,38 +1212,40 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetLastMessageId do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:consumer_id, 1, required: true, type: :uint64)
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetLastMessageIdResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
 
   field(:last_message_id, 1,
     required: true,
-    type: MessageIdData
+    type: MessageIdData,
+    json_name: "lastMessageId"
   )
 
-  field(:request_id, 2, required: true, type: :uint64)
+  field(:request_id, 2, required: true, type: :uint64, json_name: "requestId")
 
   field(:consumer_mark_delete_position, 3,
     optional: true,
-    type: MessageIdData
+    type: MessageIdData,
+    json_name: "consumerMarkDeletePosition"
   )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespace do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:namespace, 2, required: true, type: :string)
 
   field(:mode, 3,
@@ -1019,99 +1255,100 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespace do
     enum: true
   )
 
-  field(:topics_pattern, 4, optional: true, type: :string)
-  field(:topics_hash, 5, optional: true, type: :string)
+  field(:topics_pattern, 4, optional: true, type: :string, json_name: "topicsPattern")
+  field(:topics_hash, 5, optional: true, type: :string, json_name: "topicsHash")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespaceResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:topics, 2, repeated: true, type: :string)
   field(:filtered, 3, optional: true, type: :bool, default: false)
-  field(:topics_hash, 4, optional: true, type: :string)
+  field(:topics_hash, 4, optional: true, type: :string, json_name: "topicsHash")
   field(:changed, 5, optional: true, type: :bool, default: true)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTopicList do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:watcher_id, 2, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:watcher_id, 2, required: true, type: :uint64, json_name: "watcherId")
   field(:namespace, 3, required: true, type: :string)
-  field(:topics_pattern, 4, required: true, type: :string)
-  field(:topics_hash, 5, optional: true, type: :string)
+  field(:topics_pattern, 4, required: true, type: :string, json_name: "topicsPattern")
+  field(:topics_hash, 5, optional: true, type: :string, json_name: "topicsHash")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTopicListSuccess do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:watcher_id, 2, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:watcher_id, 2, required: true, type: :uint64, json_name: "watcherId")
   field(:topic, 3, repeated: true, type: :string)
-  field(:topics_hash, 4, required: true, type: :string)
+  field(:topics_hash, 4, required: true, type: :string, json_name: "topicsHash")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTopicUpdate do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:watcher_id, 1, required: true, type: :uint64)
-  field(:new_topics, 2, repeated: true, type: :string)
-  field(:deleted_topics, 3, repeated: true, type: :string)
-  field(:topics_hash, 4, required: true, type: :string)
+  field(:watcher_id, 1, required: true, type: :uint64, json_name: "watcherId")
+  field(:new_topics, 2, repeated: true, type: :string, json_name: "newTopics")
+  field(:deleted_topics, 3, repeated: true, type: :string, json_name: "deletedTopics")
+  field(:topics_hash, 4, required: true, type: :string, json_name: "topicsHash")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTopicListClose do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:watcher_id, 2, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:watcher_id, 2, required: true, type: :uint64, json_name: "watcherId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetSchema do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:topic, 2, required: true, type: :string)
-  field(:schema_version, 3, optional: true, type: :bytes)
+  field(:schema_version, 3, optional: true, type: :bytes, json_name: "schemaVersion")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetSchemaResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
 
   field(:error_code, 2,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    json_name: "errorCode",
     enum: true
   )
 
-  field(:error_message, 3, optional: true, type: :string)
+  field(:error_message, 3, optional: true, type: :string, json_name: "errorMessage")
   field(:schema, 4, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
-  field(:schema_version, 5, optional: true, type: :bytes)
+  field(:schema_version, 5, optional: true, type: :bytes, json_name: "schemaVersion")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetOrCreateSchema do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:topic, 2, required: true, type: :string)
   field(:schema, 3, required: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
 end
@@ -1119,35 +1356,36 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetOrCreateSchemaResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
 
   field(:error_code, 2,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    json_name: "errorCode",
     enum: true
   )
 
-  field(:error_message, 3, optional: true, type: :string)
-  field(:schema_version, 4, optional: true, type: :bytes)
+  field(:error_message, 3, optional: true, type: :string, json_name: "errorMessage")
+  field(:schema_version, 4, optional: true, type: :bytes, json_name: "schemaVersion")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTcClientConnectRequest do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:tc_id, 2, required: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:tc_id, 2, required: true, type: :uint64, json_name: "tcId", default: 0)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTcClientConnectResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
 
   field(:error, 2,
     optional: true,
@@ -1161,21 +1399,28 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandNewTxn do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txn_ttl_seconds, 2, optional: true, type: :uint64, default: 0)
-  field(:tc_id, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:txn_ttl_seconds, 2, optional: true, type: :uint64, json_name: "txnTtlSeconds", default: 0)
+  field(:tc_id, 3, optional: true, type: :uint64, json_name: "tcId", default: 0)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandNewTxnResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1189,22 +1434,36 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddPartitionToTxn do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:partitions, 4, repeated: true, type: :string)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddPartitionToTxnResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1218,7 +1477,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.Subscription do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:topic, 1, required: true, type: :string)
   field(:subscription, 2, required: true, type: :string)
@@ -1227,22 +1486,36 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddSubscriptionToTxn do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:subscription, 4, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Subscription)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddSubscriptionToTxnResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1256,15 +1529,23 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxn do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:txn_action, 4,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.TxnAction,
+    json_name: "txnAction",
     enum: true
   )
 end
@@ -1272,11 +1553,18 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1290,30 +1578,49 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnOnPartition do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:topic, 4, optional: true, type: :string)
 
   field(:txn_action, 5,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.TxnAction,
+    json_name: "txnAction",
     enum: true
   )
 
-  field(:txnid_least_bits_of_low_watermark, 6, optional: true, type: :uint64)
+  field(:txnid_least_bits_of_low_watermark, 6,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBitsOfLowWatermark"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnOnPartitionResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1327,30 +1634,49 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnOnSubscription do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:subscription, 4, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Subscription)
 
   field(:txn_action, 5,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.TxnAction,
+    json_name: "txnAction",
     enum: true
   )
 
-  field(:txnid_least_bits_of_low_watermark, 6, optional: true, type: :uint64)
+  field(:txnid_least_bits_of_low_watermark, 6,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBitsOfLowWatermark"
+  )
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnOnSubscriptionResponse do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
-  field(:request_id, 1, required: true, type: :uint64)
-  field(:txnid_least_bits, 2, optional: true, type: :uint64, default: 0)
-  field(:txnid_most_bits, 3, optional: true, type: :uint64, default: 0)
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:txnid_least_bits, 2,
+    optional: true,
+    type: :uint64,
+    json_name: "txnidLeastBits",
+    default: 0
+  )
+
+  field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
 
   field(:error, 4,
     optional: true,
@@ -1364,7 +1690,7 @@ end
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
   @moduledoc false
 
-  use Protobuf, syntax: :proto2, protoc_gen_elixir_version: "0.13.0"
+  use Protobuf, protoc_gen_elixir_version: "0.15.0", syntax: :proto2
 
   field(:type, 1,
     required: true,
@@ -1380,12 +1706,14 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
 
   field(:send_receipt, 7,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendReceipt
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendReceipt,
+    json_name: "sendReceipt"
   )
 
   field(:send_error, 8,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendError
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandSendError,
+    json_name: "sendError"
   )
 
   field(:message, 9, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage)
@@ -1402,17 +1730,20 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
 
   field(:close_producer, 15,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseProducer
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseProducer,
+    json_name: "closeProducer"
   )
 
   field(:close_consumer, 16,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseConsumer
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandCloseConsumer,
+    json_name: "closeConsumer"
   )
 
   field(:producer_success, 17,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandProducerSuccess
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandProducerSuccess,
+    json_name: "producerSuccess"
   )
 
   field(:ping, 18, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandPing)
@@ -1472,7 +1803,8 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
 
   field(:active_consumer_change, 31,
     optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandActiveConsumerChange
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandActiveConsumerChange,
+    json_name: "activeConsumerChange"
   )
 
   field(:getTopicsOfNamespace, 32,
@@ -1485,10 +1817,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
     type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespaceResponse
   )
 
-  field(:getSchema, 34,
-    optional: true,
-    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetSchema
-  )
+  field(:getSchema, 34, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetSchema)
 
   field(:getSchemaResponse, 35,
     optional: true,
