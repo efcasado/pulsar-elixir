@@ -4,21 +4,92 @@ defmodule Pulsar do
 
   This module provides a high-level API for interacting with the Elixir client for Apache Pulsar.
 
-  ## Consumer Architecture
+  ## Architecture
 
-  Consumers are managed through supervised processes:
+  The library supports multi-client architecture, allowing you to connect to multiple Pulsar
+  clusters simultaneously. Each client maintains its own set of registries and supervisors for
+  brokers, consumers, and producers.
+
+  ### Supervision Tree
+
+      Pulsar.Supervisor
+      └── Client (:default)
+          ├── Registries
+          │   ├── BrokerRegistry
+          │   ├── ConsumerRegistry
+          │   └── ProducerRegistry
+          │
+          ├── ProducerEpochStore (ETS)
+          │
+          ├── BrokerSupervisor
+          │   ├── Broker 1
+          │   │   ├── monitors: C1, C2, DLQ-P1, P1
+          │   └── Broker 2
+          │       ├── monitors: C3, C4
+          │
+          ├── ConsumerSupervisor
+          │   ├── ConsumerGroup: my-topic
+          │   │   └── C1 (with DLQ policy)
+          │   │       └── DLQ-P1 (linked process)
+          │   │
+          │   └── PartitionedConsumer: my-partitioned-topic
+          │       ├── ConsumerGroup partition-0
+          │       │   └── C2
+          │       ├── ConsumerGroup partition-1
+          │       │   └── C3
+          │       └── ConsumerGroup partition-2
+          │           └── C4
+          │
+          └── ProducerSupervisor
+              ├── ProducerGroup: my-topic
+              │   └── P1
+              │
+              └── PartitionedProducer: my-partitioned-topic
+                  ├── ProducerGroup partition-0
+                  │   └── P2
+                  ├── ProducerGroup partition-1
+                  │   └── P3
+                  └── ProducerGroup partition-2
+                      └── P4
+
+  ### Consumer/Producer Architecture
+
+  Both consumers and producers are managed through supervised processes:
+
+  **Consumers:**
   - **Regular topics**: Consumer groups with configurable process count
   - **Partitioned topics**: PartitionedConsumer supervisor managing consumer groups per partition
+  - The `start_consumer/4` function returns a single PID that can be registered with a name,
+    regardless of partitioning or process count
 
-  The `start_consumer/1` function always returns a single PID that can be registered with
-  a name, regardless of whether the topic is partitioned or not; and the consumer count within.
+  **Producers:**
+  - **Regular topics**: Producer groups with configurable process count
+  - **Partitioned topics**: PartitionedProducer supervisor managing producer groups per partition
+  - The `start_producer/2` function returns a single PID that can be registered with a name,
+    regardless of partitioning or process count
 
   ## Examples
 
-      # Start a broker connection (idempotent per client)
-      # Brokers are automatically started by clients, but you can manually start
-      # additional brokers for service discovery
+      # Start a broker connection (optional - automatically started by clients)
       {:ok, broker_pid} = Pulsar.start_broker("pulsar://other-broker:6650")
+
+      # Start a producer
+      {:ok, producer_pid} = Pulsar.start_producer(
+        "persistent://public/default/my-topic",
+        name: :my_producer
+      )
+
+      # Send a message
+      {:ok, message_id} = Pulsar.send(:my_producer, "Hello, Pulsar!")
+
+      # Start a producer for a partitioned topic (single PID returned)
+      {:ok, producer_pid} = Pulsar.start_producer(
+        "persistent://public/default/my-partitioned-topic",
+        name: :my_partitioned_producer
+      )
+
+      # Messages are automatically routed to partitions
+      {:ok, message_id} = Pulsar.send(:my_partitioned_producer, "Partitioned message!")
 
       # Start a consumer for a regular topic
       {:ok, consumer_pid} = Pulsar.start_consumer(
@@ -37,29 +108,25 @@ defmodule Pulsar do
         consumer_count: 2  # 2 consumers per partition
       )
 
-      # Register consumer with custom name
+      # Register consumer/producer with custom name
       {:ok, consumer_pid} = Pulsar.start_consumer(
         "persistent://public/default/my-topic",
         "my-subscription",
         MyApp.MessageHandler,
-        subscription_type: :Shared,
         name: MyApp.MyConsumer
       )
 
-      # Stop consumer (works for both regular and partitioned)
+      # Stop consumer/producer
       Pulsar.stop_consumer(consumer_pid)
+      Pulsar.stop_producer(producer_pid)
 
       # Or stop by name
-      Pulsar.stop_consumer("my-topic-my-subscription")
+      Pulsar.stop_consumer(:my_consumer)
+      Pulsar.stop_producer(:my_producer)
 
-      # Lookup consumer by name
+      # Lookup by name
       {:ok, consumer_pid} = Pulsar.lookup_consumer("my-topic-my-subscription")
-
-      # Get all consumer processes by name
-      consumer_pids = Pulsar.get_consumers("my-topic-my-subscription")
-
-      # Service discovery via broker
-      {:ok, response} = Pulsar.Broker.lookup_topic(broker_pid, "my-topic")
+      {:ok, producer_pid} = Pulsar.lookup_producer(:my_producer)
   """
   use Application
 
