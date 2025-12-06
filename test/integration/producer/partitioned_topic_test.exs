@@ -104,10 +104,10 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.stop_consumer(consumer_pid)
   end
 
-  test "messages without partition_key are distributed round-robin across partitions" do
+  test "messages without partition_key are distributed randomly across partitions" do
     test_id = :erlang.unique_integer([:positive])
-    subscription = "partitioned-rr-test-#{test_id}"
-    producer_name = "partitioned-producer-rr-test-#{test_id}"
+    subscription = "partitioned-random-test-#{test_id}"
+    producer_name = "partitioned-producer-random-test-#{test_id}"
 
     {:ok, producer_pid} =
       Pulsar.start_producer(@topic,
@@ -129,10 +129,9 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     consumers = wait_for_consumer_ready(3)
 
-    # Send 6 messages without partition_key (should round-robin across 3 partitions)
     messages =
-      for i <- 1..6 do
-        msg = "rr-msg-#{i}-#{test_id}"
+      for i <- 1..30 do
+        msg = "random-msg-#{i}-#{test_id}"
         {:ok, _} = Pulsar.send(producer_pid, msg)
         msg
       end
@@ -140,7 +139,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     Utils.wait_for(fn ->
       all_msgs = Enum.flat_map(consumers, &DummyConsumer.get_messages/1)
       our_msgs = Enum.filter(all_msgs, fn msg -> msg.payload in messages end)
-      Enum.count(our_msgs) == 6
+      Enum.count(our_msgs) == 30
     end)
 
     partitions =
@@ -149,12 +148,10 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
       |> Enum.filter(fn msg -> msg.payload in messages end)
       |> Enum.map(fn msg -> msg.command.message_id.partition end)
 
-    # With 6 messages and 3 partitions, round-robin should hit all partitions
+    # With 30 messages and 3 partitions, random distribution should hit all partitions
     assert partitions |> Enum.uniq() |> Enum.count() == 3
-
-    # Each partition should receive exactly 2 messages
     partition_counts = Enum.frequencies(partitions)
-    assert Enum.all?(partition_counts, fn {_partition, count} -> count == 2 end)
+    assert Enum.all?(partition_counts, fn {_partition, count} -> count >= 1 end)
 
     :ok = Pulsar.stop_producer(producer_pid)
     :ok = Pulsar.stop_consumer(consumer_pid)

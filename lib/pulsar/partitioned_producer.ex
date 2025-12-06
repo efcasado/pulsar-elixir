@@ -13,7 +13,7 @@ defmodule Pulsar.PartitionedProducer do
 
   Messages are routed to partitions based on the `:partition_key` option:
   - With `:partition_key` - Consistent hash routing via `:erlang.phash2(partition_key, num_partitions)`
-  - Without `:partition_key` - Round-robin distribution across partitions
+  - Without `:partition_key` - Random selection
   """
 
   use Supervisor
@@ -86,7 +86,7 @@ defmodule Pulsar.PartitionedProducer do
 
   Routes the message to a partition based on the `:partition_key` option:
   - With `:partition_key` - Uses consistent hashing to route to a specific partition
-  - Without `:partition_key` - Uses round-robin distribution
+  - Without `:partition_key` - Uses random partition selection
 
   ## Parameters
 
@@ -107,7 +107,7 @@ defmodule Pulsar.PartitionedProducer do
     if num_partitions == 0 do
       {:error, :no_producers_available}
     else
-      partition_index = select_partition(supervisor_pid, opts, num_partitions)
+      partition_index = select_partition(opts, num_partitions)
       # Sort by topic name to ensure consistent ordering, then get by index
       {_topic, group_pid} = partition_groups |> Enum.sort() |> Enum.at(partition_index)
 
@@ -117,9 +117,6 @@ defmodule Pulsar.PartitionedProducer do
 
   @impl true
   def init({name, topic, partitions, opts}) do
-    # Create ETS table owned by this supervisor for round-robin counter
-    :ets.new(ets_table_name(self()), [:named_table, :public, :set])
-
     Logger.info("Starting partitioned producer for topic #{topic} with #{partitions} partitions")
 
     children =
@@ -148,19 +145,13 @@ defmodule Pulsar.PartitionedProducer do
     Supervisor.init(children, strategy: :one_for_one)
   end
 
-  defp select_partition(supervisor_pid, opts, num_partitions) do
+  defp select_partition(opts, num_partitions) do
     case Keyword.get(opts, :partition_key) do
       nil ->
-        # Round-robin: increment and wrap at num_partitions
-        ets_table = ets_table_name(supervisor_pid)
-        :ets.update_counter(ets_table, :counter, {2, 1, num_partitions - 1, 0}, {:counter, -1})
+        Enum.random(0..(num_partitions - 1))
 
       partition_key ->
         :erlang.phash2(partition_key, num_partitions)
     end
-  end
-
-  defp ets_table_name(supervisor_pid) do
-    :"partitioned_producer_#{:erlang.pid_to_list(supervisor_pid)}"
   end
 end
