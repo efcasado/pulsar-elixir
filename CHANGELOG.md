@@ -1,3 +1,9 @@
+## [2.3.0](https://github.com/efcasado/pulsar-elixir/compare/v2.2.7...v2.3.0) (2025-12-06)
+
+### Features
+
+* partitioned producers ([#82](https://github.com/efcasado/pulsar-elixir/issues/82)) ([4716ae5](https://github.com/efcasado/pulsar-elixir/commit/4716ae53a76f02f78c2d59b681094ef952579e52))
+
 ## [2.2.7](https://github.com/efcasado/pulsar-elixir/compare/v2.2.6...v2.2.7) (2025-12-06)
 
 ## [2.2.6](https://github.com/efcasado/pulsar-elixir/compare/v2.2.5...v2.2.6) (2025-12-05)
