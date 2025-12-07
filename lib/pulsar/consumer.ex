@@ -1344,7 +1344,7 @@ defmodule Pulsar.Consumer do
 
   defp cleanup_expired_chunked_messages(state) do
     {expired, remaining} =
-      ChunkedMessageContext.find_expired(
+      ChunkedMessageContext.pop_expired(
         state.chunked_message_contexts,
         state.expire_time_of_incomplete_chunked_message
       )
@@ -1372,7 +1372,7 @@ defmodule Pulsar.Consumer do
       end)
     end
 
-    # Remove expired contexts
-    %{state | chunked_message_contexts: Map.new(remaining)}
+    # remaining is already a map, no need to convert
+    %{state | chunked_message_contexts: remaining}
   end
 end

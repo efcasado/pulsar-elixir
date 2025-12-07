@@ -157,20 +157,23 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   end
 
   @doc """
-  Finds all expired contexts in a map.
+  Pops all expired contexts from a map.
 
   Returns a tuple `{expired_list, remaining_map}` where:
   - `expired_list` is a list of `{uuid, context}` tuples that have expired
   - `remaining_map` is a map of contexts that have not expired
   """
-  @spec find_expired(%{optional(String.t()) => t()}, non_neg_integer()) ::
+  @spec pop_expired(%{optional(String.t()) => t()}, non_neg_integer()) ::
           {[{String.t(), t()}], %{optional(String.t()) => t()}}
-  def find_expired(contexts, expiration_threshold_ms) do
+  def pop_expired(contexts, expiration_threshold_ms) do
     now = System.monotonic_time(:millisecond)
 
-    Enum.split_with(contexts, fn {_uuid, ctx} ->
-      now - ctx.created_at > expiration_threshold_ms
-    end)
+    {expired, remaining} =
+      Enum.split_with(contexts, fn {_uuid, ctx} ->
+        now - ctx.created_at > expiration_threshold_ms
+      end)
+
+    {expired, Map.new(remaining)}
   end
 
   @doc """
