@@ -641,13 +641,17 @@ defmodule Pulsar.Consumer do
 
     nacked_ids =
       Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
-        case send_to_dead_letter(state, message.payload, List.first(message.message_id_to_ack)) do
+        # message_id_to_ack can be single value or list
+        message_ids_list =
+          if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
+
+        case send_to_dead_letter(state, message.payload, List.first(message_ids_list)) do
           :ok ->
             # ACK all message IDs since it's now in DLQ (for chunks, ACK all chunks)
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
               ack_type: :Individual,
-              message_id: message.message_id_to_ack
+              message_id: message_ids_list
             }
 
             :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
@@ -655,7 +659,7 @@ defmodule Pulsar.Consumer do
 
           {:error, dlq_reason} ->
             Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            message.message_id_to_ack ++ nacked_acc
+            message_ids_list ++ nacked_acc
         end
       end)
 
@@ -696,8 +700,9 @@ defmodule Pulsar.Consumer do
     # Call callback for ALL messages (including incomplete chunks)
     result = state.callback_module.handle_message(message, callback_state)
 
-    # message_id_to_ack is always a list in the new design
-    message_ids_list = message.message_id_to_ack
+    # message_id_to_ack can be single value or list (chunked messages)
+    message_ids_list =
+      if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
 
     case result do
       {:ok, new_callback_state} ->
@@ -1038,12 +1043,12 @@ defmodule Pulsar.Consumer do
         end
 
       %Pulsar.Message{
-        command: [command],
-        metadata: [metadata],
+        command: command,
+        metadata: metadata,
         payload: payload,
-        single_metadata: if(single_metadata, do: [single_metadata], else: []),
-        broker_metadata: [broker_metadata],
-        message_id_to_ack: [message_id_to_ack],
+        single_metadata: single_metadata,
+        broker_metadata: broker_metadata,
+        message_id_to_ack: message_id_to_ack,
         chunk_metadata: nil
       }
     end)
@@ -1154,25 +1159,13 @@ defmodule Pulsar.Consumer do
       uuid: uuid,
       chunk_id: chunk_id,
       num_chunks: num_chunks,
-      total_size: total_size,
       command: command,
       metadata: metadata,
       payload: payload,
-      broker_metadata: broker_metadata,
-      message_id: message_id
+      broker_metadata: broker_metadata
     } = chunk_data
 
-    case ChunkedMessageContext.new(
-           uuid,
-           chunk_id,
-           num_chunks,
-           total_size,
-           payload,
-           message_id,
-           command,
-           metadata,
-           broker_metadata
-         ) do
+    case ChunkedMessageContext.new(command, metadata, payload, broker_metadata) do
       {:ok, ctx} ->
         new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
         new_state = %{state | chunked_message_contexts: new_contexts}
@@ -1233,15 +1226,14 @@ defmodule Pulsar.Consumer do
     %{
       uuid: uuid,
       chunk_id: chunk_id,
-      payload: payload,
-      message_id: message_id,
       num_chunks: num_chunks,
       command: command,
       metadata: metadata,
+      payload: payload,
       broker_metadata: broker_metadata
     } = chunk_data
 
-    case ChunkedMessageContext.add_chunk(ctx, chunk_id, payload, message_id, command, metadata, broker_metadata) do
+    case ChunkedMessageContext.add_chunk(ctx, command, metadata, payload, broker_metadata) do
       {:ok, updated_ctx} ->
         new_contexts = Map.put(state.chunked_message_contexts, uuid, updated_ctx)
         new_state = %{state | chunked_message_contexts: new_contexts}

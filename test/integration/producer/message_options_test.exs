@@ -59,7 +59,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
              Pulsar.send(producer, "payload with key", partition_key: "user-123", client: @client)
 
     message = wait_for_message(consumer, "payload with key")
-    assert hd(message.metadata).partition_key == "user-123"
+    assert message.metadata.partition_key == "user-123"
   end
 
   test "send message with ordering key", %{producer: producer, consumer: consumer} do
@@ -70,7 +70,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
              )
 
     message = wait_for_message(consumer, "payload with ordering key")
-    assert hd(message.metadata).ordering_key == "order-456"
+    assert message.metadata.ordering_key == "order-456"
   end
 
   test "send message with properties map", %{producer: producer, consumer: consumer} do
@@ -89,7 +89,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     message = wait_for_message(consumer, "payload with properties")
 
     received_properties =
-      Map.new(hd(message.metadata).properties, fn %{key: k, value: v} -> {k, v} end)
+      Map.new(message.metadata.properties, fn %{key: k, value: v} -> {k, v} end)
 
     assert received_properties == properties
   end
@@ -105,7 +105,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
              )
 
     message = wait_for_message(consumer, "payload with event time")
-    assert hd(message.metadata).event_time == event_time_ms
+    assert message.metadata.event_time == event_time_ms
   end
 
   test "send message with deliver_at_time option", %{producer: producer, consumer: consumer} do
@@ -119,7 +119,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
              )
 
     message = wait_for_message(consumer, "deliver_at payload")
-    assert hd(message.metadata).deliver_at_time == deliver_at_ms
+    assert message.metadata.deliver_at_time == deliver_at_ms
   end
 
   test "send message with deliver_after option", %{producer: producer, consumer: consumer} do
@@ -133,7 +133,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
     message = wait_for_message(consumer, "deliver_after payload")
 
-    assert_in_delta hd(message.metadata).deliver_at_time, before_send + 1000, 10
+    assert_in_delta message.metadata.deliver_at_time, before_send + 1000, 10
   end
 
   test "send message with all options combined", %{producer: producer, consumer: consumer} do
@@ -157,12 +157,12 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
     message = wait_for_message(consumer, "complex payload")
 
-    assert hd(message.metadata).partition_key == "user-999"
-    assert hd(message.metadata).ordering_key == "order-888"
-    assert hd(message.metadata).event_time == event_time_ms
+    assert message.metadata.partition_key == "user-999"
+    assert message.metadata.ordering_key == "order-888"
+    assert message.metadata.event_time == event_time_ms
 
     received_properties =
-      Map.new(hd(message.metadata).properties, fn %{key: k, value: v} -> {k, v} end)
+      Map.new(message.metadata.properties, fn %{key: k, value: v} -> {k, v} end)
 
     assert received_properties == properties
   end

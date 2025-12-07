@@ -45,19 +45,17 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   Returns `{:ok, context}` if the chunk is valid (chunk_id == 0),
   or `{:error, :out_of_order}` if it's not the first chunk.
   """
-  @spec new(
-          uuid :: String.t(),
-          chunk_id :: non_neg_integer(),
-          num_chunks :: non_neg_integer(),
-          total_size :: non_neg_integer(),
-          payload :: binary(),
-          message_id :: term(),
-          command :: term(),
-          metadata :: term(),
-          broker_metadata :: term()
-        ) :: {:ok, t()} | {:error, :out_of_order}
-  def new(uuid, chunk_id, num_chunks, total_size, payload, message_id, command, metadata, broker_metadata) do
+  @spec new(command :: term(), metadata :: term(), payload :: binary(), broker_metadata :: term()) ::
+          {:ok, t()} | {:error, :out_of_order}
+  def new(command, metadata, payload, broker_metadata) do
+    chunk_id = metadata.chunk_id
+
     if chunk_id == 0 do
+      message_id = command.message_id
+      uuid = metadata.uuid
+      num_chunks = metadata.num_chunks_from_msg
+      total_size = Map.get(metadata, :total_chunk_msg_size, 0)
+
       ctx = %__MODULE__{
         uuid: uuid,
         chunks: %{chunk_id => payload},
@@ -85,9 +83,11 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   Returns `{:ok, updated_context}` if the chunk is in order,
   or `{:error, :out_of_order}` if it's not the expected next chunk.
   """
-  @spec add_chunk(t(), non_neg_integer(), binary(), term(), term(), term(), term()) ::
+  @spec add_chunk(t(), command :: term(), metadata :: term(), payload :: binary(), broker_metadata :: term()) ::
           {:ok, t()} | {:error, :out_of_order}
-  def add_chunk(ctx, chunk_id, payload, message_id, command, metadata, broker_metadata) do
+  def add_chunk(ctx, command, metadata, payload, broker_metadata) do
+    chunk_id = metadata.chunk_id
+    message_id = command.message_id
     expected_chunk_id = ctx.received_chunks
 
     if chunk_id == expected_chunk_id do

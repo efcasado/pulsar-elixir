@@ -6,26 +6,28 @@ defmodule Pulsar.Message do
 
   ## Fields
 
-  - `command` - List of Pulsar protocol commands containing message metadata like message ID,
-    redelivery count, etc. For chunked messages, contains commands from all chunks.
-    Type: `[Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage.t()]`
+  - `command` - For non-chunked messages: single command struct. For chunked messages: list of
+    commands from all chunks.
+    Type: `struct() | [struct()]`
 
-  - `metadata` - List of message metadata including producer information, publish time, properties, etc.
-    For chunked messages, contains metadata from all chunks.
-    Type: `[Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata.t()]`
+  - `metadata` - For non-chunked messages: single metadata struct. For chunked messages: list of
+    metadata from all chunks.
+    Type: `struct() | [struct()]`
 
   - `payload` - The actual message payload as a binary. For chunked messages, this is the
     assembled complete payload.
 
-  - `single_metadata` - List of single message metadata (empty for non-batch messages).
-    For batched messages, contains metadata specific to individual messages within the batch.
-    For chunked messages, contains metadata from all chunks.
+  - `single_metadata` - For non-batch messages: nil. For batched messages: single message metadata.
+    For chunked messages: list of metadata from all chunks.
+    Type: `nil | struct() | [struct()]`
 
-  - `broker_metadata` - List of additional broker information about the message.
-    For chunked messages, contains broker metadata from all chunks.
+  - `broker_metadata` - For non-chunked messages: single broker metadata. For chunked messages:
+    list of broker metadata from all chunks.
+    Type: `term() | [term()]`
 
-  - `message_id_to_ack` - List of message IDs to use for ACK/NACK operations.
-    For batch messages, includes batch_index. For chunked messages, includes all chunk message IDs.
+  - `message_id_to_ack` - For non-chunked messages: single message ID. For batch messages: message
+    ID with batch_index. For chunked messages: list of all chunk message IDs.
+    Type: `term() | [term()]`
 
   - `chunk_metadata` - Metadata about chunked messages (nil for non-chunked messages).
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
@@ -50,11 +52,10 @@ defmodule Pulsar.Message do
         {:ok, state}
       end
 
-      # Access all fields via the struct
+      # Access all fields via the struct (non-chunked)
       def handle_message(%Pulsar.Message{} = msg, state) do
         redelivery_count = Pulsar.Message.redelivery_count(msg)
-        [metadata | _] = msg.metadata
-        producer = metadata.producer_name
+        producer = msg.metadata.producer_name
         {:ok, state}
       end
 
@@ -71,12 +72,12 @@ defmodule Pulsar.Message do
   """
 
   @type t :: %__MODULE__{
-          command: [struct()],
-          metadata: [struct()],
+          command: struct() | [struct()],
+          metadata: struct() | [struct()],
           payload: binary(),
-          single_metadata: [struct()],
-          broker_metadata: [term()],
-          message_id_to_ack: [term()],
+          single_metadata: struct() | nil | [struct()],
+          broker_metadata: term() | [term()],
+          message_id_to_ack: term() | [term()],
           chunk_metadata: map() | nil
         }
 
@@ -102,9 +103,13 @@ defmodule Pulsar.Message do
       3
   """
   @spec redelivery_count(t()) :: non_neg_integer()
-  def redelivery_count(%__MODULE__{command: commands}) do
-    commands
+  def redelivery_count(%__MODULE__{command: command}) when is_list(command) do
+    command
     |> Enum.map(& &1.redelivery_count)
     |> Enum.max(fn -> 0 end)
+  end
+
+  def redelivery_count(%__MODULE__{command: command}) do
+    command.redelivery_count
   end
 end
