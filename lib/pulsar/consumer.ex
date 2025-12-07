@@ -28,6 +28,7 @@ defmodule Pulsar.Consumer do
   use GenServer
 
   alias Pulsar.Config
+  alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.ServiceDiscovery
 
@@ -57,7 +58,11 @@ defmodule Pulsar.Consumer do
     :redelivery_interval,
     :max_redelivery,
     :dead_letter_topic,
-    :dead_letter_producer_pid
+    :dead_letter_producer_pid,
+    :chunked_message_contexts,
+    :max_pending_chunked_messages,
+    :expire_time_of_incomplete_chunked_message,
+    :auto_ack_oldest_chunked_message_on_queue_full
   ]
 
   @type t :: %__MODULE__{
@@ -82,7 +87,11 @@ defmodule Pulsar.Consumer do
           redelivery_interval: non_neg_integer() | nil,
           max_redelivery: non_neg_integer() | nil,
           dead_letter_topic: String.t() | nil,
-          dead_letter_producer_pid: pid() | nil
+          dead_letter_producer_pid: pid() | nil,
+          chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
+          max_pending_chunked_messages: non_neg_integer(),
+          expire_time_of_incomplete_chunked_message: non_neg_integer(),
+          auto_ack_oldest_chunked_message_on_queue_full: boolean()
         }
 
   ## Public API
@@ -103,9 +112,12 @@ defmodule Pulsar.Consumer do
     - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
-    - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
+  - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
       - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
+    - `:max_pending_chunked_messages` - Maximum number of concurrent chunked messages to buffer (default: 10)
+    - `:expire_time_of_incomplete_chunked_message` - Timeout in milliseconds for incomplete chunked messages (default: 60_000)
+    - `:auto_ack_oldest_chunked_message_on_queue_full` - Automatically ACK oldest chunked message when limit reached (default: false, will NACK instead)
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before consumer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
 
@@ -132,6 +144,15 @@ defmodule Pulsar.Consumer do
     {dead_letter_policy, genserver_opts} =
       Keyword.pop(genserver_opts, :dead_letter_policy, nil)
 
+    {max_pending_chunked_messages, genserver_opts} =
+      Keyword.pop(genserver_opts, :max_pending_chunked_messages, 10)
+
+    {expire_time_of_incomplete_chunked_message, genserver_opts} =
+      Keyword.pop(genserver_opts, :expire_time_of_incomplete_chunked_message, 60_000)
+
+    {auto_ack_oldest_chunked_message_on_queue_full, genserver_opts} =
+      Keyword.pop(genserver_opts, :auto_ack_oldest_chunked_message_on_queue_full, false)
+
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
     {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
@@ -153,6 +174,9 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
+      max_pending_chunked_messages: max_pending_chunked_messages,
+      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message,
+      auto_ack_oldest_chunked_message_on_queue_full: auto_ack_oldest_chunked_message_on_queue_full,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     }
@@ -301,6 +325,9 @@ defmodule Pulsar.Consumer do
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
+      max_pending_chunked_messages: max_pending_chunked_messages,
+      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message,
+      auto_ack_oldest_chunked_message_on_queue_full: auto_ack_oldest_chunked_message_on_queue_full,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     } = consumer_config
@@ -328,7 +355,11 @@ defmodule Pulsar.Consumer do
       redelivery_interval: redelivery_interval,
       max_redelivery: max_redelivery,
       dead_letter_topic: dead_letter_topic,
-      dead_letter_producer_pid: nil
+      dead_letter_producer_pid: nil,
+      chunked_message_contexts: %{},
+      max_pending_chunked_messages: max_pending_chunked_messages,
+      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message,
+      auto_ack_oldest_chunked_message_on_queue_full: auto_ack_oldest_chunked_message_on_queue_full
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -442,6 +473,7 @@ defmodule Pulsar.Consumer do
       :ok ->
         broker_monitor = Process.monitor(state.broker_pid)
         schedule_redelivery(state.redelivery_interval)
+        schedule_chunk_cleanup()
 
         {:noreply,
          %{
@@ -495,17 +527,27 @@ defmodule Pulsar.Consumer do
     redelivery_count = Map.get(command, :redelivery_count, 0)
 
     payload = maybe_uncompress(metadata, payload)
-    payload = unwrap_messages(metadata, payload)
 
-    num_messages = length(payload)
-    state = decrement_permits(state, num_messages)
+    # Check if this is a chunked message
+    if is_chunked_message?(metadata) do
+      new_state =
+        handle_chunked_message(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
 
-    new_state =
-      process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
+      {:noreply, new_state}
+    else
+      # Normal message processing
+      payload = unwrap_messages(metadata, payload)
 
-    new_state = maybe_send_batch_to_dead_letter(new_state, payload, base_message_id, redelivery_count)
+      num_messages = length(payload)
+      state = decrement_permits(state, num_messages)
 
-    {:noreply, new_state}
+      new_state =
+        process_messages_normally(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count)
+
+      new_state = maybe_send_batch_to_dead_letter(new_state, payload, base_message_id, redelivery_count)
+
+      {:noreply, new_state}
+    end
   end
 
   @impl true
@@ -527,6 +569,13 @@ defmodule Pulsar.Consumer do
       end
 
     schedule_redelivery(state.redelivery_interval)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info(:cleanup_expired_chunks, state) do
+    new_state = cleanup_expired_chunked_messages(state)
+    schedule_chunk_cleanup()
     {:noreply, new_state}
   end
 
@@ -1000,5 +1049,326 @@ defmodule Pulsar.Consumer do
 
   defp parse_batch_messages(payload, _, _) do
     [{nil, payload}]
+  end
+
+  defp is_chunked_message?(%Binary.MessageMetadata{uuid: uuid, chunk_id: chunk_id})
+       when is_binary(uuid) and is_integer(chunk_id) do
+    true
+  end
+
+  defp is_chunked_message?(_metadata), do: false
+
+  defp schedule_chunk_cleanup do
+    Process.send_after(self(), :cleanup_expired_chunks, 30_000)
+    :ok
+  end
+
+  defp handle_chunked_message(state, command, metadata, payload, broker_metadata, base_message_id, redelivery_count) do
+    uuid = metadata.uuid
+    chunk_id = metadata.chunk_id
+    num_chunks = metadata.num_chunks_from_msg
+    total_size = Map.get(metadata, :total_chunk_msg_size, 0)
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :chunk, :received],
+      %{chunk_id: chunk_id, num_chunks: num_chunks},
+      %{uuid: uuid, consumer_id: state.consumer_id}
+    )
+
+    state = decrement_permits(state, 1)
+
+    case Map.get(state.chunked_message_contexts, uuid) do
+      nil ->
+        create_chunk_context(
+          state,
+          uuid,
+          chunk_id,
+          num_chunks,
+          total_size,
+          command,
+          metadata,
+          payload,
+          broker_metadata,
+          base_message_id,
+          redelivery_count
+        )
+
+      ctx ->
+        add_chunk_to_context(state, ctx, uuid, chunk_id, payload, base_message_id, redelivery_count)
+    end
+  end
+
+  defp create_chunk_context(
+         state,
+         uuid,
+         chunk_id,
+         num_chunks,
+         total_size,
+         command,
+         metadata,
+         payload,
+         broker_metadata,
+         message_id,
+         redelivery_count
+       ) do
+    if map_size(state.chunked_message_contexts) >= state.max_pending_chunked_messages do
+      handle_chunk_queue_full(
+        state,
+        uuid,
+        chunk_id,
+        num_chunks,
+        total_size,
+        command,
+        metadata,
+        payload,
+        broker_metadata,
+        message_id,
+        redelivery_count
+      )
+    else
+      do_create_chunk_context(
+        state,
+        uuid,
+        chunk_id,
+        num_chunks,
+        total_size,
+        command,
+        metadata,
+        payload,
+        broker_metadata,
+        message_id,
+        redelivery_count
+      )
+    end
+  end
+
+  defp do_create_chunk_context(
+         state,
+         uuid,
+         chunk_id,
+         num_chunks,
+         total_size,
+         command,
+         metadata,
+         payload,
+         broker_metadata,
+         message_id,
+         redelivery_count
+       ) do
+    case ChunkedMessageContext.new(
+           uuid,
+           chunk_id,
+           num_chunks,
+           total_size,
+           payload,
+           message_id,
+           command,
+           metadata,
+           broker_metadata
+         ) do
+      {:ok, ctx} ->
+        new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
+        new_state = %{state | chunked_message_contexts: new_contexts}
+
+        if ChunkedMessageContext.complete?(ctx) do
+          assemble_and_process_chunked_message(new_state, ctx, uuid, redelivery_count)
+        else
+          new_state
+        end
+
+      {:error, :out_of_order} ->
+        Logger.warning(
+          "Received out-of-order chunk (chunk_id=#{chunk_id} for new message), discarding chunked message #{uuid}"
+        )
+
+        :telemetry.execute(
+          [:pulsar, :consumer, :chunk, :discarded],
+          %{reason: :out_of_order, chunk_id: chunk_id},
+          %{uuid: uuid, consumer_id: state.consumer_id}
+        )
+
+        nack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: :Individual,
+          message_id: [message_id]
+        }
+
+        :ok = Pulsar.Broker.send_command(state.broker_pid, nack_command)
+        state
+    end
+  end
+
+  defp add_chunk_to_context(state, ctx, uuid, chunk_id, payload, message_id, redelivery_count) do
+    case ChunkedMessageContext.add_chunk(ctx, chunk_id, payload, message_id) do
+      {:ok, updated_ctx} ->
+        new_contexts = Map.put(state.chunked_message_contexts, uuid, updated_ctx)
+        new_state = %{state | chunked_message_contexts: new_contexts}
+
+        if ChunkedMessageContext.complete?(updated_ctx) do
+          assemble_and_process_chunked_message(new_state, updated_ctx, uuid, redelivery_count)
+        else
+          new_state
+        end
+
+      {:error, :out_of_order} ->
+        expected_chunk_id = ctx.received_chunks
+
+        Logger.warning(
+          "Received out-of-order chunk (expected=#{expected_chunk_id}, got=#{chunk_id}), discarding chunked message #{uuid}"
+        )
+
+        :telemetry.execute(
+          [:pulsar, :consumer, :chunk, :discarded],
+          %{reason: :out_of_order, expected: expected_chunk_id, received: chunk_id},
+          %{uuid: uuid, consumer_id: state.consumer_id}
+        )
+
+        new_contexts = Map.delete(state.chunked_message_contexts, uuid)
+        new_state = %{state | chunked_message_contexts: new_contexts}
+
+        nack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: :Individual,
+          message_id: [ctx.first_chunk_message_id, message_id]
+        }
+
+        :ok = Pulsar.Broker.send_command(state.broker_pid, nack_command)
+        new_state
+    end
+  end
+
+  defp assemble_and_process_chunked_message(state, ctx, uuid, redelivery_count) do
+    complete_payload = ChunkedMessageContext.assemble_payload(ctx)
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :chunk, :complete],
+      %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
+      %{uuid: uuid, consumer_id: state.consumer_id}
+    )
+
+    new_contexts = Map.delete(state.chunked_message_contexts, uuid)
+    state = %{state | chunked_message_contexts: new_contexts}
+
+    payload = [{nil, complete_payload}]
+
+    new_state =
+      process_messages_normally(
+        state,
+        ctx.command,
+        ctx.metadata,
+        payload,
+        ctx.broker_metadata,
+        ctx.first_chunk_message_id,
+        redelivery_count
+      )
+
+    maybe_send_batch_to_dead_letter(new_state, payload, ctx.first_chunk_message_id, redelivery_count)
+  end
+
+  defp handle_chunk_queue_full(
+         state,
+         uuid,
+         chunk_id,
+         num_chunks,
+         total_size,
+         command,
+         metadata,
+         payload,
+         broker_metadata,
+         message_id,
+         redelivery_count
+       ) do
+    case ChunkedMessageContext.find_oldest(state.chunked_message_contexts) do
+      {oldest_uuid, oldest_ctx} ->
+        Logger.warning(
+          "Chunk queue full (#{state.max_pending_chunked_messages}), #{if state.auto_ack_oldest_chunked_message_on_queue_full, do: "ACKing", else: "NACKing"} oldest chunked message #{oldest_uuid}"
+        )
+
+        new_contexts = Map.delete(state.chunked_message_contexts, oldest_uuid)
+        state = %{state | chunked_message_contexts: new_contexts}
+
+        ack_type = if state.auto_ack_oldest_chunked_message_on_queue_full, do: :Individual, else: :Individual
+
+        ack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: ack_type,
+          message_id: [oldest_ctx.first_chunk_message_id]
+        }
+
+        :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+
+        state =
+          if not state.auto_ack_oldest_chunked_message_on_queue_full and state.redelivery_interval do
+            %{state | nacked_messages: MapSet.put(state.nacked_messages, oldest_ctx.first_chunk_message_id)}
+          else
+            state
+          end
+
+        do_create_chunk_context(
+          state,
+          uuid,
+          chunk_id,
+          num_chunks,
+          total_size,
+          command,
+          metadata,
+          payload,
+          broker_metadata,
+          message_id,
+          redelivery_count
+        )
+
+      nil ->
+        do_create_chunk_context(
+          state,
+          uuid,
+          chunk_id,
+          num_chunks,
+          total_size,
+          command,
+          metadata,
+          payload,
+          broker_metadata,
+          message_id,
+          redelivery_count
+        )
+    end
+  end
+
+  defp cleanup_expired_chunked_messages(state) do
+    {expired, remaining} =
+      ChunkedMessageContext.find_expired(
+        state.chunked_message_contexts,
+        state.expire_time_of_incomplete_chunked_message
+      )
+
+    if length(expired) > 0 do
+      Logger.warning("Cleaning up #{length(expired)} expired chunked message(s)")
+
+      Enum.each(expired, fn {uuid, ctx} ->
+        :telemetry.execute(
+          [:pulsar, :consumer, :chunk, :expired],
+          %{age_ms: ChunkedMessageContext.age_ms(ctx), received_chunks: ctx.received_chunks},
+          %{uuid: uuid, consumer_id: state.consumer_id}
+        )
+
+        nack_command = %Binary.CommandAck{
+          consumer_id: state.consumer_id,
+          ack_type: :Individual,
+          message_id: [ctx.first_chunk_message_id]
+        }
+
+        :ok = Pulsar.Broker.send_command(state.broker_pid, nack_command)
+
+        if state.redelivery_interval do
+          new_nacked = MapSet.put(state.nacked_messages, ctx.first_chunk_message_id)
+          %{state | nacked_messages: new_nacked}
+        end
+      end)
+
+      %{state | chunked_message_contexts: Map.new(remaining)}
+    else
+      state
+    end
   end
 end
