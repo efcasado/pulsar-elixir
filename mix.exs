@@ -29,7 +29,13 @@ defmodule Pulsar.MixProject do
       source_url: "https://github.com/efcasado/pulsar-elixir",
       docs: [
         main: "Pulsar",
-        extras: ["README.md"]
+        extras: [
+          "README.md",
+          "docs/chunking.md"
+        ],
+        groups_for_extras: [
+          Guides: ~r/docs\/.*/
+        ]
       ]
     ]
   end
