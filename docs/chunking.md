@@ -67,7 +67,8 @@ The `Pulsar.Message` struct provides information about chunked messages:
   - `chunked: true` - Indicates this was a chunked message
   - `complete: true|false` - Whether all chunks were received
   - `uuid` - Unique identifier for the chunked message
-  - `num_chunks` - Total number of chunks
+  - `num_chunks` - Total number of chunks (for complete messages)
+  - `received_chunks` - Number of chunks received (for incomplete messages)
   - `error` - Reason for incompleteness (if incomplete)
 
 For chunked messages, some fields contain data from all chunks:
@@ -128,8 +129,8 @@ Chunks may not complete for several reasons:
 Incomplete chunks are delivered to your callback with `complete: false`:
 
 ```elixir
-def handle_message(%Pulsar.Message{chunk_metadata: %{complete: false, error: reason}}, state) do
-  Logger.warning("Incomplete chunk: #{reason}")
+def handle_message(%Pulsar.Message{chunk_metadata: %{complete: false, error: reason, received_chunks: n}}, state) do
+  Logger.warning("Incomplete chunk: #{reason}, received #{n} chunks")
 
   # Return error to trigger redelivery
   {:error, :incomplete_chunk, state}

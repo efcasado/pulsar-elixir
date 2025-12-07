@@ -1217,7 +1217,7 @@ defmodule Pulsar.Consumer do
         )
 
         # Return incomplete chunk to be NACKed by normal flow
-        chunk_metadata = %{chunked: true, complete: false, error: :out_of_order, uuid: uuid}
+        chunk_metadata = %{chunked: true, complete: false, error: :out_of_order, uuid: uuid, received_chunks: 0}
         message = build_message_from_chunk(chunk_metadata, nil)
         {state, [message]}
     end
@@ -1290,7 +1290,14 @@ defmodule Pulsar.Consumer do
         new_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
 
         # Return incomplete chunk to be NACKed by normal flow
-        chunk_metadata = %{chunked: true, complete: false, error: :out_of_order, uuid: uuid}
+        chunk_metadata = %{
+          chunked: true,
+          complete: false,
+          error: :out_of_order,
+          uuid: uuid,
+          received_chunks: ctx.received_chunks
+        }
+
         message = build_message_from_chunk(chunk_metadata, nil)
         {new_state, [message]}
     end
@@ -1326,7 +1333,8 @@ defmodule Pulsar.Consumer do
       complete: false,
       error: :queue_full,
       uuid: oldest_uuid,
-      message_ids: all_message_ids
+      message_ids: all_message_ids,
+      received_chunks: oldest_ctx.received_chunks
     }
 
     send(
@@ -1364,7 +1372,15 @@ defmodule Pulsar.Consumer do
         # Assemble partial payload and send as broker message for normal processing
         partial_payload = ChunkedMessageContext.assemble_payload(ctx)
         all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
-        chunk_metadata = %{chunked: true, complete: false, error: :expired, uuid: uuid, message_ids: all_message_ids}
+
+        chunk_metadata = %{
+          chunked: true,
+          complete: false,
+          error: :expired,
+          uuid: uuid,
+          message_ids: all_message_ids,
+          received_chunks: ctx.received_chunks
+        }
 
         send(
           self(),
