@@ -81,6 +81,10 @@ For non-chunked messages, these fields contain single values.
 
 ## Configuration Options
 
+> #### Warning {: .warning}
+>
+> Batching and chunking cannot be enabled simultaneously on a producer. When `chunking_enabled: true` is set, batching is automatically disabled. These features are mutually exclusive because they represent different strategies for message transmission.
+
 ### Producer Configuration
 
 ```elixir
