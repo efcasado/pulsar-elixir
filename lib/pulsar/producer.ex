@@ -482,45 +482,24 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp send_single_message(payload, opts, from, state) do
-    sequence_id = state.sequence_id + 1
-
-    command_send = %Binary.CommandSend{producer_id: state.producer_id, sequence_id: sequence_id}
-
-    message_metadata = %Binary.MessageMetadata{
-      producer_name: state.producer_name,
-      sequence_id: sequence_id,
-      publish_time: System.system_time(:millisecond),
-      uncompressed_size: byte_size(payload),
-      compression: state.compression,
-      partition_key: Keyword.get(opts, :partition_key),
-      ordering_key: Keyword.get(opts, :ordering_key),
-      properties: to_key_value_list(Keyword.get(opts, :properties)),
-      event_time: to_timestamp(Keyword.get(opts, :event_time)),
-      deliver_at_time: resolve_deliver_at_time(opts)
+  defp send_single_message(payload, opts, _from, state) do
+    message = {
+      payload,
+      %{
+        partition_key: Keyword.get(opts, :partition_key),
+        ordering_key: Keyword.get(opts, :ordering_key),
+        properties: Keyword.get(opts, :properties),
+        event_time: Keyword.get(opts, :event_time),
+        deliver_at_time: resolve_deliver_at_time(opts)
+      }
     }
 
-    payload = maybe_compress(message_metadata, payload)
+    case send_messages_sequentially([message], state) do
+      {:ok, [message_id], new_state} ->
+        {:reply, {:ok, message_id}, new_state}
 
-    case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, payload) do
-      :ok ->
-        :telemetry.execute(
-          [:pulsar, :producer, :message, :published],
-          %{count: 1},
-          %{
-            topic: state.topic,
-            producer_name: state.producer_name,
-            producer_id: state.producer_id,
-            sequence_id: sequence_id
-          }
-        )
-
-        new_waiting = Map.put(state.pending_sends, sequence_id, {from, %{}})
-        new_state = %{state | sequence_id: sequence_id, pending_sends: new_waiting}
-        {:noreply, new_state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -528,7 +507,6 @@ defmodule Pulsar.Producer do
     uuid = Uniq.UUID.uuid4()
     payload_size = byte_size(payload)
     chunk_size = state.max_message_size
-
     num_chunks = div(payload_size + chunk_size - 1, chunk_size)
 
     Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
@@ -539,10 +517,31 @@ defmodule Pulsar.Producer do
       %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
     )
 
-    result = send_chunks(payload, uuid, num_chunks, chunk_size, opts, state, 0, nil)
+    chunks =
+      for chunk_id <- 0..(num_chunks - 1) do
+        offset = chunk_id * chunk_size
+        remaining = payload_size - offset
+        current_chunk_size = min(remaining, chunk_size)
+        <<_skip::binary-size(offset), chunk_data::binary-size(current_chunk_size), _rest::binary>> = payload
 
-    case result do
-      {:ok, first_chunk_msg_id, last_chunk_msg_id, new_state} ->
+        {
+          chunk_data,
+          %{
+            partition_key: Keyword.get(opts, :partition_key),
+            ordering_key: Keyword.get(opts, :ordering_key),
+            properties: Keyword.get(opts, :properties),
+            event_time: Keyword.get(opts, :event_time),
+            deliver_at_time: resolve_deliver_at_time(opts),
+            uuid: uuid,
+            chunk_id: chunk_id,
+            num_chunks_from_msg: num_chunks,
+            total_chunk_msg_size: payload_size
+          }
+        }
+      end
+
+    case send_messages_sequentially(chunks, state, uuid) do
+      {:ok, message_ids, new_state} ->
         :telemetry.execute(
           [:pulsar, :producer, :chunk, :complete],
           %{num_chunks: num_chunks},
@@ -550,8 +549,8 @@ defmodule Pulsar.Producer do
         )
 
         chunked_msg_id = %{
-          first_chunk_message_id: first_chunk_msg_id,
-          last_chunk_message_id: last_chunk_msg_id,
+          first_chunk_message_id: List.first(message_ids),
+          last_chunk_message_id: List.last(message_ids),
           uuid: uuid,
           num_chunks: num_chunks
         }
@@ -563,13 +562,24 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp send_chunks(payload, uuid, num_chunks, chunk_size, opts, state, chunk_id, first_msg_id)
-       when chunk_id < num_chunks do
-    offset = chunk_id * chunk_size
-    remaining = byte_size(payload) - offset
-    current_chunk_size = min(remaining, chunk_size)
-    <<_skip::binary-size(offset), chunk_data::binary-size(current_chunk_size), _rest::binary>> = payload
+  defp send_messages_sequentially(messages, state, uuid \\ nil) do
+    messages
+    |> Enum.reduce_while({:ok, [], state}, fn {payload, metadata_opts}, {:ok, msg_ids, state_acc} ->
+      case send_and_wait_for_receipt(payload, metadata_opts, state_acc, uuid) do
+        {:ok, message_id, new_state} ->
+          {:cont, {:ok, [message_id | msg_ids], new_state}}
 
+        {:error, reason} ->
+          {:halt, {:error, reason, state_acc}}
+      end
+    end)
+    |> case do
+      {:ok, msg_ids, final_state} -> {:ok, Enum.reverse(msg_ids), final_state}
+      error -> error
+    end
+  end
+
+  defp send_and_wait_for_receipt(payload, metadata_opts, state, uuid) do
     sequence_id = state.sequence_id + 1
 
     command_send = %Binary.CommandSend{producer_id: state.producer_id, sequence_id: sequence_id}
@@ -578,57 +588,61 @@ defmodule Pulsar.Producer do
       producer_name: state.producer_name,
       sequence_id: sequence_id,
       publish_time: System.system_time(:millisecond),
-      uncompressed_size: byte_size(chunk_data),
+      uncompressed_size: byte_size(payload),
       compression: state.compression,
-      partition_key: Keyword.get(opts, :partition_key),
-      ordering_key: Keyword.get(opts, :ordering_key),
-      properties: to_key_value_list(Keyword.get(opts, :properties)),
-      event_time: to_timestamp(Keyword.get(opts, :event_time)),
-      deliver_at_time: resolve_deliver_at_time(opts),
-      # Chunking metadata
-      uuid: uuid,
-      chunk_id: chunk_id,
-      num_chunks_from_msg: num_chunks,
-      total_chunk_msg_size: byte_size(payload)
+      partition_key: Map.get(metadata_opts, :partition_key),
+      ordering_key: Map.get(metadata_opts, :ordering_key),
+      properties: to_key_value_list(Map.get(metadata_opts, :properties)),
+      event_time: to_timestamp(Map.get(metadata_opts, :event_time)),
+      deliver_at_time: Map.get(metadata_opts, :deliver_at_time),
+      uuid: Map.get(metadata_opts, :uuid),
+      chunk_id: Map.get(metadata_opts, :chunk_id),
+      num_chunks_from_msg: Map.get(metadata_opts, :num_chunks_from_msg),
+      total_chunk_msg_size: Map.get(metadata_opts, :total_chunk_msg_size)
     }
 
-    chunk_payload = maybe_compress(message_metadata, chunk_data)
+    compressed_payload = maybe_compress(message_metadata, payload)
 
-    case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, chunk_payload) do
+    case Pulsar.Broker.publish_message(state.broker_pid, command_send, message_metadata, compressed_payload) do
       :ok ->
-        :telemetry.execute(
-          [:pulsar, :producer, :chunk, :sent],
-          %{chunk_id: chunk_id, chunk_size: byte_size(chunk_data)},
-          %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id}
-        )
+        chunk_id = Map.get(metadata_opts, :chunk_id)
 
-        # Wait for this chunk's receipt before sending the next one
+        if is_nil(chunk_id) do
+          :telemetry.execute(
+            [:pulsar, :producer, :message, :published],
+            %{count: 1},
+            %{
+              topic: state.topic,
+              producer_name: state.producer_name,
+              producer_id: state.producer_id,
+              sequence_id: sequence_id
+            }
+          )
+        else
+          :telemetry.execute(
+            [:pulsar, :producer, :chunk, :sent],
+            %{chunk_id: chunk_id, chunk_size: byte_size(payload)},
+            %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id}
+          )
+        end
+
+        new_state = %{state | sequence_id: sequence_id}
+
         receive do
-          {:send_receipt, %Binary.CommandSendReceipt{sequence_id: ^sequence_id} = receipt} ->
-            # Track first message ID from chunk 0
-            first_msg_id = if chunk_id == 0, do: receipt.message_id, else: first_msg_id
-            new_state = %{state | sequence_id: sequence_id}
-
-            # If this is the last chunk, return immediately with the last message ID
-            if chunk_id == num_chunks - 1 do
-              {:ok, first_msg_id, receipt.message_id, new_state}
-            else
-              # Send next chunk
-              send_chunks(payload, uuid, num_chunks, chunk_size, opts, new_state, chunk_id + 1, first_msg_id)
-            end
+          {:send_receipt, %Binary.CommandSendReceipt{sequence_id: ^sequence_id, message_id: message_id}} ->
+            {:ok, message_id, new_state}
 
           {:send_error, %Binary.CommandSendError{sequence_id: ^sequence_id} = error} ->
-            Logger.error("Failed to send chunk #{chunk_id}: #{inspect(error)}")
-            new_state = %{state | sequence_id: sequence_id}
-            {:error, {error.error, error.message}, new_state}
+            Logger.error("Failed to send message (sequence_id=#{sequence_id}): #{inspect(error)}")
+            {:error, {error.error, error.message}}
         after
           5000 ->
-            Logger.error("Timeout waiting for chunk #{chunk_id} receipt")
-            {:error, :chunk_send_timeout, state}
+            Logger.error("Timeout waiting for message receipt (sequence_id=#{sequence_id})")
+            {:error, :receipt_timeout}
         end
 
       {:error, reason} ->
-        {:error, reason, state}
+        {:error, reason}
     end
   end
 end
