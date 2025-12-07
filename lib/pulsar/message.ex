@@ -112,4 +112,30 @@ defmodule Pulsar.Message do
   def redelivery_count(%__MODULE__{command: command}) do
     command.redelivery_count
   end
+
+  @doc """
+  Returns the number of broker messages (permits) consumed.
+
+  For non-chunked messages, this is always 1.
+  For chunked messages, this is the number of chunks actually received.
+
+  This is used for flow control permit accounting.
+
+  ## Examples
+
+      iex> Pulsar.Message.num_broker_messages(non_chunked_message)
+      1
+
+      iex> Pulsar.Message.num_broker_messages(complete_chunked_message)
+      3  # if message had 3 chunks
+
+      iex> Pulsar.Message.num_broker_messages(incomplete_chunked_message)
+      2  # if only 2 out of 3 chunks were received before timeout
+  """
+  @spec num_broker_messages(t()) :: pos_integer()
+  def num_broker_messages(%__MODULE__{chunk_metadata: %{message_ids: ids}}) when is_list(ids) do
+    length(ids)
+  end
+
+  def num_broker_messages(%__MODULE__{}), do: 1
 end

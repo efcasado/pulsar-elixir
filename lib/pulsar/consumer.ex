@@ -537,8 +537,9 @@ defmodule Pulsar.Consumer do
         {state, pulsar_messages}
       end
 
-    num_messages = length(messages)
-    state = decrement_permits(state, num_messages)
+    # Count permits consumed (for chunked messages, this is the number of chunks)
+    permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
+    state = decrement_permits(state, permits_consumed)
 
     new_state = process_messages_normally(state, messages)
     new_state = maybe_send_batch_to_dead_letter(new_state, messages)
