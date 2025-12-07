@@ -12,29 +12,31 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   defstruct [
     :uuid,
     :chunks,
+    :chunk_message_ids,
     :num_chunks_from_msg,
     :total_chunk_msg_size,
     :received_chunks,
     :first_chunk_message_id,
     :last_chunk_message_id,
     :created_at,
-    :command,
-    :metadata,
-    :broker_metadata
+    :commands,
+    :metadatas,
+    :broker_metadatas
   ]
 
   @type t :: %__MODULE__{
           uuid: String.t(),
           chunks: %{non_neg_integer() => binary()},
+          chunk_message_ids: %{non_neg_integer() => term()},
           num_chunks_from_msg: non_neg_integer(),
           total_chunk_msg_size: non_neg_integer(),
           received_chunks: non_neg_integer(),
           first_chunk_message_id: term(),
           last_chunk_message_id: term(),
           created_at: integer(),
-          command: term(),
-          metadata: term(),
-          broker_metadata: term()
+          commands: [term()],
+          metadatas: [term()],
+          broker_metadatas: [term()]
         }
 
   @doc """
@@ -59,15 +61,16 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
       ctx = %__MODULE__{
         uuid: uuid,
         chunks: %{chunk_id => payload},
+        chunk_message_ids: %{chunk_id => message_id},
         num_chunks_from_msg: num_chunks,
         total_chunk_msg_size: total_size,
         received_chunks: 1,
         first_chunk_message_id: message_id,
         last_chunk_message_id: message_id,
         created_at: System.monotonic_time(:millisecond),
-        command: command,
-        metadata: metadata,
-        broker_metadata: broker_metadata
+        commands: [command],
+        metadatas: [metadata],
+        broker_metadatas: [broker_metadata]
       }
 
       {:ok, ctx}
@@ -82,17 +85,21 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   Returns `{:ok, updated_context}` if the chunk is in order,
   or `{:error, :out_of_order}` if it's not the expected next chunk.
   """
-  @spec add_chunk(t(), non_neg_integer(), binary(), term()) ::
+  @spec add_chunk(t(), non_neg_integer(), binary(), term(), term(), term(), term()) ::
           {:ok, t()} | {:error, :out_of_order}
-  def add_chunk(ctx, chunk_id, payload, message_id) do
+  def add_chunk(ctx, chunk_id, payload, message_id, command, metadata, broker_metadata) do
     expected_chunk_id = ctx.received_chunks
 
     if chunk_id == expected_chunk_id do
       updated_ctx = %{
         ctx
         | chunks: Map.put(ctx.chunks, chunk_id, payload),
+          chunk_message_ids: Map.put(ctx.chunk_message_ids, chunk_id, message_id),
           received_chunks: ctx.received_chunks + 1,
-          last_chunk_message_id: message_id
+          last_chunk_message_id: message_id,
+          commands: ctx.commands ++ [command],
+          metadatas: ctx.metadatas ++ [metadata],
+          broker_metadatas: ctx.broker_metadatas ++ [broker_metadata]
       }
 
       {:ok, updated_ctx}
@@ -173,5 +180,13 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   def age_ms(ctx) do
     now = System.monotonic_time(:millisecond)
     now - ctx.created_at
+  end
+
+  @doc """
+  Returns a list of all message IDs for chunks received so far.
+  """
+  @spec all_message_ids(t()) :: [term()]
+  def all_message_ids(ctx) do
+    Map.values(ctx.chunk_message_ids)
   end
 end

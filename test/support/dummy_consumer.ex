@@ -13,11 +13,23 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   end
 
   def handle_message(%Pulsar.Message{} = message, state) do
-    new_state = %{
-      state
-      | messages: [message | state.messages],
-        count: state.count + 1
-    }
+    # Only count complete messages (not incomplete chunks)
+    should_count =
+      case message.chunk_metadata do
+        %{chunked: true, complete: false} -> false
+        _ -> true
+      end
+
+    new_state =
+      if should_count do
+        %{
+          state
+          | messages: [message | state.messages],
+            count: state.count + 1
+        }
+      else
+        state
+      end
 
     if state.fail_all do
       {:error, :intentional_failure, new_state}

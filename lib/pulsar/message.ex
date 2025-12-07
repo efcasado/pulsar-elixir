@@ -6,21 +6,30 @@ defmodule Pulsar.Message do
 
   ## Fields
 
-  - `command` - The Pulsar protocol command containing message metadata like message ID,
-    redelivery count, etc. Type: `Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage.t()`
+  - `command` - List of Pulsar protocol commands containing message metadata like message ID,
+    redelivery count, etc. For chunked messages, contains commands from all chunks.
+    Type: `[Pulsar.Protocol.Binary.Pulsar.Proto.CommandMessage.t()]`
 
-  - `metadata` - Message metadata including producer information, publish time, properties, etc.
-    Type: `Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata.t()`
+  - `metadata` - List of message metadata including producer information, publish time, properties, etc.
+    For chunked messages, contains metadata from all chunks.
+    Type: `[Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata.t()]`
 
-  - `payload` - The actual message payload as a binary
+  - `payload` - The actual message payload as a binary. For chunked messages, this is the
+    assembled complete payload.
 
-  - `single_metadata` - Single message metadata (nil for non-batch messages, struct for batch messages).
-    This contains metadata specific to an individual message within a batch.
+  - `single_metadata` - List of single message metadata (empty for non-batch messages).
+    For batched messages, contains metadata specific to individual messages within the batch.
+    For chunked messages, contains metadata from all chunks.
 
-  - `broker_metadata` - Additional broker information about the message
+  - `broker_metadata` - List of additional broker information about the message.
+    For chunked messages, contains broker metadata from all chunks.
 
-  - `message_id_to_ack` - The message ID to use for ACK/NACK operations. This includes the
-    batch_index if the message came from a batch, ensuring proper acknowledgment
+  - `message_id_to_ack` - List of message IDs to use for ACK/NACK operations.
+    For batch messages, includes batch_index. For chunked messages, includes all chunk message IDs.
+
+  - `chunk_metadata` - Metadata about chunked messages (nil for non-chunked messages).
+    For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
+    For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
 
   ## Usage
 
@@ -43,8 +52,9 @@ defmodule Pulsar.Message do
 
       # Access all fields via the struct
       def handle_message(%Pulsar.Message{} = msg, state) do
-        redelivery_count = msg.command.redelivery_count
-        producer = msg.metadata.producer_name
+        redelivery_count = Pulsar.Message.redelivery_count(msg)
+        [metadata | _] = msg.metadata
+        producer = metadata.producer_name
         {:ok, state}
       end
 
@@ -61,12 +71,13 @@ defmodule Pulsar.Message do
   """
 
   @type t :: %__MODULE__{
-          command: struct(),
-          metadata: struct(),
+          command: [struct()],
+          metadata: [struct()],
           payload: binary(),
-          single_metadata: struct() | nil,
-          broker_metadata: term(),
-          message_id_to_ack: term()
+          single_metadata: [struct()],
+          broker_metadata: [term()],
+          message_id_to_ack: [term()],
+          chunk_metadata: map() | nil
         }
 
   defstruct [
@@ -75,6 +86,25 @@ defmodule Pulsar.Message do
     :payload,
     :single_metadata,
     :broker_metadata,
-    :message_id_to_ack
+    :message_id_to_ack,
+    :chunk_metadata
   ]
+
+  @doc """
+  Returns the maximum redelivery count across all commands.
+
+  For chunked messages, returns the maximum redelivery count from all chunks.
+  For non-chunked messages, returns the redelivery count from the single command.
+
+  ## Examples
+
+      iex> Pulsar.Message.redelivery_count(message)
+      3
+  """
+  @spec redelivery_count(t()) :: non_neg_integer()
+  def redelivery_count(%__MODULE__{command: commands}) do
+    commands
+    |> Enum.map(& &1.redelivery_count)
+    |> Enum.max(fn -> 0 end)
+  end
 end

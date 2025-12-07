@@ -52,7 +52,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-simple",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1
       )
 
@@ -89,7 +89,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-expiration",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1,
         expire_time_of_incomplete_chunked_message: 100
       )
@@ -112,7 +112,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-limit",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1,
         max_pending_chunked_messages: 5
       )
@@ -135,7 +135,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-auto-ack",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1,
         max_pending_chunked_messages: 5,
         auto_ack_oldest_chunked_message_on_queue_full: true
@@ -181,7 +181,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-interleaved",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1,
         max_pending_chunked_messages: 5
       )
@@ -229,7 +229,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-mixed",
         @consumer_callback,
         client: @client,
-        initial_position: :earliest,
+        initial_position: :latest,
         consumer_count: 1
       )
 
@@ -267,7 +267,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           "chunking-defaults",
           @consumer_callback,
           client: @client,
-          initial_position: :earliest,
+          initial_position: :latest,
           consumer_count: 1
         )
 
@@ -291,7 +291,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           "chunking-custom",
           @consumer_callback,
           client: @client,
-          initial_position: :earliest,
+          initial_position: :latest,
           consumer_count: 1,
           max_pending_chunked_messages: 20,
           expire_time_of_incomplete_chunked_message: 30_000,
