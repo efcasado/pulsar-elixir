@@ -2,9 +2,9 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   @moduledoc """
   Manages chunked message assembly for Pulsar consumers.
 
-  This module handles the buffering, ordering, and reassembly of message chunks
-  that arrive from the broker. It tracks multiple concurrent chunked messages
-  and ensures chunks are received in order before assembling the complete payload.
+  This module handles the buffering and reassembly of message chunks that arrive
+  from the broker. It tracks multiple concurrent chunked messages and accepts
+  chunks in any order, assembling the complete payload once all chunks are received.
   """
 
   require Logger
@@ -40,72 +40,64 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
         }
 
   @doc """
-  Creates a new chunked message context from the first chunk.
+  Creates a new chunked message context from any chunk.
 
-  Returns `{:ok, context}` if the chunk is valid (chunk_id == 0),
-  or `{:error, :out_of_order}` if it's not the first chunk.
+  Accepts the first chunk received for a chunked message, regardless of its chunk_id.
+  Returns `{:ok, context}` with the new context.
   """
   @spec new(command :: term(), metadata :: term(), payload :: binary(), broker_metadata :: term()) ::
-          {:ok, t()} | {:error, :out_of_order}
+          {:ok, t()}
   def new(command, metadata, payload, broker_metadata) do
     chunk_id = metadata.chunk_id
+    message_id = command.message_id
+    uuid = metadata.uuid
+    num_chunks = metadata.num_chunks_from_msg
+    total_size = Map.get(metadata, :total_chunk_msg_size, 0)
 
-    if chunk_id == 0 do
-      message_id = command.message_id
-      uuid = metadata.uuid
-      num_chunks = metadata.num_chunks_from_msg
-      total_size = Map.get(metadata, :total_chunk_msg_size, 0)
+    ctx = %__MODULE__{
+      uuid: uuid,
+      chunks: %{chunk_id => payload},
+      chunk_message_ids: %{chunk_id => message_id},
+      num_chunks_from_msg: num_chunks,
+      total_chunk_msg_size: total_size,
+      received_chunks: 1,
+      first_chunk_message_id: if(chunk_id == 0, do: message_id),
+      last_chunk_message_id: message_id,
+      created_at: System.monotonic_time(:millisecond),
+      commands: [command],
+      metadatas: [metadata],
+      broker_metadatas: [broker_metadata]
+    }
 
-      ctx = %__MODULE__{
-        uuid: uuid,
-        chunks: %{chunk_id => payload},
-        chunk_message_ids: %{chunk_id => message_id},
-        num_chunks_from_msg: num_chunks,
-        total_chunk_msg_size: total_size,
-        received_chunks: 1,
-        first_chunk_message_id: message_id,
-        last_chunk_message_id: message_id,
-        created_at: System.monotonic_time(:millisecond),
-        commands: [command],
-        metadatas: [metadata],
-        broker_metadatas: [broker_metadata]
-      }
-
-      {:ok, ctx}
-    else
-      {:error, :out_of_order}
-    end
+    {:ok, ctx}
   end
 
   @doc """
   Adds a chunk to an existing context.
 
-  Returns `{:ok, updated_context}` if the chunk is in order,
-  or `{:error, :out_of_order}` if it's not the expected next chunk.
+  Accepts chunks in any order. If a chunk with the same chunk_id already exists,
+  it is replaced (idempotent). Returns `{:ok, updated_context}`.
   """
   @spec add_chunk(t(), command :: term(), metadata :: term(), payload :: binary(), broker_metadata :: term()) ::
-          {:ok, t()} | {:error, :out_of_order}
+          {:ok, t()}
   def add_chunk(ctx, command, metadata, payload, broker_metadata) do
     chunk_id = metadata.chunk_id
     message_id = command.message_id
-    expected_chunk_id = ctx.received_chunks
+    already_has_chunk = Map.has_key?(ctx.chunks, chunk_id)
 
-    if chunk_id == expected_chunk_id do
-      updated_ctx = %{
-        ctx
-        | chunks: Map.put(ctx.chunks, chunk_id, payload),
-          chunk_message_ids: Map.put(ctx.chunk_message_ids, chunk_id, message_id),
-          received_chunks: ctx.received_chunks + 1,
-          last_chunk_message_id: message_id,
-          commands: ctx.commands ++ [command],
-          metadatas: ctx.metadatas ++ [metadata],
-          broker_metadatas: ctx.broker_metadatas ++ [broker_metadata]
-      }
+    updated_ctx = %{
+      ctx
+      | chunks: Map.put(ctx.chunks, chunk_id, payload),
+        chunk_message_ids: Map.put(ctx.chunk_message_ids, chunk_id, message_id),
+        received_chunks: if(already_has_chunk, do: ctx.received_chunks, else: ctx.received_chunks + 1),
+        first_chunk_message_id: if(chunk_id == 0, do: message_id, else: ctx.first_chunk_message_id),
+        last_chunk_message_id: message_id,
+        commands: ctx.commands ++ [command],
+        metadatas: ctx.metadatas ++ [metadata],
+        broker_metadatas: ctx.broker_metadatas ++ [broker_metadata]
+    }
 
-      {:ok, updated_ctx}
-    else
-      {:error, :out_of_order}
-    end
+    {:ok, updated_ctx}
   end
 
   @doc """

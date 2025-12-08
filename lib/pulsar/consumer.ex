@@ -1149,7 +1149,6 @@ defmodule Pulsar.Consumer do
   defp do_create_chunk_context(state, chunk_data) do
     %{
       uuid: uuid,
-      chunk_id: chunk_id,
       num_chunks: num_chunks,
       command: command,
       metadata: metadata,
@@ -1157,67 +1156,48 @@ defmodule Pulsar.Consumer do
       broker_metadata: broker_metadata
     } = chunk_data
 
-    case ChunkedMessageContext.new(command, metadata, payload, broker_metadata) do
-      {:ok, ctx} ->
-        new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
-        new_state = %{state | chunked_message_contexts: new_contexts}
+    {:ok, ctx} = ChunkedMessageContext.new(command, metadata, payload, broker_metadata)
+    new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
+    new_state = %{state | chunked_message_contexts: new_contexts}
 
-        if ChunkedMessageContext.complete?(ctx) do
-          # Complete - assemble and return complete message
-          complete_payload = ChunkedMessageContext.assemble_payload(ctx)
+    if ChunkedMessageContext.complete?(ctx) do
+      # Complete - assemble and return complete message
+      complete_payload = ChunkedMessageContext.assemble_payload(ctx)
 
-          :telemetry.execute(
-            [:pulsar, :consumer, :chunk, :complete],
-            %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
-            %{uuid: uuid, consumer_id: state.consumer_id}
-          )
+      :telemetry.execute(
+        [:pulsar, :consumer, :chunk, :complete],
+        %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
+        %{uuid: uuid, consumer_id: state.consumer_id}
+      )
 
-          # Remove from context since it's complete
-          final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
+      # Remove from context since it's complete
+      final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
 
-          # Include all message IDs so they can all be ACKed
-          all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
+      # Include all message IDs so they can all be ACKed
+      all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
 
-          chunk_metadata = %{
-            chunked: true,
-            complete: true,
-            uuid: uuid,
-            num_chunks: num_chunks,
-            message_ids: all_message_ids,
-            commands: ctx.commands,
-            metadatas: ctx.metadatas,
-            broker_metadatas: ctx.broker_metadatas
-          }
+      chunk_metadata = %{
+        chunked: true,
+        complete: true,
+        uuid: uuid,
+        num_chunks: num_chunks,
+        message_ids: all_message_ids,
+        commands: ctx.commands,
+        metadatas: ctx.metadatas,
+        broker_metadatas: ctx.broker_metadatas
+      }
 
-          message = build_message_from_chunk(chunk_metadata, complete_payload)
-          {final_state, [message]}
-        else
-          # Incomplete - don't return any message yet, keep waiting for more chunks
-          {new_state, []}
-        end
-
-      {:error, :out_of_order} ->
-        Logger.warning(
-          "Received out-of-order chunk (chunk_id=#{chunk_id} for new message), discarding chunked message #{uuid}"
-        )
-
-        :telemetry.execute(
-          [:pulsar, :consumer, :chunk, :discarded],
-          %{reason: :out_of_order, chunk_id: chunk_id},
-          %{uuid: uuid, consumer_id: state.consumer_id}
-        )
-
-        # Return incomplete chunk to be NACKed by normal flow
-        chunk_metadata = %{chunked: true, complete: false, error: :out_of_order, uuid: uuid, received_chunks: 0}
-        message = build_message_from_chunk(chunk_metadata, nil)
-        {state, [message]}
+      message = build_message_from_chunk(chunk_metadata, complete_payload)
+      {final_state, [message]}
+    else
+      # Incomplete - don't return any message yet, keep waiting for more chunks
+      {new_state, []}
     end
   end
 
   defp add_chunk_to_context(state, ctx, chunk_data) do
     %{
       uuid: uuid,
-      chunk_id: chunk_id,
       num_chunks: num_chunks,
       command: command,
       metadata: metadata,
@@ -1225,72 +1205,42 @@ defmodule Pulsar.Consumer do
       broker_metadata: broker_metadata
     } = chunk_data
 
-    case ChunkedMessageContext.add_chunk(ctx, command, metadata, payload, broker_metadata) do
-      {:ok, updated_ctx} ->
-        new_contexts = Map.put(state.chunked_message_contexts, uuid, updated_ctx)
-        new_state = %{state | chunked_message_contexts: new_contexts}
+    {:ok, updated_ctx} = ChunkedMessageContext.add_chunk(ctx, command, metadata, payload, broker_metadata)
+    new_contexts = Map.put(state.chunked_message_contexts, uuid, updated_ctx)
+    new_state = %{state | chunked_message_contexts: new_contexts}
 
-        if ChunkedMessageContext.complete?(updated_ctx) do
-          # Complete - assemble and return complete message
-          complete_payload = ChunkedMessageContext.assemble_payload(updated_ctx)
+    if ChunkedMessageContext.complete?(updated_ctx) do
+      # Complete - assemble and return complete message
+      complete_payload = ChunkedMessageContext.assemble_payload(updated_ctx)
 
-          :telemetry.execute(
-            [:pulsar, :consumer, :chunk, :complete],
-            %{num_chunks: updated_ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
-            %{uuid: uuid, consumer_id: state.consumer_id}
-          )
+      :telemetry.execute(
+        [:pulsar, :consumer, :chunk, :complete],
+        %{num_chunks: updated_ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
+        %{uuid: uuid, consumer_id: state.consumer_id}
+      )
 
-          # Remove from context since it's complete
-          final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
+      # Remove from context since it's complete
+      final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
 
-          # Include all message IDs so they can all be ACKed
-          all_message_ids = ChunkedMessageContext.all_message_ids(updated_ctx)
+      # Include all message IDs so they can all be ACKed
+      all_message_ids = ChunkedMessageContext.all_message_ids(updated_ctx)
 
-          chunk_metadata = %{
-            chunked: true,
-            complete: true,
-            uuid: uuid,
-            num_chunks: num_chunks,
-            message_ids: all_message_ids,
-            commands: updated_ctx.commands,
-            metadatas: updated_ctx.metadatas,
-            broker_metadatas: updated_ctx.broker_metadatas
-          }
+      chunk_metadata = %{
+        chunked: true,
+        complete: true,
+        uuid: uuid,
+        num_chunks: num_chunks,
+        message_ids: all_message_ids,
+        commands: updated_ctx.commands,
+        metadatas: updated_ctx.metadatas,
+        broker_metadatas: updated_ctx.broker_metadatas
+      }
 
-          message = build_message_from_chunk(chunk_metadata, complete_payload)
-          {final_state, [message]}
-        else
-          # Incomplete - don't return any message yet, keep waiting for more chunks
-          {new_state, []}
-        end
-
-      {:error, :out_of_order} ->
-        expected_chunk_id = ctx.received_chunks
-
-        Logger.warning(
-          "Received out-of-order chunk (expected=#{expected_chunk_id}, got=#{chunk_id}), discarding chunked message #{uuid}"
-        )
-
-        :telemetry.execute(
-          [:pulsar, :consumer, :chunk, :discarded],
-          %{reason: :out_of_order, expected: expected_chunk_id, received: chunk_id},
-          %{uuid: uuid, consumer_id: state.consumer_id}
-        )
-
-        # Remove the broken context
-        new_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
-
-        # Return incomplete chunk to be NACKed by normal flow
-        chunk_metadata = %{
-          chunked: true,
-          complete: false,
-          error: :out_of_order,
-          uuid: uuid,
-          received_chunks: ctx.received_chunks
-        }
-
-        message = build_message_from_chunk(chunk_metadata, nil)
-        {new_state, [message]}
+      message = build_message_from_chunk(chunk_metadata, complete_payload)
+      {final_state, [message]}
+    else
+      # Incomplete - don't return any message yet, keep waiting for more chunks
+      {new_state, []}
     end
   end
 
