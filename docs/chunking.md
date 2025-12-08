@@ -108,19 +108,16 @@ consumers: [
 
     # Chunking-related options:
     max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
-    expire_time_of_incomplete_chunked_message: 60_000,       # Timeout in ms (default: 60s)
-    auto_ack_oldest_chunked_message_on_queue_full: false     # Auto-ack on overflow (default: false)
+    expire_time_of_incomplete_chunked_message: 60_000        # Timeout in ms (default: 60s)
   ]
 ]
 ```
 
 #### Configuration Details
 
-- **`max_pending_chunked_messages`**: Maximum number of incomplete chunked messages to buffer simultaneously. If this limit is reached and a new chunked message arrives, the oldest incomplete message is either discarded or auto-acknowledged based on `auto_ack_oldest_chunked_message_on_queue_full`.
+- **`max_pending_chunked_messages`**: Maximum number of incomplete chunked messages to buffer simultaneously. If this limit is reached and a new chunked message arrives, the oldest incomplete message is evicted and delivered as incomplete with `error: :queue_full`.
 
 - **`expire_time_of_incomplete_chunked_message`**: How long to wait for all chunks before timing out. Expired messages are delivered as incomplete with `error: :expired`.
-
-- **`auto_ack_oldest_chunked_message_on_queue_full`**: When `true`, automatically acknowledges the oldest incomplete chunked message when the queue is full. When `false`, the oldest message is discarded (negatively acknowledged).
 
 ## Handling Incomplete Chunks
 

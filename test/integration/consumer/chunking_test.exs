@@ -128,30 +128,6 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert state.max_pending_chunked_messages == 5
   end
 
-  test "auto ack behavior when queue is full" do
-    {:ok, consumer_group} =
-      Pulsar.start_consumer(
-        @topic,
-        "chunking-auto-ack",
-        @consumer_callback,
-        client: @client,
-        initial_position: :latest,
-        consumer_count: 1,
-        max_pending_chunked_messages: 5,
-        auto_ack_oldest_chunked_message_on_queue_full: true
-      )
-
-    [consumer] = Pulsar.get_consumers(consumer_group)
-
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.callback_state != nil
-    end)
-
-    state = :sys.get_state(consumer)
-    assert state.auto_ack_oldest_chunked_message_on_queue_full == true
-  end
-
   @tag telemetry_listen: [
          [:pulsar, :consumer, :chunk, :received],
          [:pulsar, :consumer, :chunk, :complete]
@@ -281,7 +257,6 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       state = :sys.get_state(consumer)
       assert state.max_pending_chunked_messages == 10
       assert state.expire_time_of_incomplete_chunked_message == 60_000
-      assert state.auto_ack_oldest_chunked_message_on_queue_full == false
     end
 
     test "accepts custom chunking configuration" do
@@ -294,8 +269,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           initial_position: :latest,
           consumer_count: 1,
           max_pending_chunked_messages: 20,
-          expire_time_of_incomplete_chunked_message: 30_000,
-          auto_ack_oldest_chunked_message_on_queue_full: true
+          expire_time_of_incomplete_chunked_message: 30_000
         )
 
       [consumer] = Pulsar.get_consumers(consumer_group)
@@ -308,7 +282,6 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       state = :sys.get_state(consumer)
       assert state.max_pending_chunked_messages == 20
       assert state.expire_time_of_incomplete_chunked_message == 30_000
-      assert state.auto_ack_oldest_chunked_message_on_queue_full == true
     end
   end
 end
