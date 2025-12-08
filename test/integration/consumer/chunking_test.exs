@@ -91,7 +91,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         client: @client,
         initial_position: :latest,
         consumer_count: 1,
-        expire_time_of_incomplete_chunked_message: 100
+        expire_incomplete_chunked_message_after: 100
       )
 
     [consumer] = Pulsar.get_consumers(consumer_group)
@@ -102,7 +102,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     end)
 
     state = :sys.get_state(consumer)
-    assert state.expire_time_of_incomplete_chunked_message == 100
+    assert state.expire_incomplete_chunked_message_after == 100
   end
 
   test "respects max pending chunked messages limit" do
