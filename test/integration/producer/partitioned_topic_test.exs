@@ -68,7 +68,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         init_args: [notify_pid: self()]
       )
 
-    consumers = wait_for_consumer_ready(3)
+    consumers = Utils.wait_for_consumer_ready(3)
 
     partition_key = "same-partition-key-#{test_id}"
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
@@ -127,7 +127,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         init_args: [notify_pid: self()]
       )
 
-    consumers = wait_for_consumer_ready(3)
+    consumers = Utils.wait_for_consumer_ready(3)
 
     messages =
       for i <- 1..30 do
@@ -166,16 +166,6 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
           state = :sys.get_state(producer)
           state.producer_name != nil
         end)
-    end)
-  end
-
-  defp wait_for_consumer_ready(count, timeout \\ 5000) do
-    Enum.map(1..count, fn _ ->
-      receive do
-        {:consumer_ready, pid} -> pid
-      after
-        timeout -> flunk("Timeout waiting for consumer to be ready")
-      end
     end)
   end
 end

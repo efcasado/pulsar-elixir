@@ -37,20 +37,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, consumer_group} =
+    {:ok, _consumer_group} =
       Pulsar.start_consumer(
         @topic,
         "chunking-simple",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [notify_pid: self()]
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
-
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.callback_state != nil
-    end)
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     assert byte_size(large_message) == 44
 
@@ -91,20 +87,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 8
       )
 
-    {:ok, consumer_group} =
+    {:ok, _consumer_group} =
       Pulsar.start_consumer(
         @topic,
         "chunking-interleaved",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [notify_pid: self()]
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
-
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.callback_state != nil
-    end)
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     task1 = Task.async(fn -> Pulsar.send(producer1, p1_large_message) end)
     task2 = Task.async(fn -> Pulsar.send(producer2, p2_large_message) end)
@@ -136,20 +128,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, consumer_group} =
+    {:ok, _consumer_group} =
       Pulsar.start_consumer(
         @topic,
         "chunking-mixed",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [notify_pid: self()]
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
-
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.callback_state != nil
-    end)
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     {:ok, _} = Pulsar.send(producer, small_message)
     {:ok, _} = Pulsar.send(producer, large_message)
@@ -194,20 +182,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, consumer_group} =
+    {:ok, _consumer_group} =
       Pulsar.start_consumer(
         @topic,
         "chunking-5mb",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [notify_pid: self()]
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
-
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.callback_state != nil
-    end)
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     assert byte_size(very_large_message) == 6_291_456
 
