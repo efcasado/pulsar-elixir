@@ -509,30 +509,47 @@ defmodule Pulsar.Consumer do
     {:stop, :broker_close_requested, state}
   end
 
-  def handle_info({:broker_message, {command, metadata, payload, broker_metadata}}, state) do
-    payload = maybe_uncompress(metadata, payload)
+  def handle_info({:broker_message, message_data}, state) do
+    {messages, should_decrement_permits, new_state} =
+      case message_data do
+        {command, metadata, payload, broker_metadata} ->
+          # Normal broker message - decompress, unwrap/assemble, and decrement permits
+          payload = maybe_uncompress(metadata, payload)
 
-    # Build Pulsar.Message structs based on message type (chunked vs non-chunked)
-    {state, messages} =
-      if chunked_message?(metadata) do
-        maybe_assemble_chunked_message(
-          state,
-          command,
-          metadata,
-          payload,
-          broker_metadata
-        )
-      else
-        unwrapped = unwrap_messages(metadata, payload)
-        pulsar_messages = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
-        {state, pulsar_messages}
+          {state_after, msgs} =
+            if chunked_message?(metadata) do
+              maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
+            else
+              unwrapped = unwrap_messages(metadata, payload)
+              pulsar_messages = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+              {state, pulsar_messages}
+            end
+
+          {msgs, true, state_after}
+
+        {commands, metadatas, payload, broker_metadatas, chunk_metadata} ->
+          # Incomplete chunk (expired/evicted) - already uncompressed and permits already decremented
+          chunk_metadata_full =
+            Map.merge(chunk_metadata, %{
+              commands: commands,
+              metadatas: metadatas,
+              broker_metadatas: broker_metadatas
+            })
+
+          message = build_message_from_chunk(chunk_metadata_full, payload)
+          {[message], false, state}
       end
 
-    # Count permits consumed (for chunked messages, this is the number of chunks)
-    permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
-    state = decrement_permits(state, permits_consumed)
+    # Decrement permits only for newly received messages (not for expired/evicted chunks)
+    new_state =
+      if should_decrement_permits do
+        permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
+        decrement_permits(new_state, permits_consumed)
+      else
+        new_state
+      end
 
-    new_state = process_messages_normally(state, messages)
+    new_state = process_messages_normally(new_state, messages)
     new_state = maybe_send_batch_to_dead_letter(new_state, messages)
 
     {:noreply, new_state}
@@ -575,25 +592,6 @@ defmodule Pulsar.Consumer do
     Logger.info("Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, consumer will restart")
 
     {:stop, :broker_crashed, state}
-  end
-
-  # Handle incomplete chunks (expired/evicted) sent as broker messages
-  def handle_info({:broker_message, {commands, metadatas, payload, broker_metadatas, chunk_metadata}}, state) do
-    # Already uncompressed and assembled, build Pulsar.Message
-    chunk_metadata_full =
-      Map.merge(chunk_metadata, %{
-        commands: commands,
-        metadatas: metadatas,
-        broker_metadatas: broker_metadatas
-      })
-
-    message = build_message_from_chunk(chunk_metadata_full, payload)
-
-    # Don't decrement permits for incomplete chunks - they were already decremented when received
-
-    new_state = process_messages_normally(state, [message])
-
-    {:noreply, new_state}
   end
 
   # Handle other info messages by delegating to callback module
