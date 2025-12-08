@@ -108,7 +108,8 @@ consumers: [
 
     # Chunking-related options:
     max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
-    expire_incomplete_chunked_message_after: 60_000          # Timeout in ms (default: 60s)
+    expire_incomplete_chunked_message_after: 60_000,         # Timeout in ms (default: 60s)
+    chunk_cleanup_interval: 30_000                           # Cleanup check interval in ms (default: 30s)
   ]
 ]
 ```
@@ -118,6 +119,8 @@ consumers: [
 - **`max_pending_chunked_messages`**: Maximum number of incomplete chunked messages to buffer simultaneously. If this limit is reached and a new chunked message arrives, the oldest incomplete message is evicted and delivered as incomplete with `error: :queue_full`.
 
 - **`expire_incomplete_chunked_message_after`**: How long to wait for all chunks before timing out. Expired messages are delivered as incomplete with `error: :expired`.
+
+- **`chunk_cleanup_interval`**: How often to check for and clean up expired chunked messages. Set to `nil` to disable automatic cleanup (not recommended for production).
 
 ## Handling Incomplete Chunks
 
@@ -139,17 +142,27 @@ end
 
 ## Flow Control and Permits
 
-Each chunk consumes one flow control permit, not the assembled message. The `Pulsar.Message.num_broker_messages/1` helper correctly counts permits:
+Flow control permits are only decremented when messages are assembled and delivered to your callback:
+
+- **Individual chunks arriving**: No permits are decremented yet
+- **Chunked message completed**: Decrements N permits (where N = number of chunks)
+- **Chunked message expired/evicted**: Decrements M permits (where M = number of chunks received)
+- **Non-chunked message**: Decrements 1 permit
+
+The `Pulsar.Message.num_broker_messages/1` helper returns the correct permit count:
 
 ```elixir
 # Non-chunked message
 Pulsar.Message.num_broker_messages(message) # => 1
 
-# Chunked message with 3 chunks
+# Complete chunked message with 3 chunks
 Pulsar.Message.num_broker_messages(message) # => 3
+
+# Incomplete chunked message with 2 out of 3 chunks received
+Pulsar.Message.num_broker_messages(message) # => 2
 ```
 
-This is handled automatically by the consumer's flow control system.
+This ensures that flow control accurately reflects the number of broker messages consumed, regardless of whether messages are chunked or not.
 
 ## Helper Functions
 
