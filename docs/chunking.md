@@ -160,6 +160,12 @@ This is handled automatically by the consumer's flow control system.
 The `Pulsar.Message` module provides helpers for working with chunked messages:
 
 ```elixir
+# Check if message is chunked
+Pulsar.Message.chunked?(message) # => true for chunked, false otherwise
+
+# Check if chunked message is complete
+Pulsar.Message.complete?(message) # => true if complete, false if incomplete
+
 # Get maximum redelivery count (max across all chunks for chunked messages)
 redelivery_count = Pulsar.Message.redelivery_count(message)
 
@@ -196,20 +202,15 @@ defmodule MyConsumer do
   use Pulsar.Consumer.Callback
 
   def handle_message(%Pulsar.Message{} = message, state) do
-    case message.chunk_metadata do
-      %{chunked: true, complete: true, num_chunks: n} ->
-        # message.payload contains complete 5MB file
-        IO.puts("Received complete file in #{n} chunks")
-        process_file(message.payload)
-        {:ok, state}
-
-      %{chunked: true, complete: false, error: reason} ->
-        Logger.error("Failed to receive complete file: #{reason}")
-        {:error, reason, state}
-
-      nil ->
-        # Regular non-chunked message
-        {:ok, state}
+    if Pulsar.Message.chunked?(message) and Pulsar.Message.complete?(message) do
+      # message.payload contains complete 5MB file
+      num_chunks = message.chunk_metadata.num_chunks
+      IO.puts("Received complete file in #{num_chunks} chunks")
+      process_file(message.payload)
+      {:ok, state}
+    else
+      # Regular non-chunked message or incomplete chunked message
+      {:ok, state}
     end
   end
 end

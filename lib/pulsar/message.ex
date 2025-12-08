@@ -138,4 +138,42 @@ defmodule Pulsar.Message do
   end
 
   def num_broker_messages(%__MODULE__{}), do: 1
+
+  @doc """
+  Returns `true` if the message is a chunked message, `false` otherwise.
+
+  This checks for the presence of chunk metadata.
+
+  ## Examples
+
+      iex> Pulsar.Message.chunked?(message)
+      true
+
+      iex> Pulsar.Message.chunked?(non_chunked_message)
+      false
+  """
+  @spec chunked?(t()) :: boolean()
+  def chunked?(%__MODULE__{chunk_metadata: %{chunked: true}}), do: true
+  def chunked?(%__MODULE__{}), do: false
+
+  @doc """
+  Returns `true` if the chunked message is complete, `false` otherwise.
+
+  For non-chunked messages, always returns `true` since they are inherently complete.
+  For chunked messages, returns `true` only if all chunks were successfully received.
+
+  ## Examples
+
+      iex> Pulsar.Message.complete?(complete_chunked_message)
+      true
+
+      iex> Pulsar.Message.complete?(incomplete_chunked_message)
+      false
+
+      iex> Pulsar.Message.complete?(non_chunked_message)
+      true
+  """
+  @spec complete?(t()) :: boolean()
+  def complete?(%__MODULE__{chunk_metadata: %{complete: complete}}), do: complete
+  def complete?(%__MODULE__{}), do: true
 end
