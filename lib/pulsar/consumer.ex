@@ -61,7 +61,8 @@ defmodule Pulsar.Consumer do
     :dead_letter_producer_pid,
     :chunked_message_contexts,
     :max_pending_chunked_messages,
-    :expire_incomplete_chunked_message_after
+    :expire_incomplete_chunked_message_after,
+    :chunk_cleanup_interval
   ]
 
   @type t :: %__MODULE__{
@@ -115,6 +116,7 @@ defmodule Pulsar.Consumer do
       - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
     - `:max_pending_chunked_messages` - Maximum number of concurrent chunked messages to buffer (default: 10)
     - `:expire_incomplete_chunked_message_after` - Timeout in milliseconds for incomplete chunked messages (default: 60_000)
+    - `:chunk_cleanup_interval` - Interval in milliseconds for checking expired chunked messages (default: 30_000)
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before consumer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
 
@@ -147,6 +149,9 @@ defmodule Pulsar.Consumer do
     {expire_incomplete_chunked_message_after, genserver_opts} =
       Keyword.pop(genserver_opts, :expire_incomplete_chunked_message_after, 60_000)
 
+    {chunk_cleanup_interval, genserver_opts} =
+      Keyword.pop(genserver_opts, :chunk_cleanup_interval, 30_000)
+
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
     {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
@@ -170,6 +175,7 @@ defmodule Pulsar.Consumer do
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
       expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
+      chunk_cleanup_interval: chunk_cleanup_interval,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     }
@@ -320,6 +326,7 @@ defmodule Pulsar.Consumer do
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
       expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
+      chunk_cleanup_interval: chunk_cleanup_interval,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     } = consumer_config
@@ -347,10 +354,10 @@ defmodule Pulsar.Consumer do
       redelivery_interval: redelivery_interval,
       max_redelivery: max_redelivery,
       dead_letter_topic: dead_letter_topic,
-      dead_letter_producer_pid: nil,
       chunked_message_contexts: %{},
       max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after
+      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
+      chunk_cleanup_interval: chunk_cleanup_interval
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -464,7 +471,7 @@ defmodule Pulsar.Consumer do
       :ok ->
         broker_monitor = Process.monitor(state.broker_pid)
         schedule_redelivery(state.redelivery_interval)
-        schedule_chunk_cleanup()
+        schedule_chunk_cleanup(state.chunk_cleanup_interval)
 
         {:noreply,
          %{
@@ -572,7 +579,7 @@ defmodule Pulsar.Consumer do
   @impl true
   def handle_info(:cleanup_expired_chunks, state) do
     new_state = cleanup_expired_chunked_messages(state)
-    schedule_chunk_cleanup()
+    schedule_chunk_cleanup(state.chunk_cleanup_interval)
     {:noreply, new_state}
   end
 
@@ -1089,8 +1096,10 @@ defmodule Pulsar.Consumer do
 
   defp chunked_message?(_metadata), do: false
 
-  defp schedule_chunk_cleanup do
-    Process.send_after(self(), :cleanup_expired_chunks, 30_000)
+  defp schedule_chunk_cleanup(nil), do: :ok
+
+  defp schedule_chunk_cleanup(interval) when is_integer(interval) and interval > 0 do
+    Process.send_after(self(), :cleanup_expired_chunks, interval)
     :ok
   end
 
