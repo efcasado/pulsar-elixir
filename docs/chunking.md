@@ -123,9 +123,8 @@ consumers: [
 
 Chunks may not complete for several reasons:
 
-1. **Out-of-order delivery**: Chunks arrived in the wrong sequence
-2. **Expiration**: Not all chunks arrived within the timeout period
-3. **Queue overflow**: Too many concurrent chunked messages
+1. **Expiration**: Not all chunks arrived within the timeout period
+2. **Queue overflow**: Too many concurrent chunked messages
 
 Incomplete chunks are delivered to your callback with `complete: false`:
 
