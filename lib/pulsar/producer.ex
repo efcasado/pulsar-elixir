@@ -279,60 +279,21 @@ defmodule Pulsar.Producer do
 
   @impl true
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
-    case Map.pop(state.pending_sends, receipt.sequence_id) do
-      {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) and map_size(chunk_metadata) > 0 ->
-        uuid = chunk_metadata.uuid
-        num_chunks = chunk_metadata.num_chunks
+    new_state =
+      case Map.pop(state.pending_sends, receipt.sequence_id) do
+        {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) and map_size(chunk_metadata) > 0 ->
+          handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state)
 
-        updated_chunk_meta = Map.put(chunk_metadata, :message_id, receipt.message_id)
-        updated_pending = Map.put(new_pending, receipt.sequence_id, {from, updated_chunk_meta})
+        {{from, _metadata}, new_pending} ->
+          GenServer.reply(from, {:ok, receipt.message_id})
+          %{state | pending_sends: new_pending}
 
-        chunks_with_receipts =
-          Enum.filter(updated_pending, fn {_seq_id, {_from, meta}} ->
-            is_map(meta) and Map.get(meta, :uuid) == uuid and Map.has_key?(meta, :message_id)
-          end)
+        {nil, _} ->
+          Logger.warning("Received receipt for unknown sequence_id #{receipt.sequence_id}")
+          state
+      end
 
-        if length(chunks_with_receipts) == num_chunks do
-          sorted_chunks =
-            chunks_with_receipts
-            |> Enum.sort_by(fn {_seq_id, {_from, meta}} -> meta.chunk_id end)
-            |> Enum.map(fn {_seq_id, {_from, meta}} -> meta.message_id end)
-
-          :telemetry.execute(
-            [:pulsar, :producer, :chunk, :complete],
-            %{num_chunks: num_chunks},
-            %{uuid: uuid, producer_id: state.producer_id}
-          )
-
-          chunked_msg_id = %{
-            first_chunk_message_id: List.first(sorted_chunks),
-            last_chunk_message_id: List.last(sorted_chunks),
-            uuid: uuid,
-            num_chunks: num_chunks
-          }
-
-          GenServer.reply(from, {:ok, chunked_msg_id})
-
-          chunk_seq_ids = Enum.map(chunks_with_receipts, fn {seq_id, _} -> seq_id end)
-
-          final_pending =
-            updated_pending
-            |> Enum.reject(fn {seq_id, _} -> seq_id in chunk_seq_ids end)
-            |> Map.new()
-
-          {:noreply, %{state | pending_sends: final_pending}}
-        else
-          {:noreply, %{state | pending_sends: updated_pending}}
-        end
-
-      {{from, _metadata}, new_pending} ->
-        GenServer.reply(from, {:ok, receipt.message_id})
-        {:noreply, %{state | pending_sends: new_pending}}
-
-      {nil, _} ->
-        Logger.warning("Received receipt for unknown sequence_id #{receipt.sequence_id}")
-        {:noreply, state}
-    end
+    {:noreply, new_state}
   end
 
   @impl true
@@ -393,6 +354,56 @@ defmodule Pulsar.Producer do
   end
 
   ## Private Functions
+
+  defp handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state) do
+    uuid = chunk_metadata.uuid
+    num_chunks = chunk_metadata.num_chunks
+
+    updated_chunk_meta = Map.put(chunk_metadata, :message_id, receipt.message_id)
+    updated_pending = Map.put(new_pending, receipt.sequence_id, {from, updated_chunk_meta})
+
+    chunks_with_receipts =
+      Enum.filter(updated_pending, fn {_seq_id, {_from, meta}} ->
+        is_map(meta) and Map.get(meta, :uuid) == uuid and Map.has_key?(meta, :message_id)
+      end)
+
+    if length(chunks_with_receipts) == num_chunks do
+      complete_chunked_message(from, uuid, num_chunks, chunks_with_receipts, updated_pending, state)
+    else
+      %{state | pending_sends: updated_pending}
+    end
+  end
+
+  defp complete_chunked_message(from, uuid, num_chunks, chunks_with_receipts, updated_pending, state) do
+    sorted_chunks =
+      chunks_with_receipts
+      |> Enum.sort_by(fn {_seq_id, {_from, meta}} -> meta.chunk_id end)
+      |> Enum.map(fn {_seq_id, {_from, meta}} -> meta.message_id end)
+
+    :telemetry.execute(
+      [:pulsar, :producer, :chunk, :complete],
+      %{num_chunks: num_chunks},
+      %{uuid: uuid, producer_id: state.producer_id}
+    )
+
+    chunked_msg_id = %{
+      first_chunk_message_id: List.first(sorted_chunks),
+      last_chunk_message_id: List.last(sorted_chunks),
+      uuid: uuid,
+      num_chunks: num_chunks
+    }
+
+    GenServer.reply(from, {:ok, chunked_msg_id})
+
+    chunk_seq_ids = Enum.map(chunks_with_receipts, fn {seq_id, _} -> seq_id end)
+
+    final_pending =
+      updated_pending
+      |> Enum.reject(fn {seq_id, _} -> seq_id in chunk_seq_ids end)
+      |> Map.new()
+
+    %{state | pending_sends: final_pending}
+  end
 
   defp register_with_broker(state, broker_pid) do
     start_metadata = %{
