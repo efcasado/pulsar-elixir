@@ -61,7 +61,7 @@ defmodule Pulsar.Consumer do
     :dead_letter_producer_pid,
     :chunked_message_contexts,
     :max_pending_chunked_messages,
-    :expire_time_of_incomplete_chunked_message
+    :expire_incomplete_chunked_message_after
   ]
 
   @type t :: %__MODULE__{
@@ -89,7 +89,7 @@ defmodule Pulsar.Consumer do
           dead_letter_producer_pid: pid() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
-          expire_time_of_incomplete_chunked_message: non_neg_integer()
+          expire_incomplete_chunked_message_after: non_neg_integer()
         }
 
   ## Public API
@@ -114,7 +114,7 @@ defmodule Pulsar.Consumer do
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
       - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
     - `:max_pending_chunked_messages` - Maximum number of concurrent chunked messages to buffer (default: 10)
-    - `:expire_time_of_incomplete_chunked_message` - Timeout in milliseconds for incomplete chunked messages (default: 60_000)
+    - `:expire_incomplete_chunked_message_after` - Timeout in milliseconds for incomplete chunked messages (default: 60_000)
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before consumer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
 
@@ -144,8 +144,8 @@ defmodule Pulsar.Consumer do
     {max_pending_chunked_messages, genserver_opts} =
       Keyword.pop(genserver_opts, :max_pending_chunked_messages, 10)
 
-    {expire_time_of_incomplete_chunked_message, genserver_opts} =
-      Keyword.pop(genserver_opts, :expire_time_of_incomplete_chunked_message, 60_000)
+    {expire_incomplete_chunked_message_after, genserver_opts} =
+      Keyword.pop(genserver_opts, :expire_incomplete_chunked_message_after, 60_000)
 
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
     {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
@@ -169,7 +169,7 @@ defmodule Pulsar.Consumer do
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message,
+      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     }
@@ -319,7 +319,7 @@ defmodule Pulsar.Consumer do
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message,
+      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms
     } = consumer_config
@@ -350,7 +350,7 @@ defmodule Pulsar.Consumer do
       dead_letter_producer_pid: nil,
       chunked_message_contexts: %{},
       max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_time_of_incomplete_chunked_message: expire_time_of_incomplete_chunked_message
+      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -1338,7 +1338,7 @@ defmodule Pulsar.Consumer do
     {expired, remaining} =
       ChunkedMessageContext.pop_expired(
         state.chunked_message_contexts,
-        state.expire_time_of_incomplete_chunked_message
+        state.expire_incomplete_chunked_message_after
       )
 
     if !Enum.empty?(expired) do

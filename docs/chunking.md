@@ -108,7 +108,7 @@ consumers: [
 
     # Chunking-related options:
     max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
-    expire_time_of_incomplete_chunked_message: 60_000        # Timeout in ms (default: 60s)
+    expire_incomplete_chunked_message_after: 60_000          # Timeout in ms (default: 60s)
   ]
 ]
 ```
@@ -117,7 +117,7 @@ consumers: [
 
 - **`max_pending_chunked_messages`**: Maximum number of incomplete chunked messages to buffer simultaneously. If this limit is reached and a new chunked message arrives, the oldest incomplete message is evicted and delivered as incomplete with `error: :queue_full`.
 
-- **`expire_time_of_incomplete_chunked_message`**: How long to wait for all chunks before timing out. Expired messages are delivered as incomplete with `error: :expired`.
+- **`expire_incomplete_chunked_message_after`**: How long to wait for all chunks before timing out. Expired messages are delivered as incomplete with `error: :expired`.
 
 ## Handling Incomplete Chunks
 
