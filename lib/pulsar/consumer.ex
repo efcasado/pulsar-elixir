@@ -1304,51 +1304,43 @@ defmodule Pulsar.Consumer do
   end
 
   defp handle_chunk_queue_full(state, chunk_data) do
-    case ChunkedMessageContext.find_oldest(state.chunked_message_contexts) do
-      {oldest_uuid, oldest_ctx} ->
-        evict_oldest_chunk_and_create_new(state, oldest_uuid, oldest_ctx, chunk_data)
+    case ChunkedMessageContext.pop_oldest(state.chunked_message_contexts) do
+      {{oldest_uuid, oldest_ctx}, remaining} ->
+        Logger.warning(
+          "Chunk queue full (#{state.max_pending_chunked_messages}), evicting oldest chunked message #{oldest_uuid}"
+        )
 
-      nil ->
+        :telemetry.execute(
+          [:pulsar, :consumer, :chunk, :discarded],
+          %{reason: :queue_full},
+          %{uuid: oldest_uuid, consumer_id: state.consumer_id}
+        )
+
+        partial_payload = ChunkedMessageContext.assemble_payload(oldest_ctx)
+        all_message_ids = ChunkedMessageContext.all_message_ids(oldest_ctx)
+
+        chunk_metadata = %{
+          chunked: true,
+          complete: false,
+          error: :queue_full,
+          uuid: oldest_uuid,
+          message_ids: all_message_ids,
+          received_chunks: oldest_ctx.received_chunks
+        }
+
+        send(
+          self(),
+          {:broker_message,
+           {oldest_ctx.commands, oldest_ctx.metadatas, partial_payload, oldest_ctx.broker_metadatas, chunk_metadata}}
+        )
+
+        state = %{state | chunked_message_contexts: remaining}
+
+        do_create_chunk_context(state, chunk_data)
+
+      {nil, _remaining} ->
         do_create_chunk_context(state, chunk_data)
     end
-  end
-
-  defp evict_oldest_chunk_and_create_new(state, oldest_uuid, oldest_ctx, chunk_data) do
-    Logger.warning(
-      "Chunk queue full (#{state.max_pending_chunked_messages}), evicting oldest chunked message #{oldest_uuid}"
-    )
-
-    :telemetry.execute(
-      [:pulsar, :consumer, :chunk, :discarded],
-      %{reason: :queue_full},
-      %{uuid: oldest_uuid, consumer_id: state.consumer_id}
-    )
-
-    # Assemble partial payload and send as broker message for normal processing
-    partial_payload = ChunkedMessageContext.assemble_payload(oldest_ctx)
-    all_message_ids = ChunkedMessageContext.all_message_ids(oldest_ctx)
-
-    chunk_metadata = %{
-      chunked: true,
-      complete: false,
-      error: :queue_full,
-      uuid: oldest_uuid,
-      message_ids: all_message_ids,
-      received_chunks: oldest_ctx.received_chunks
-    }
-
-    send(
-      self(),
-      {:broker_message,
-       {oldest_ctx.commands, oldest_ctx.metadatas, partial_payload, oldest_ctx.broker_metadatas, chunk_metadata}}
-    )
-
-    # Remove the oldest context
-    new_contexts = Map.delete(state.chunked_message_contexts, oldest_uuid)
-    state = %{state | chunked_message_contexts: new_contexts}
-
-    # Create new chunk in freed space - return its messages only
-    do_create_chunk_context(state, chunk_data)
   end
 
   defp cleanup_expired_chunked_messages(state) do

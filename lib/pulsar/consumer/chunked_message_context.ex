@@ -145,15 +145,19 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   end
 
   @doc """
-  Finds the oldest context in a map of contexts.
+  Pops the oldest context from a map.
 
-  Returns `{uuid, context}` tuple for the oldest context, or `nil` if the map is empty.
+  Returns a tuple `{{uuid, context}, remaining_map}` with the oldest context and
+  remaining contexts, or `{nil, contexts}` if the map is empty.
   """
-  @spec find_oldest(%{optional(String.t()) => t()}) :: {String.t(), t()} | nil
-  def find_oldest(contexts) when map_size(contexts) == 0, do: nil
+  @spec pop_oldest(%{optional(String.t()) => t()}) ::
+          {{String.t(), t()}, %{optional(String.t()) => t()}} | {nil, %{optional(String.t()) => t()}}
+  def pop_oldest(contexts) when map_size(contexts) == 0, do: {nil, contexts}
 
-  def find_oldest(contexts) do
-    Enum.min_by(contexts, fn {_uuid, ctx} -> ctx.created_at end)
+  def pop_oldest(contexts) do
+    {oldest_uuid, _oldest_ctx} = Enum.min_by(contexts, fn {_uuid, ctx} -> ctx.created_at end)
+    {oldest, remaining} = Map.pop(contexts, oldest_uuid)
+    {{oldest_uuid, oldest}, remaining}
   end
 
   @doc """
