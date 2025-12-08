@@ -510,10 +510,9 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_info({:broker_message, message_data}, state) do
-    {messages, should_decrement_permits, new_state} =
+    {messages, new_state} =
       case message_data do
         {command, metadata, payload, broker_metadata} ->
-          # Normal broker message - decompress, unwrap/assemble, and decrement permits
           payload = maybe_uncompress(metadata, payload)
 
           {state_after, msgs} =
@@ -525,10 +524,9 @@ defmodule Pulsar.Consumer do
               {state, pulsar_messages}
             end
 
-          {msgs, true, state_after}
+          {msgs, state_after}
 
         {commands, metadatas, payload, broker_metadatas, chunk_metadata} ->
-          # Incomplete chunk (expired/evicted) - already uncompressed and permits already decremented
           chunk_metadata_full =
             Map.merge(chunk_metadata, %{
               commands: commands,
@@ -537,17 +535,11 @@ defmodule Pulsar.Consumer do
             })
 
           message = build_message_from_chunk(chunk_metadata_full, payload)
-          {[message], false, state}
+          {[message], state}
       end
 
-    # Decrement permits only for newly received messages (not for expired/evicted chunks)
-    new_state =
-      if should_decrement_permits do
-        permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
-        decrement_permits(new_state, permits_consumed)
-      else
-        new_state
-      end
+    permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
+    new_state = decrement_permits(new_state, permits_consumed)
 
     new_state = process_messages_normally(new_state, messages)
     new_state = maybe_send_batch_to_dead_letter(new_state, messages)
@@ -610,7 +602,6 @@ defmodule Pulsar.Consumer do
   end
 
   defp maybe_send_batch_to_dead_letter(state, messages) do
-    # Get max redelivery count from messages
     max_redelivery_count =
       messages
       |> Enum.map(&Pulsar.Message.redelivery_count/1)
@@ -1208,7 +1199,6 @@ defmodule Pulsar.Consumer do
     new_state = %{state | chunked_message_contexts: new_contexts}
 
     if ChunkedMessageContext.complete?(updated_ctx) do
-      # Complete - assemble and return complete message
       complete_payload = ChunkedMessageContext.assemble_payload(updated_ctx)
 
       :telemetry.execute(
@@ -1217,10 +1207,8 @@ defmodule Pulsar.Consumer do
         %{uuid: uuid, consumer_id: state.consumer_id}
       )
 
-      # Remove from context since it's complete
       final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
 
-      # Include all message IDs so they can all be ACKed
       all_message_ids = ChunkedMessageContext.all_message_ids(updated_ctx)
 
       chunk_metadata = %{
@@ -1237,7 +1225,6 @@ defmodule Pulsar.Consumer do
       message = build_message_from_chunk(chunk_metadata, complete_payload)
       {final_state, [message]}
     else
-      # Incomplete - don't return any message yet, keep waiting for more chunks
       {new_state, []}
     end
   end
@@ -1292,7 +1279,6 @@ defmodule Pulsar.Consumer do
     if !Enum.empty?(expired) do
       Logger.warning("Cleaning up #{length(expired)} expired chunked message(s)")
 
-      # Emit telemetry and send incomplete messages for each expired chunk
       Enum.each(expired, fn {uuid, ctx} ->
         :telemetry.execute(
           [:pulsar, :consumer, :chunk, :expired],
@@ -1300,7 +1286,6 @@ defmodule Pulsar.Consumer do
           %{uuid: uuid, consumer_id: state.consumer_id}
         )
 
-        # Assemble partial payload and send as broker message for normal processing
         partial_payload = ChunkedMessageContext.assemble_payload(ctx)
         all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
 
@@ -1320,7 +1305,6 @@ defmodule Pulsar.Consumer do
       end)
     end
 
-    # remaining is already a map, no need to convert
     %{state | chunked_message_contexts: remaining}
   end
 end
