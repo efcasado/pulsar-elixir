@@ -1,3 +1,9 @@
+## [2.5.0](https://github.com/efcasado/pulsar-elixir/compare/v2.4.0...v2.5.0) (2025-12-09)
+
+### Features
+
+* compacted consumers ([#92](https://github.com/efcasado/pulsar-elixir/issues/92)) ([871f92c](https://github.com/efcasado/pulsar-elixir/commit/871f92c3e7d3e7dac80c6bdb5ac587cc0ad289e1))
+
 ## [2.4.0](https://github.com/efcasado/pulsar-elixir/compare/v2.3.0...v2.4.0) (2025-12-09)
 
 ### Features
