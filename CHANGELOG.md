@@ -1,3 +1,9 @@
+## [2.4.0](https://github.com/efcasado/pulsar-elixir/compare/v2.3.0...v2.4.0) (2025-12-09)
+
+### Features
+
+* support message chunking ([#91](https://github.com/efcasado/pulsar-elixir/issues/91)) ([59c56c8](https://github.com/efcasado/pulsar-elixir/commit/59c56c8631500c424fb9d4053b329e70993bcbff))
+
 ## [2.3.0](https://github.com/efcasado/pulsar-elixir/compare/v2.2.7...v2.3.0) (2025-12-06)
 
 ### Features
