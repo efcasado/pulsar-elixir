@@ -197,6 +197,44 @@ defmodule Pulsar.Test.Support.System do
     end
   end
 
+  def compact_topic(topic, broker \\ broker()) do
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "compact",
+      topic
+    ]
+
+    case docker_exec(broker.container, command) do
+      {_output, 0} ->
+        :ok
+
+      {error_output, exit_code} ->
+        {:error, %{exit_code: exit_code, message: error_output}}
+    end
+  end
+
+  def compacted_topic?(topic, broker \\ broker()) do
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "compaction-status",
+      topic
+    ]
+
+    case docker_exec(broker.container, command) do
+      {"Compaction was a success\n", 0} ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
   defp docker_exec(command) do
     broker = broker()
 

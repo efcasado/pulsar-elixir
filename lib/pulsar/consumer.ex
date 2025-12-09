@@ -52,6 +52,7 @@ defmodule Pulsar.Consumer do
     :initial_position,
     :durable,
     :force_create_topic,
+    :read_compacted,
     :start_message_id,
     :start_timestamp,
     :nacked_messages,
@@ -110,6 +111,7 @@ defmodule Pulsar.Consumer do
     - `:flow_threshold` - Flow permits threshold for automatic refill (default: 50). Ignored when `:flow_initial` is 0.
     - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
+    - `:read_compacted` - If true, only reads non-compacted messages from compacted topics (default: false)
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
   - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
@@ -134,6 +136,7 @@ defmodule Pulsar.Consumer do
     {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
+    {read_compacted, genserver_opts} = Keyword.pop(genserver_opts, :read_compacted, false)
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
     {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
 
@@ -169,6 +172,7 @@ defmodule Pulsar.Consumer do
       initial_position: initial_position,
       durable: durable,
       force_create_topic: force_create_topic,
+      read_compacted: read_compacted,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
@@ -320,6 +324,7 @@ defmodule Pulsar.Consumer do
       initial_position: initial_position,
       durable: durable,
       force_create_topic: force_create_topic,
+      read_compacted: read_compacted,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       redelivery_interval: redelivery_interval,
@@ -348,6 +353,7 @@ defmodule Pulsar.Consumer do
       initial_position: initial_position,
       durable: durable,
       force_create_topic: force_create_topic,
+      read_compacted: read_compacted,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
       nacked_messages: MapSet.new(),
@@ -392,7 +398,8 @@ defmodule Pulsar.Consumer do
              state.consumer_id,
              initial_position: state.initial_position,
              durable: state.durable,
-             force_create_topic: state.force_create_topic
+             force_create_topic: state.force_create_topic,
+             read_compacted: state.read_compacted
            ) do
       consumer_name = Map.get(response, :consumer_name, "unknown")
 
@@ -442,7 +449,8 @@ defmodule Pulsar.Consumer do
                state.consumer_id,
                initial_position: state.initial_position,
                durable: state.durable,
-               force_create_topic: state.force_create_topic
+               force_create_topic: state.force_create_topic,
+               read_compacted: state.read_compacted
              ) do
           {:ok, _response} ->
             {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
@@ -834,6 +842,7 @@ defmodule Pulsar.Consumer do
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
     durable = Keyword.get(opts, :durable, true)
     force_create_topic = Keyword.get(opts, :force_create_topic, true)
+    read_compacted = Keyword.get(opts, :read_compacted, false)
 
     subscribe_command =
       %Binary.CommandSubscribe{
@@ -844,7 +853,8 @@ defmodule Pulsar.Consumer do
         request_id: request_id,
         initialPosition: initial_position,
         durable: durable,
-        force_topic_creation: force_create_topic
+        force_topic_creation: force_create_topic,
+        read_compacted: read_compacted
       }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
