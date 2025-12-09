@@ -157,7 +157,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Sync send                          | ✅        |
 | Producer  | Async send                         | ❌        |
 | Producer  | Batching                           | ❌        |
-| Producer  | Chunking                           | ❌        |
+| Producer  | Chunking                           | ✅        |
 | Producer  | Compression                        | ✅        |
 | Producer  | Schema                             | ❌        |
 | Producer  | Partitioned topics                 | ✅        |
@@ -168,7 +168,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | NACK back-off                      | ❌        |
 | Consumer  | Batching                           | ✅        |
 | Consumer  | Partitioned topics                 | ✅        |
-| Consumer  | Chunking                           | ❌        |
+| Consumer  | Chunking                           | ✅        |
 | Consumer  | Seek                               | ✅        |
 | Consumer  | Subscription types                 | ✅        |
 | Consumer  | Subscription modes                 | ✅        |

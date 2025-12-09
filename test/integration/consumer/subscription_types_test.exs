@@ -53,7 +53,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:Shared, 2)
       )
 
-    [consumer1, consumer2] = wait_for_consumer_ready(2)
+    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer1) +
@@ -80,7 +80,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         opts
       )
 
-    [consumer1, consumer2] = wait_for_consumer_ready(2)
+    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer1) +
@@ -120,7 +120,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:Failover, 2)
       )
 
-    [consumer1, consumer2] = wait_for_consumer_ready(2)
+    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer1) +
@@ -145,7 +145,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:Exclusive, 1)
       )
 
-    [consumer] = wait_for_consumer_ready(1)
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -180,15 +180,5 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       flow_refill: 1,
       init_args: [notify_pid: self()]
     ]
-  end
-
-  def wait_for_consumer_ready(count, timeout \\ 5000) do
-    Enum.map(1..count, fn _ ->
-      receive do
-        {:consumer_ready, pid} -> pid
-      after
-        timeout -> flunk("Timeout waiting for consumer to be ready")
-      end
-    end)
   end
 end

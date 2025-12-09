@@ -145,4 +145,24 @@ defmodule Pulsar.Test.Support.Utils do
       0 -> Enum.reverse(acc)
     end
   end
+
+  @doc """
+  Waits for the specified number of consumers to be ready.
+
+  Consumers are considered ready when they send a `{:consumer_ready, pid}` message.
+  This is typically used with the DummyConsumer callback which notifies when initialized.
+
+  Returns a list of consumer PIDs in the order they became ready.
+  """
+  def wait_for_consumer_ready(count, timeout \\ 5000) do
+    import ExUnit.Assertions, only: [flunk: 1]
+
+    Enum.map(1..count, fn _ ->
+      receive do
+        {:consumer_ready, pid} -> pid
+      after
+        timeout -> flunk("Timeout waiting for consumer to be ready")
+      end
+    end)
+  end
 end

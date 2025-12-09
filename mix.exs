@@ -29,7 +29,13 @@ defmodule Pulsar.MixProject do
       source_url: "https://github.com/efcasado/pulsar-elixir",
       docs: [
         main: "Pulsar",
-        extras: ["README.md"]
+        extras: [
+          "README.md",
+          "docs/chunking.md"
+        ],
+        groups_for_extras: [
+          Guides: ~r/docs\/.*/
+        ]
       ]
     ]
   end
@@ -54,6 +60,7 @@ defmodule Pulsar.MixProject do
       {:protobuf, "~> 0.15.0"},
       {:snappyer, "~> 1.2"},
       {:telemetry, "~> 1.0"},
+      {:uniq, "~> 0.6.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.39.1", only: :dev, runtime: false},

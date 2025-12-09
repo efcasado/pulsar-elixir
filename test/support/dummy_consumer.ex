@@ -12,6 +12,10 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     {:ok, %{messages: [], count: 0, fail_all: fail_all}}
   end
 
+  def handle_message(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}, state) do
+    {:error, :incomplete_chunk, state}
+  end
+
   def handle_message(%Pulsar.Message{} = message, state) do
     new_state = %{
       state
