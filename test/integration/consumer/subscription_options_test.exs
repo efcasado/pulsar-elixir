@@ -247,6 +247,51 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert Process.alive?(no_force_create_group) == false
   end
 
+  test "read_compacted filters compacted messages", %{expected_count: expected_count} do
+    :ok = System.compact_topic(@topic)
+
+    Utils.wait_for(fn -> System.compacted_topic?(@topic) end)
+
+    {:ok, compacted_group} =
+      Pulsar.start_consumer(
+        @topic,
+        "compacted-true",
+        @consumer_callback,
+        subscription_options(:earliest, read_compacted: true)
+      )
+
+    [compacted_consumer] = Pulsar.get_consumers(compacted_group)
+
+    {:ok, non_compacted_group} =
+      Pulsar.start_consumer(
+        @topic,
+        "compacted-false",
+        @consumer_callback,
+        subscription_options(:earliest, read_compacted: false)
+      )
+
+    [non_compacted_consumer] = Pulsar.get_consumers(non_compacted_group)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(compacted_consumer) == 4 and
+        @consumer_callback.count_messages(non_compacted_consumer) == expected_count
+    end)
+
+    compacted_messages = @consumer_callback.get_messages(compacted_consumer)
+
+    compacted_messages_map = Map.new(compacted_messages, &{&1.metadata.partition_key, &1.payload})
+
+    assert Enum.count(compacted_messages) == 4
+
+    assert compacted_messages_map["key1"] == "Message 2 for key1"
+    assert compacted_messages_map["key2"] == "Message 2 for key2"
+    assert compacted_messages_map["key3"] == "Message 1 for key3"
+    assert compacted_messages_map["key4"] == "Message 1 for key4"
+
+    non_compacted_count = @consumer_callback.count_messages(non_compacted_consumer)
+    assert non_compacted_count == expected_count
+  end
+
   defp subscription_options(initial_position, opts \\ []) do
     [
       client: @client,

@@ -175,7 +175,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Retry letter topic                 | ❌        |
 | Consumer  | Dead letter topic                  | ✅        |
 | Consumer  | Compression                        | ✅        |
-| Consumer  | Compaction                         | ❌        |
+| Consumer  | Compaction                         | ✅        |
 | Consumer  | Schema                             | ❌        |
 | Consumer  | Configurable flow control settings | ✅        |
 | Reader    |                                    | ❌        |
