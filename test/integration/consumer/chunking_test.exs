@@ -1,6 +1,8 @@
 defmodule Pulsar.Integration.Consumer.ChunkingTest do
   use ExUnit.Case, async: true
 
+  import TelemetryTest
+
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
@@ -8,6 +10,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   @client :chunking_test_client
   @topic "persistent://public/default/chunking-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
+
+  setup [:telemetry_listen]
 
   setup_all do
     broker = System.broker()
@@ -213,5 +217,78 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.chunked == true
     assert received_msg.chunk_metadata.complete == true
     assert received_msg.chunk_metadata.num_chunks == 2
+  end
+
+  @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :expired]]
+  test "expired incomplete chunked messages are cleaned up and delivered" do
+    alias Pulsar.Consumer.ChunkedMessageContext
+    alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+
+    {:ok, _consumer_group} =
+      Pulsar.start_consumer(
+        @topic,
+        "chunking-expire",
+        @consumer_callback,
+        client: @client,
+        expire_incomplete_chunked_message_after: 100,
+        chunk_cleanup_interval: 50,
+        init_args: [notify_pid: self()]
+      )
+
+    [consumer] = Utils.wait_for_consumer_ready(1)
+
+    :sys.replace_state(consumer, fn state ->
+      old_timestamp = :erlang.monotonic_time(:millisecond) - 200
+
+      fake_command = %Binary.CommandMessage{
+        consumer_id: state.consumer_id,
+        message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}
+      }
+
+      fake_metadata = %Binary.MessageMetadata{
+        producer_name: "test-producer",
+        sequence_id: 1,
+        publish_time: :erlang.system_time(:millisecond),
+        uuid: "test-uuid-expired",
+        chunk_id: 0,
+        num_chunks_from_msg: 3,
+        total_chunk_msg_size: 100
+      }
+
+      fake_ctx = %ChunkedMessageContext{
+        uuid: "test-uuid-expired",
+        chunks: %{0 => "chunk0", 1 => "chunk1"},
+        chunk_message_ids: %{
+          0 => fake_command.message_id,
+          1 => %{fake_command.message_id | entryId: 2}
+        },
+        num_chunks_from_msg: 3,
+        total_chunk_msg_size: 100,
+        received_chunks: 2,
+        first_chunk_message_id: fake_command.message_id,
+        last_chunk_message_id: %{fake_command.message_id | entryId: 2},
+        created_at: old_timestamp,
+        commands: [fake_command, fake_command],
+        metadatas: [fake_metadata, fake_metadata],
+        broker_metadatas: [nil, nil]
+      }
+
+      %{state | chunked_message_contexts: Map.put(state.chunked_message_contexts, "test-uuid-expired", fake_ctx)}
+    end)
+
+    Process.sleep(200)
+
+    assert_receive {:telemetry_event,
+                    %{
+                      event: [:pulsar, :consumer, :chunk, :expired],
+                      measurements: measurements,
+                      metadata: metadata
+                    }}
+
+    assert measurements.received_chunks == 2
+    assert metadata.uuid == "test-uuid-expired"
+
+    updated_state = :sys.get_state(consumer)
+    refute Map.has_key?(updated_state.chunked_message_contexts, "test-uuid-expired")
   end
 end
