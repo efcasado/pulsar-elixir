@@ -219,7 +219,7 @@ defmodule Pulsar do
         |> Keyword.delete(:topic)
         |> Keyword.delete(:subscription_name)
         |> Keyword.delete(:callback_module)
-        |> Keyword.put(:name, consumer_name)
+        |> Keyword.put_new(:name, Atom.to_string(consumer_name))
         |> Keyword.put(:client, client)
 
       Pulsar.start_consumer(topic, subscription_name, callback_module, opts)

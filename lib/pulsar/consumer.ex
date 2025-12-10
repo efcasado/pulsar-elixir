@@ -112,6 +112,7 @@ defmodule Pulsar.Consumer do
     - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
     - `:read_compacted` - If true, only reads non-compacted messages from compacted topics (default: false)
+    - `:name` - Name for the consumer on the remote broker (default: nil, no name). If provided, will be visible in broker's consumer list.
     - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
   - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
       - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
@@ -139,6 +140,7 @@ defmodule Pulsar.Consumer do
     {read_compacted, genserver_opts} = Keyword.pop(genserver_opts, :read_compacted, false)
     {start_message_id, genserver_opts} = Keyword.pop(genserver_opts, :start_message_id, nil)
     {start_timestamp, genserver_opts} = Keyword.pop(genserver_opts, :start_timestamp, nil)
+    {consumer_name, genserver_opts} = Keyword.pop(genserver_opts, :name, nil)
 
     {redelivery_interval, genserver_opts} =
       Keyword.pop(genserver_opts, :redelivery_interval, nil)
@@ -175,6 +177,7 @@ defmodule Pulsar.Consumer do
       read_compacted: read_compacted,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
+      consumer_name: consumer_name,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
@@ -327,6 +330,7 @@ defmodule Pulsar.Consumer do
       read_compacted: read_compacted,
       start_message_id: start_message_id,
       start_timestamp: start_timestamp,
+      consumer_name: consumer_name,
       redelivery_interval: redelivery_interval,
       dead_letter_policy: dead_letter_policy,
       max_pending_chunked_messages: max_pending_chunked_messages,
@@ -341,7 +345,7 @@ defmodule Pulsar.Consumer do
     state = %__MODULE__{
       client: client,
       consumer_id: System.unique_integer([:positive, :monotonic]),
-      consumer_name: nil,
+      consumer_name: consumer_name,
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
@@ -389,26 +393,23 @@ defmodule Pulsar.Consumer do
   def handle_continue({:subscribe, init_args}, state) do
     with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
-         {:ok, response} <-
+         {:ok, _response} <-
            subscribe_to_topic(
              broker_pid,
              state.topic,
              state.subscription_name,
              state.subscription_type,
              state.consumer_id,
+             state.consumer_name,
              initial_position: state.initial_position,
              durable: state.durable,
              force_create_topic: state.force_create_topic,
              read_compacted: state.read_compacted
            ) do
-      consumer_name = Map.get(response, :consumer_name, "unknown")
-
       {:noreply,
        %{
          state
-         | consumer_id: state.consumer_id,
-           consumer_name: consumer_name,
-           broker_pid: broker_pid
+         | broker_pid: broker_pid
        }, {:continue, {:seek_subscription, init_args}}}
     else
       {:error, reason} ->
@@ -447,6 +448,7 @@ defmodule Pulsar.Consumer do
                state.subscription_name,
                state.subscription_type,
                state.consumer_id,
+               state.consumer_name,
                initial_position: state.initial_position,
                durable: state.durable,
                force_create_topic: state.force_create_topic,
@@ -837,7 +839,7 @@ defmodule Pulsar.Consumer do
   defp initial_position(:latest), do: :Latest
   defp initial_position(:earliest), do: :Earliest
 
-  defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id, opts) do
+  defp subscribe_to_topic(broker_pid, topic, subscription_name, subscription_type, consumer_id, consumer_name, opts) do
     request_id = System.unique_integer([:positive, :monotonic])
     initial_position = opts |> Keyword.get(:initial_position) |> initial_position()
     durable = Keyword.get(opts, :durable, true)
@@ -850,6 +852,7 @@ defmodule Pulsar.Consumer do
         subscription: subscription_name,
         subType: subscription_type,
         consumer_id: consumer_id,
+        consumer_name: consumer_name,
         request_id: request_id,
         initialPosition: initial_position,
         durable: durable,
