@@ -1,3 +1,9 @@
+## [2.5.1](https://github.com/efcasado/pulsar-elixir/compare/v2.5.0...v2.5.1) (2025-12-10)
+
+### Bug Fixes
+
+* unnamed consumers ([#94](https://github.com/efcasado/pulsar-elixir/issues/94)) ([d87f08e](https://github.com/efcasado/pulsar-elixir/commit/d87f08e75d896afa3e5be135839b8f6d7d5fe30c))
+
 ## [2.5.0](https://github.com/efcasado/pulsar-elixir/compare/v2.4.0...v2.5.0) (2025-12-09)
 
 ### Features
