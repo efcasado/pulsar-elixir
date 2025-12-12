@@ -2,13 +2,14 @@
 
 ## What is Chunking?
 
-Chunking is a feature in Apache Pulsar that allows large messages to be split into smaller pieces (chunks) for transmission. This is particularly useful when:
+[Chunking](https://pulsar.apache.org/docs/next/concepts-messaging/#chunking) is a feature in Apache Pulsar
+that allows large messages to be split into smaller pieces (chunks) for transmission.
+This is particularly useful when your messages exceed the broker's maximum message size limit
+(typically 5MB by default), and you want to handle large payloads without hitting broker or network constraints.
 
-- Your messages exceed the broker's maximum message size limit (typically 5MB by default)
-- You want to handle large payloads without hitting broker or network constraints
-- You need to send messages that are larger than what can fit in a single network frame
-
-When a producer sends a large message with chunking enabled, it automatically splits the message into multiple chunks. The consumer then reassembles these chunks back into the original message before delivering it to your callback.
+When a producer sends a large message with chunking enabled, it automatically splits the message into multiple
+chunks. The consumer then reassembles these chunks back into the original message before delivering it to the
+application layer.
 
 ## How Chunking Works
 
@@ -92,7 +93,7 @@ producers: [
   my_producer: [
     topic: "my-topic",
     chunking_enabled: true,        # Enable chunking (default: false)
-    max_message_size: 1024 * 1024  # Chunk size in bytes (default: 5MB)
+    max_message_size: 1024 * 1024  # Split messages larger than 1MB (default: 5MB)
   ]
 ]
 ```
@@ -181,15 +182,6 @@ redelivery_count = Pulsar.Message.redelivery_count(message)
 # Get number of broker messages consumed (for flow control)
 num_permits = Pulsar.Message.num_broker_messages(message)
 ```
-
-## Best Practices
-
-1. **Enable chunking on producer** only if you expect to send large messages
-2. **Set appropriate timeouts** based on your network latency and message size
-3. **Monitor incomplete chunks** - frequent incomplete chunks may indicate network issues
-4. **Handle incomplete chunks** explicitly in your consumer callback
-5. **Adjust `max_pending_chunked_messages`** based on expected concurrency
-6. **Consider message size** - very large messages consume more memory during assembly
 
 ## Example: Complete Chunked Message Flow
 
