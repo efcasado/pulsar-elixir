@@ -8,6 +8,8 @@ defmodule Pulsar.Producer.Flusher do
 
   use GenServer
 
+  alias Pulsar.Producer.Collector
+
   require Logger
 
   defstruct [
@@ -73,7 +75,7 @@ defmodule Pulsar.Producer.Flusher do
 
   defp do_flush(state) do
     state.collector_pid
-    |> Pulsar.Producer.Collector.get_and_clear()
+    |> Collector.get_and_clear()
     |> send_batch(state)
   end
 
