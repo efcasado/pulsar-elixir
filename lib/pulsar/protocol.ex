@@ -37,6 +37,114 @@ defmodule Pulsar.Protocol do
   end
 
   @doc """
+  Encodes a batch of messages into a single frame.
+  Each message is a map with :payload and optional :partition_key, :ordering_key, :properties, :event_time.
+  """
+  def encode_batch_message(command_send, batch_metadata, messages, compression \\ :NONE) do
+    single_messages_payload =
+      messages
+      |> Enum.with_index()
+      |> Enum.map(fn {msg, index} ->
+        encode_single_message(msg, batch_metadata.sequence_id + index)
+      end)
+      |> :erlang.iolist_to_binary()
+
+    uncompressed_size = byte_size(single_messages_payload)
+
+    compressed_payload = maybe_compress_batch(compression, single_messages_payload)
+
+    message_metadata = %Binary.MessageMetadata{
+      producer_name: batch_metadata.producer_name,
+      sequence_id: batch_metadata.sequence_id,
+      publish_time: System.system_time(:millisecond),
+      compression: compression,
+      uncompressed_size: uncompressed_size,
+      num_messages_in_batch: length(messages)
+    }
+
+    type = command_to_type(command_send)
+    field_name = field_name_from_type(type)
+
+    command_binary =
+      %Binary.BaseCommand{}
+      |> Map.put(:type, type)
+      |> Map.put(field_name, command_send)
+      |> Binary.BaseCommand.encode()
+
+    command_size = byte_size(command_binary)
+
+    metadata_encoded = Binary.MessageMetadata.encode(message_metadata)
+    metadata_size = byte_size(metadata_encoded)
+
+    checksum_data = <<metadata_size::32, metadata_encoded::binary, compressed_payload::binary>>
+    checksum = :crc32cer.nif(checksum_data)
+
+    message_part = <<
+      0x0E01::16,
+      checksum::32,
+      metadata_size::32,
+      metadata_encoded::binary,
+      compressed_payload::binary
+    >>
+
+    message_part_size = byte_size(message_part)
+    total_size = 4 + command_size + message_part_size
+
+    <<
+      total_size::32,
+      command_size::32,
+      command_binary::binary,
+      message_part::binary
+    >>
+  end
+
+  defp encode_single_message(msg, sequence_id) do
+    payload = msg.payload
+
+    single_metadata = %Binary.SingleMessageMetadata{
+      payload_size: byte_size(payload),
+      partition_key: Map.get(msg, :partition_key),
+      ordering_key: Map.get(msg, :ordering_key),
+      properties: to_key_value_list(Map.get(msg, :properties)),
+      event_time: to_timestamp(Map.get(msg, :event_time)),
+      sequence_id: sequence_id
+    }
+
+    encoded_metadata = Binary.SingleMessageMetadata.encode(single_metadata)
+    metadata_size = byte_size(encoded_metadata)
+
+    <<metadata_size::32, encoded_metadata::binary, payload::binary>>
+  end
+
+  defp to_key_value_list(nil), do: []
+
+  defp to_key_value_list(props) when is_list(props) do
+    Enum.map(props, fn {k, v} ->
+      %Binary.KeyValue{key: to_string(k), value: to_string(v)}
+    end)
+  end
+
+  defp to_key_value_list(props) when is_map(props) do
+    Enum.map(props, fn {k, v} ->
+      %Binary.KeyValue{key: to_string(k), value: to_string(v)}
+    end)
+  end
+
+  defp to_timestamp(nil), do: nil
+  defp to_timestamp(%DateTime{} = dt), do: DateTime.to_unix(dt, :millisecond)
+  defp to_timestamp(ms) when is_integer(ms), do: ms
+
+  defp maybe_compress_batch(:NONE, payload), do: payload
+  defp maybe_compress_batch(:LZ4, payload), do: NimbleLZ4.compress(payload)
+  defp maybe_compress_batch(:ZLIB, payload), do: :zlib.compress(payload)
+  defp maybe_compress_batch(:ZSTD, payload), do: :ezstd.compress(payload)
+
+  defp maybe_compress_batch(:SNAPPY, payload) do
+    {:ok, compressed} = :snappyer.compress(payload)
+    compressed
+  end
+
+  @doc """
   Encodes a CommandSend with message metadata and payload.
   Returns the complete binary frame ready to send to the broker.
   """

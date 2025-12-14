@@ -140,6 +140,15 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
+  Publish a batch of messages to the broker.
+  """
+  @spec publish_batch_message(GenServer.server(), struct(), map(), list(), atom()) ::
+          :ok | {:error, term()}
+  def publish_batch_message(broker, command_send, batch_metadata, messages, compression \\ :NONE) do
+    :gen_statem.call(broker, {:publish_batch_message, command_send, batch_metadata, messages, compression})
+  end
+
+  @doc """
   Service discovery: lookup topic.
   """
   @spec lookup_topic(GenServer.server(), String.t(), boolean(), timeout()) ::
@@ -547,6 +556,28 @@ defmodule Pulsar.Broker do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
     encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
+
+    result =
+      case mod do
+        :gen_tcp -> :gen_tcp.send(socket, encoded_message)
+        :ssl -> :ssl.send(socket, encoded_message)
+      end
+
+    case result do
+      :ok ->
+        actions = [{:reply, from, :ok}]
+        {:keep_state, broker, actions}
+
+      {:error, reason} ->
+        actions = [{:reply, from, {:error, reason}}]
+        {:keep_state, broker, actions}
+    end
+  end
+
+  def connected({:call, from}, {:publish_batch_message, command_send, batch_metadata, messages, compression}, broker) do
+    %__MODULE__{socket_module: mod, socket: socket} = broker
+
+    encoded_message = Pulsar.Protocol.encode_batch_message(command_send, batch_metadata, messages, compression)
 
     result =
       case mod do
