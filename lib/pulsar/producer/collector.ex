@@ -15,19 +15,12 @@ defmodule Pulsar.Producer.Collector do
   end
 
   @doc """
-  Add a message to the batch. Notifies Flusher when batch is full.
-  Does not wait for acknowledgment.
-  """
-  def add(collector, message, from) do
-    GenServer.cast(collector, {:add, message, from})
-  end
-
-  @doc """
   Add a message to the batch and wait for broker acknowledgment.
   This is a blocking call that returns when the message is acknowledged.
+  Be careful to not have the timeout shorter than the flush interval.
   """
-  def add_sync(collector, message, timeout \\ 5000) do
-    GenServer.call(collector, {:add_sync, message}, timeout)
+  def add(collector, message, timeout \\ 5000) do
+    GenServer.call(collector, {:add, message}, timeout)
   end
 
   @doc """
@@ -50,22 +43,7 @@ defmodule Pulsar.Producer.Collector do
   end
 
   @impl true
-  def handle_cast({:add, message, from}, state) do
-    batch = [{message, from} | state.batch]
-
-    current_size =
-      if state.current_batch_size + 1 >= state.batch_size_threshold do
-        Flusher.flush_now(state.flusher_pid)
-        0
-      else
-        state.current_batch_size + 1
-      end
-
-    {:noreply, %{state | batch: batch, current_batch_size: current_size}}
-  end
-
-  @impl true
-  def handle_call({:add_sync, message}, from, state) do
+  def handle_call({:add, message}, from, state) do
     batch = [{message, from} | state.batch]
     new_size = state.current_batch_size + 1
 
@@ -77,7 +55,7 @@ defmodule Pulsar.Producer.Collector do
         new_size
       end
 
-    # the Flusher will reply when batch is sent
+    # the Producer (or Flusher in case of error) will reply to the callers
     {:noreply, %{state | batch: batch, current_batch_size: current_size}}
   end
 

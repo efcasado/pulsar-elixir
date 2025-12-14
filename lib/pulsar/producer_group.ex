@@ -114,8 +114,6 @@ defmodule Pulsar.ProducerGroup do
         send_direct(group_pid, message, opts)
 
       collector_pid ->
-        # Batching enabled - send to collector
-        # Build message map for batch encoding
         msg = %{
           payload: message,
           partition_key: Keyword.get(opts, :partition_key),
@@ -127,7 +125,7 @@ defmodule Pulsar.ProducerGroup do
         timeout = Keyword.get(opts, :timeout, 5000)
 
         try do
-          Collector.add_sync(collector_pid, msg, timeout)
+          Collector.add(collector_pid, msg, timeout)
         catch
           :exit, reason ->
             {:error, {:collector_died, reason}}
@@ -178,7 +176,6 @@ defmodule Pulsar.ProducerGroup do
       "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)}, batching: #{batch_enabled})"
     )
 
-    # Create child specs for producers
     producer_children = create_producer_children(name, topic, opts, producer_count)
 
     children =

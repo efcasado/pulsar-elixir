@@ -87,7 +87,6 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       topic = @topic <> "-timer-flush"
       :ok = System.create_topic(topic)
 
-      # Start consumer first
       {:ok, consumer_group_pid} =
         Pulsar.start_consumer(
           topic,
@@ -98,10 +97,8 @@ defmodule Pulsar.Integration.Producer.BatchTest do
           init_args: [notify_pid: self()]
         )
 
-      # Wait for consumer ready
       assert_receive {:consumer_ready, consumer_pid}, 5000
 
-      # Start producer with batching enabled - small flush interval
       {:ok, producer_pid} =
         Pulsar.start_producer(topic,
           client: @client,
@@ -109,11 +106,9 @@ defmodule Pulsar.Integration.Producer.BatchTest do
           batch_enabled: true,
           # High batch size to ensure timer triggers
           batch_size: 100,
-          # 100ms flush interval
           flush_interval: 100
         )
 
-      # Wait for producer to be ready
       Utils.wait_for(fn ->
         case Pulsar.get_producers(producer_pid) do
           [p | _] ->
@@ -125,17 +120,11 @@ defmodule Pulsar.Integration.Producer.BatchTest do
         end
       end)
 
-      # Send 2 messages (below batch_size, should flush on timer)
+      # below batch_size, should flush on timer
       assert {:ok, _} = Pulsar.send(producer_pid, "timer-msg1")
       assert {:ok, _} = Pulsar.send(producer_pid, "timer-msg2")
 
-      # Wait for timer flush and consumption
-      Utils.wait_for(
-        fn ->
-          DummyConsumer.count_messages(consumer_pid) >= 2
-        end,
-        50
-      )
+      Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 2 end)
 
       messages = DummyConsumer.get_messages(consumer_pid)
       payloads = Enum.map(messages, & &1.payload)

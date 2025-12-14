@@ -444,7 +444,6 @@ defmodule Pulsar.Producer do
   @impl true
   def handle_info({:send_error, %Binary.CommandSendError{} = error}, state) do
     case Map.pop(state.pending_sends, error.sequence_id) do
-      # Batch of messages - callers is a list
       {{callers, %{batch: true}}, new_pending} when is_list(callers) ->
         Enum.each(callers, fn from ->
           GenServer.reply(from, {:error, {error.error, error.message}})
@@ -452,7 +451,6 @@ defmodule Pulsar.Producer do
 
         {:noreply, %{state | pending_sends: new_pending}}
 
-      # Single message
       {{from, _metadata}, new_pending} ->
         GenServer.reply(from, {:error, {error.error, error.message}})
         {:noreply, %{state | pending_sends: new_pending}}

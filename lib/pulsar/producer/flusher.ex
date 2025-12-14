@@ -1,7 +1,9 @@
 defmodule Pulsar.Producer.Flusher do
   @moduledoc """
-  Periodically flushes batched messages to the broker.
-  Owns the flush timer.
+  GenServer that takes care of flushing batched messages from a specific Producer pid.
+  Periodically flushes batched messages to the broker, or when manually triggered via `flush_now/1`.
+
+  The flush interval is configurable via the producer options (:flush_interval).
   """
 
   use GenServer
@@ -29,13 +31,6 @@ defmodule Pulsar.Producer.Flusher do
     GenServer.cast(flusher, :flush_now)
   end
 
-  @doc """
-  Sets the producer pid (called after producer starts).
-  """
-  def set_producer(flusher, producer_pid) do
-    GenServer.call(flusher, {:set_producer, producer_pid})
-  end
-
   @impl true
   def init(opts) do
     flush_interval = Keyword.fetch!(opts, :flush_interval)
@@ -50,11 +45,6 @@ defmodule Pulsar.Producer.Flusher do
     }
 
     {:ok, state}
-  end
-
-  @impl true
-  def handle_call({:set_producer, producer_pid}, _from, state) do
-    {:reply, :ok, %{state | producer_pid: producer_pid}}
   end
 
   @impl true
@@ -82,13 +72,12 @@ defmodule Pulsar.Producer.Flusher do
   end
 
   defp do_flush(state) do
-    batch = Pulsar.Producer.Collector.get_and_clear(state.collector_pid)
-
-    case batch do
-      [] -> state
-      [{_message, _from} | _] -> send_batch(batch, state)
-    end
+    state.collector_pid
+    |> Pulsar.Producer.Collector.get_and_clear()
+    |> send_batch(state)
   end
+
+  defp send_batch([], state), do: state
 
   defp send_batch(batch, state) do
     messages = Enum.map(batch, fn {message, _from} -> message end)
