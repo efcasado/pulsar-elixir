@@ -157,6 +157,16 @@ defmodule Pulsar.Producer do
     GenServer.call(producer_pid, {:send_message, message, opts}, timeout)
   end
 
+  @doc """
+  Sends a batch of messages through this producer.
+  Called by Flusher when batch is ready to send.
+  The callers list contains GenServer.from() references to reply to.
+  """
+  @spec send_batch(pid(), list(map()), list()) :: :ok | {:error, term()}
+  def send_batch(producer_pid, messages, callers) do
+    GenServer.call(producer_pid, {:send_batch, messages, callers}, 30_000)
+  end
+
   ## GenServer Callbacks
 
   @impl true
@@ -299,6 +309,102 @@ defmodule Pulsar.Producer do
     end
   end
 
+  def handle_call({:send_batch, _, _}, _from, %{ready: false} = state) do
+    Logger.warning("Producer #{state.producer_name} is waiting, cannot send batch")
+    {:reply, {:error, :producer_waiting}, state}
+  end
+
+  def handle_call({:send_batch, messages, callers}, _from, state) do
+    sequence_id = state.sequence_id + 1
+
+    command_send = %Binary.CommandSend{
+      producer_id: state.producer_id,
+      sequence_id: sequence_id,
+      num_messages: length(messages)
+    }
+
+    batch_metadata = %{
+      producer_name: state.producer_name,
+      sequence_id: sequence_id
+    }
+
+    case Pulsar.Broker.publish_batch_message(
+           state.broker_pid,
+           command_send,
+           batch_metadata,
+           messages,
+           state.compression
+         ) do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar, :producer, :batch, :published],
+          %{count: length(messages)},
+          %{
+            topic: state.topic,
+            producer_name: state.producer_name,
+            producer_id: state.producer_id,
+            sequence_id: sequence_id
+          }
+        )
+
+        # Store pending send with all callers to reply to on receipt
+        new_waiting = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
+        new_state = %{state | sequence_id: sequence_id, pending_sends: new_waiting}
+        {:reply, :ok, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:send_batch, _, _}, _from, %{ready: false} = state) do
+    Logger.warning("Producer #{state.producer_name} is waiting, cannot send batch")
+    {:reply, {:error, :producer_waiting}, state}
+  end
+
+  def handle_call({:send_batch, messages, callers}, _from, state) do
+    sequence_id = state.sequence_id + 1
+
+    command_send = %Binary.CommandSend{
+      producer_id: state.producer_id,
+      sequence_id: sequence_id,
+      num_messages: length(messages)
+    }
+
+    batch_metadata = %{
+      producer_name: state.producer_name,
+      sequence_id: sequence_id
+    }
+
+    case Pulsar.Broker.publish_batch_message(
+           state.broker_pid,
+           command_send,
+           batch_metadata,
+           messages,
+           state.compression
+         ) do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar, :producer, :batch, :published],
+          %{count: length(messages)},
+          %{
+            topic: state.topic,
+            producer_name: state.producer_name,
+            producer_id: state.producer_id,
+            sequence_id: sequence_id
+          }
+        )
+
+        # Store pending send with all callers to reply to on receipt
+        new_waiting = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
+        new_state = %{state | sequence_id: sequence_id, pending_sends: new_waiting}
+        {:reply, :ok, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl true
   def handle_info(
         {:DOWN, monitor_ref, :process, broker_pid, reason},
@@ -338,6 +444,15 @@ defmodule Pulsar.Producer do
   @impl true
   def handle_info({:send_error, %Binary.CommandSendError{} = error}, state) do
     case Map.pop(state.pending_sends, error.sequence_id) do
+      # Batch of messages - callers is a list
+      {{callers, %{batch: true}}, new_pending} when is_list(callers) ->
+        Enum.each(callers, fn from ->
+          GenServer.reply(from, {:error, {error.error, error.message}})
+        end)
+
+        {:noreply, %{state | pending_sends: new_pending}}
+
+      # Single message
       {{from, _metadata}, new_pending} ->
         GenServer.reply(from, {:error, {error.error, error.message}})
         {:noreply, %{state | pending_sends: new_pending}}

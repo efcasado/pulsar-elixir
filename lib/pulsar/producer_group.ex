@@ -17,15 +17,29 @@ defmodule Pulsar.ProducerGroup do
         producer_count: 3
       )
 
+      # Start with batching enabled
+      {:ok, group_pid} = ProducerGroup.start_link(
+        "my-topic-producer",
+        "persistent://public/default/my-topic",
+        batch_enabled: true,
+        batch_size: 100,
+        flush_interval: 10
+      )
+
       # Get all producer PIDs from the group
       producer_pids = ProducerGroup.get_producers(group_pid)
   """
 
   use Supervisor
 
+  alias Pulsar.Producer.BatchSupervisor
+  alias Pulsar.Producer.Collector
+
   require Logger
 
   @default_client :default
+  @default_batch_size 100
+  @default_flush_interval 10
 
   @doc """
   Starts a producer group supervisor.
@@ -69,6 +83,7 @@ defmodule Pulsar.ProducerGroup do
   def get_producers(supervisor_pid) do
     supervisor_pid
     |> Supervisor.which_children()
+    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :worker end)
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
     |> Enum.filter(&is_pid/1)
   end
@@ -94,6 +109,33 @@ defmodule Pulsar.ProducerGroup do
   """
   @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def send_message(group_pid, message, opts \\ []) do
+    case get_collector(group_pid) do
+      nil ->
+        send_direct(group_pid, message, opts)
+
+      collector_pid ->
+        # Batching enabled - send to collector
+        # Build message map for batch encoding
+        msg = %{
+          payload: message,
+          partition_key: Keyword.get(opts, :partition_key),
+          ordering_key: Keyword.get(opts, :ordering_key),
+          properties: Keyword.get(opts, :properties),
+          event_time: Keyword.get(opts, :event_time)
+        }
+
+        timeout = Keyword.get(opts, :timeout, 5000)
+
+        try do
+          Collector.add_sync(collector_pid, msg, timeout)
+        catch
+          :exit, reason ->
+            {:error, {:collector_died, reason}}
+        end
+    end
+  end
+
+  defp send_direct(group_pid, message, opts) do
     case get_producers(group_pid) do
       [] ->
         {:error, :no_producers_available}
@@ -108,16 +150,47 @@ defmodule Pulsar.ProducerGroup do
     end
   end
 
+  @doc """
+  Gets the collector pid if batching is enabled.
+  """
+  def get_collector(supervisor_pid) do
+    case get_batch_supervisor(supervisor_pid) do
+      nil -> nil
+      batch_sup -> BatchSupervisor.get_collector(batch_sup)
+    end
+  end
+
+  defp get_batch_supervisor(supervisor_pid) do
+    supervisor_pid
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn
+      {:batch_supervisor, pid, :supervisor, _} when is_pid(pid) -> pid
+      _ -> nil
+    end)
+  end
+
   @impl true
   def init({name, topic, opts}) do
     producer_count = Keyword.get(opts, :producer_count, 1)
+    batch_enabled = Keyword.get(opts, :batch_enabled, false)
 
     Logger.info(
-      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
+      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)}, batching: #{batch_enabled})"
     )
 
-    # Create child specs for each producer in the group
-    children = create_producer_children(name, topic, opts, producer_count)
+    # Create child specs for producers
+    producer_children = create_producer_children(name, topic, opts, producer_count)
+
+    children =
+      if batch_enabled do
+        batch_size = Keyword.get(opts, :batch_size, @default_batch_size)
+        flush_interval = Keyword.get(opts, :flush_interval, @default_flush_interval)
+
+        batch_child = create_batch_supervisor_child(name, batch_size, flush_interval, self())
+        [batch_child | producer_children]
+      else
+        producer_children
+      end
 
     supervisor_opts = [
       strategy: :one_for_one,
@@ -131,6 +204,30 @@ defmodule Pulsar.ProducerGroup do
   end
 
   # Private functions
+
+  defp create_batch_supervisor_child(group_name, batch_size, flush_interval, group_pid) do
+    collector_name = :"#{group_name}-collector"
+    flusher_name = :"#{group_name}-flusher"
+
+    %{
+      id: :batch_supervisor,
+      start: {
+        BatchSupervisor,
+        :start_link,
+        [
+          [
+            collector_name: collector_name,
+            flusher_name: flusher_name,
+            batch_size: batch_size,
+            flush_interval: flush_interval,
+            group_pid: group_pid
+          ]
+        ]
+      },
+      restart: :permanent,
+      type: :supervisor
+    }
+  end
 
   defp create_producer_children(group_name, topic, opts, producer_count) do
     for i <- 1..producer_count do
