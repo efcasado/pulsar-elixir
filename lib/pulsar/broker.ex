@@ -131,21 +131,11 @@ defmodule Pulsar.Broker do
 
   @doc """
   Publishes a message to the broker.
-  Takes CommandSend, MessageMetadata, and the payload.
+  It expects the message to be already encoded in the Pulsar binary protocol format.
   """
-  @spec publish_message(GenServer.server(), struct(), struct(), binary()) ::
-          :ok | {:error, term()}
-  def publish_message(broker, command_send, message_metadata, payload) do
-    :gen_statem.call(broker, {:publish_message, command_send, message_metadata, payload})
-  end
-
-  @doc """
-  Publish a batch of messages to the broker.
-  """
-  @spec publish_batch_message(GenServer.server(), struct(), map(), list(), atom()) ::
-          :ok | {:error, term()}
-  def publish_batch_message(broker, command_send, batch_metadata, messages, compression \\ :NONE) do
-    :gen_statem.call(broker, {:publish_batch_message, command_send, batch_metadata, messages, compression})
+  @spec publish_message(GenServer.server(), binary()) :: :ok | {:error, term()}
+  def publish_message(broker, encoded_message) do
+    :gen_statem.call(broker, {:publish_message, encoded_message})
   end
 
   @doc """
@@ -552,10 +542,8 @@ defmodule Pulsar.Broker do
     end
   end
 
-  def connected({:call, from}, {:publish_message, command_send, message_metadata, payload}, broker) do
+  def connected({:call, from}, {:publish_message, encoded_message}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
-
-    encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, payload)
 
     result =
       case mod do
@@ -565,34 +553,10 @@ defmodule Pulsar.Broker do
 
     case result do
       :ok ->
-        actions = [{:reply, from, :ok}]
-        {:keep_state, broker, actions}
+        {:keep_state, broker, [{:reply, from, :ok}]}
 
       {:error, reason} ->
-        actions = [{:reply, from, {:error, reason}}]
-        {:keep_state, broker, actions}
-    end
-  end
-
-  def connected({:call, from}, {:publish_batch_message, command_send, batch_metadata, messages, compression}, broker) do
-    %__MODULE__{socket_module: mod, socket: socket} = broker
-
-    encoded_message = Pulsar.Protocol.encode_batch_message(command_send, batch_metadata, messages, compression)
-
-    result =
-      case mod do
-        :gen_tcp -> :gen_tcp.send(socket, encoded_message)
-        :ssl -> :ssl.send(socket, encoded_message)
-      end
-
-    case result do
-      :ok ->
-        actions = [{:reply, from, :ok}]
-        {:keep_state, broker, actions}
-
-      {:error, reason} ->
-        actions = [{:reply, from, {:error, reason}}]
-        {:keep_state, broker, actions}
+        {:keep_state, broker, [{:reply, from, {:error, reason}}]}
     end
   end
 

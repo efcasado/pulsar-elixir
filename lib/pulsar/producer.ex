@@ -345,7 +345,9 @@ defmodule Pulsar.Producer do
 
         compressed_payload = maybe_compress(message_metadata, chunk_payload)
 
-        case Pulsar.Broker.publish_message(acc_state.broker_pid, command_send, message_metadata, compressed_payload) do
+        encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, compressed_payload)
+
+        case Pulsar.Broker.publish_message(acc_state.broker_pid, encoded_message) do
           :ok ->
             emit_message_sent(chunk_metadata, chunk_payload, sequence_id, acc_state)
 
@@ -395,7 +397,7 @@ defmodule Pulsar.Producer do
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
     new_state =
       case Map.pop(state.pending_sends, receipt.sequence_id) do
-        # Batch case - reply to all callers
+        # Batch case
         {{callers, %{batch: true}}, new_pending} when is_list(callers) ->
           Enum.each(callers, fn from ->
             GenServer.reply(from, {:ok, receipt.message_id})
@@ -464,7 +466,6 @@ defmodule Pulsar.Producer do
   end
 
   def terminate(reason, state) do
-    # Cancel batch flush timer if active
     if state.batch_flush_timer do
       Process.cancel_timer(state.batch_flush_timer)
     end
@@ -520,18 +521,30 @@ defmodule Pulsar.Producer do
       num_messages: length(messages)
     }
 
-    batch_metadata = %{
+    single_messages_payload =
+      messages
+      |> Enum.with_index()
+      |> Enum.map(fn {msg, index} ->
+        encode_single_message(msg, sequence_id + index)
+      end)
+      |> :erlang.iolist_to_binary()
+
+    uncompressed_size = byte_size(single_messages_payload)
+
+    message_metadata = %Binary.MessageMetadata{
       producer_name: state.producer_name,
-      sequence_id: sequence_id
+      sequence_id: sequence_id,
+      publish_time: System.system_time(:millisecond),
+      compression: state.compression,
+      uncompressed_size: uncompressed_size,
+      num_messages_in_batch: length(messages)
     }
 
-    case Pulsar.Broker.publish_batch_message(
-           state.broker_pid,
-           command_send,
-           batch_metadata,
-           messages,
-           state.compression
-         ) do
+    compressed_payload = maybe_compress(message_metadata, single_messages_payload)
+
+    encoded_frame = Pulsar.Protocol.encode_message(command_send, message_metadata, compressed_payload)
+
+    case Pulsar.Broker.publish_message(state.broker_pid, encoded_frame) do
       :ok ->
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
@@ -706,6 +719,24 @@ defmodule Pulsar.Producer do
   defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
     {:ok, payload} = :snappyer.compress(compressed_payload)
     payload
+  end
+
+  defp encode_single_message(msg, sequence_id) do
+    payload = msg.payload
+
+    single_metadata = %Binary.SingleMessageMetadata{
+      payload_size: byte_size(payload),
+      partition_key: Map.get(msg, :partition_key),
+      ordering_key: Map.get(msg, :ordering_key),
+      properties: to_key_value_list(Map.get(msg, :properties)),
+      event_time: to_timestamp(Map.get(msg, :event_time)),
+      sequence_id: sequence_id
+    }
+
+    encoded_metadata = Binary.SingleMessageMetadata.encode(single_metadata)
+    metadata_size = byte_size(encoded_metadata)
+
+    <<metadata_size::32, encoded_metadata::binary, payload::binary>>
   end
 
   defp to_key_value_list(nil), do: []
