@@ -81,7 +81,6 @@ defmodule Pulsar.ProducerGroup do
   def get_producers(supervisor_pid) do
     supervisor_pid
     |> Supervisor.which_children()
-    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :worker end)
     |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
     |> Enum.filter(&is_pid/1)
   end
