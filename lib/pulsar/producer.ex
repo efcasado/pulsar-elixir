@@ -33,7 +33,13 @@ defmodule Pulsar.Producer do
     :registration_request_id,
     :topic_epoch,
     :chunking_enabled,
-    :max_message_size
+    :max_message_size,
+    :batch_enabled,
+    :batch,
+    :batch_size,
+    :batch_size_threshold,
+    :batch_flush_timer,
+    :flush_interval
   ]
 
   @type t :: %__MODULE__{
@@ -50,7 +56,13 @@ defmodule Pulsar.Producer do
           registration_request_id: integer() | nil,
           topic_epoch: integer() | nil,
           chunking_enabled: boolean(),
-          max_message_size: non_neg_integer()
+          max_message_size: non_neg_integer(),
+          batch_enabled: boolean(),
+          batch: list({map(), GenServer.from()}),
+          batch_size: non_neg_integer(),
+          batch_size_threshold: non_neg_integer(),
+          batch_flush_timer: reference() | nil,
+          flush_interval: non_neg_integer()
         }
 
   ## Public API
@@ -101,6 +113,9 @@ defmodule Pulsar.Producer do
     {compression, genserver_opts} = Keyword.pop(genserver_opts, :compression, :NONE)
     {chunking_enabled, genserver_opts} = Keyword.pop(genserver_opts, :chunking_enabled, false)
     {max_message_size, genserver_opts} = Keyword.pop(genserver_opts, :max_message_size, 5_242_880)
+    {batch_enabled, genserver_opts} = Keyword.pop(genserver_opts, :batch_enabled, false)
+    {batch_size_threshold, genserver_opts} = Keyword.pop(genserver_opts, :batch_size, 100)
+    {flush_interval, genserver_opts} = Keyword.pop(genserver_opts, :flush_interval, 10)
 
     {startup_delay_ms, genserver_opts} =
       Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
@@ -119,7 +134,10 @@ defmodule Pulsar.Producer do
       chunking_enabled: chunking_enabled,
       max_message_size: max_message_size,
       startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms
+      startup_jitter_ms: startup_jitter_ms,
+      batch_enabled: batch_enabled,
+      batch_size_threshold: batch_size_threshold,
+      flush_interval: flush_interval
     }
 
     GenServer.start_link(__MODULE__, producer_config, [])
@@ -157,16 +175,6 @@ defmodule Pulsar.Producer do
     GenServer.call(producer_pid, {:send_message, message, opts}, timeout)
   end
 
-  @doc """
-  Sends a batch of messages through this producer.
-  Called by Flusher when batch is ready to send.
-  The callers list contains GenServer.from() references to reply to.
-  """
-  @spec send_batch(pid(), list(map()), list()) :: :ok | {:error, term()}
-  def send_batch(producer_pid, messages, callers) do
-    GenServer.call(producer_pid, {:send_batch, messages, callers}, 30_000)
-  end
-
   ## GenServer Callbacks
 
   @impl true
@@ -183,7 +191,10 @@ defmodule Pulsar.Producer do
       chunking_enabled: chunking_enabled,
       max_message_size: max_message_size,
       startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms
+      startup_jitter_ms: startup_jitter_ms,
+      batch_enabled: batch_enabled,
+      batch_size_threshold: batch_size_threshold,
+      flush_interval: flush_interval
     } = producer_config
 
     producer_id = System.unique_integer([:positive, :monotonic])
@@ -208,7 +219,13 @@ defmodule Pulsar.Producer do
       registration_request_id: nil,
       topic_epoch: topic_epoch,
       chunking_enabled: chunking_enabled,
-      max_message_size: max_message_size
+      max_message_size: max_message_size,
+      batch_enabled: batch_enabled,
+      batch: [],
+      batch_size: 0,
+      batch_size_threshold: batch_size_threshold,
+      batch_flush_timer: nil,
+      flush_interval: flush_interval
     }
 
     if is_nil(topic_epoch) do
@@ -240,7 +257,17 @@ defmodule Pulsar.Producer do
   def handle_continue(:register_producer, state) do
     case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
-        register_with_broker(state, broker_pid)
+        case register_with_broker(state, broker_pid) do
+          {:ok, new_state} ->
+            {:noreply, new_state, {:continue, :monitor_broker}}
+
+          {:error, {:ProducerFenced, _msg}} ->
+            ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
+            {:stop, {:shutdown, :producer_fenced}, state}
+
+          {:error, reason} ->
+            {:stop, reason, state}
+        end
 
       {:error, reason} ->
         Logger.error("Topic lookup failed: #{inspect(reason)}")
@@ -251,13 +278,44 @@ defmodule Pulsar.Producer do
   @impl true
   def handle_continue(:monitor_broker, state) do
     broker_monitor = Process.monitor(state.broker_pid)
-    {:noreply, %{state | broker_monitor: broker_monitor}}
+    {:noreply, %{state | broker_monitor: broker_monitor}, {:continue, :start_batch_timer}}
+  end
+
+  def handle_continue(:start_batch_timer, state) do
+    timer_ref =
+      if state.batch_enabled do
+        Process.send_after(self(), :flush_batch, state.flush_interval)
+      end
+
+    {:noreply, %{state | batch_flush_timer: timer_ref}}
   end
 
   @impl true
   def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}
+  end
+
+  def handle_call({:send_message, payload, opts}, from, %{batch_enabled: true} = state) do
+    message = %{
+      payload: payload,
+      partition_key: Keyword.get(opts, :partition_key),
+      ordering_key: Keyword.get(opts, :ordering_key),
+      properties: Keyword.get(opts, :properties),
+      event_time: Keyword.get(opts, :event_time)
+    }
+
+    new_batch = [{message, from} | state.batch]
+    new_size = state.batch_size + 1
+
+    if new_size >= state.batch_size_threshold do
+      state = cancel_batch_timer(state)
+      state = do_flush_batch(%{state | batch: new_batch, batch_size: new_size})
+      timer_ref = Process.send_after(self(), :flush_batch, state.flush_interval)
+      {:noreply, %{state | batch_flush_timer: timer_ref}}
+    else
+      {:noreply, %{state | batch: new_batch, batch_size: new_size}}
+    end
   end
 
   def handle_call({:send_message, payload, opts}, from, state) do
@@ -309,54 +367,6 @@ defmodule Pulsar.Producer do
     end
   end
 
-  def handle_call({:send_batch, _, _}, _from, %{ready: false} = state) do
-    Logger.warning("Producer #{state.producer_name} is waiting, cannot send batch")
-    {:reply, {:error, :producer_waiting}, state}
-  end
-
-  def handle_call({:send_batch, messages, callers}, _from, state) do
-    sequence_id = state.sequence_id + 1
-
-    command_send = %Binary.CommandSend{
-      producer_id: state.producer_id,
-      sequence_id: sequence_id,
-      num_messages: length(messages)
-    }
-
-    batch_metadata = %{
-      producer_name: state.producer_name,
-      sequence_id: sequence_id
-    }
-
-    case Pulsar.Broker.publish_batch_message(
-           state.broker_pid,
-           command_send,
-           batch_metadata,
-           messages,
-           state.compression
-         ) do
-      :ok ->
-        :telemetry.execute(
-          [:pulsar, :producer, :batch, :published],
-          %{count: length(messages)},
-          %{
-            topic: state.topic,
-            producer_name: state.producer_name,
-            producer_id: state.producer_id,
-            sequence_id: sequence_id
-          }
-        )
-
-        # Store pending send with all callers to reply to on receipt
-        new_waiting = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
-        new_state = %{state | sequence_id: sequence_id, pending_sends: new_waiting}
-        {:reply, :ok, new_state}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
-  end
-
   @impl true
   def handle_info(
         {:DOWN, monitor_ref, :process, broker_pid, reason},
@@ -375,12 +385,29 @@ defmodule Pulsar.Producer do
   end
 
   @impl true
+  def handle_info(:flush_batch, state) do
+    state = do_flush_batch(state)
+    timer_ref = Process.send_after(self(), :flush_batch, state.flush_interval)
+    {:noreply, %{state | batch_flush_timer: timer_ref}}
+  end
+
+  @impl true
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
     new_state =
       case Map.pop(state.pending_sends, receipt.sequence_id) do
+        # Batch case - reply to all callers
+        {{callers, %{batch: true}}, new_pending} when is_list(callers) ->
+          Enum.each(callers, fn from ->
+            GenServer.reply(from, {:ok, receipt.message_id})
+          end)
+
+          %{state | pending_sends: new_pending}
+
+        # Chunked message case
         {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) and map_size(chunk_metadata) > 0 ->
           handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state)
 
+        # Single message case
         {{from, _metadata}, new_pending} ->
           GenServer.reply(from, {:ok, receipt.message_id})
           %{state | pending_sends: new_pending}
@@ -437,6 +464,18 @@ defmodule Pulsar.Producer do
   end
 
   def terminate(reason, state) do
+    # Cancel batch flush timer if active
+    if state.batch_flush_timer do
+      Process.cancel_timer(state.batch_flush_timer)
+    end
+
+    # Reply to any pending batch callers with error
+    if state.batch_enabled and length(state.batch) > 0 do
+      Enum.each(state.batch, fn {_message, from} ->
+        GenServer.reply(from, {:error, :producer_terminated})
+      end)
+    end
+
     # CloseProducer is sent by the broker's DOWN handler
     Logger.debug("Producer #{inspect(state.producer_name)} terminating: #{inspect(reason)}")
 
@@ -458,6 +497,63 @@ defmodule Pulsar.Producer do
   end
 
   ## Private Functions
+
+  defp cancel_batch_timer(%{batch_flush_timer: nil} = state), do: state
+
+  defp cancel_batch_timer(%{batch_flush_timer: timer_ref} = state) do
+    Process.cancel_timer(timer_ref)
+    %{state | batch_flush_timer: nil}
+  end
+
+  defp do_flush_batch(%{batch: []} = state), do: state
+
+  defp do_flush_batch(state) do
+    batch = Enum.reverse(state.batch)
+    messages = Enum.map(batch, fn {message, _from} -> message end)
+    callers = Enum.map(batch, fn {_message, from} -> from end)
+
+    sequence_id = state.sequence_id + 1
+
+    command_send = %Binary.CommandSend{
+      producer_id: state.producer_id,
+      sequence_id: sequence_id,
+      num_messages: length(messages)
+    }
+
+    batch_metadata = %{
+      producer_name: state.producer_name,
+      sequence_id: sequence_id
+    }
+
+    case Pulsar.Broker.publish_batch_message(
+           state.broker_pid,
+           command_send,
+           batch_metadata,
+           messages,
+           state.compression
+         ) do
+      :ok ->
+        :telemetry.execute(
+          [:pulsar, :producer, :batch, :published],
+          %{count: length(messages)},
+          %{
+            topic: state.topic,
+            producer_name: state.producer_name,
+            producer_id: state.producer_id,
+            sequence_id: sequence_id
+          }
+        )
+
+        new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
+
+        %{state | sequence_id: sequence_id, pending_sends: new_pending, batch: [], batch_size: 0}
+
+      {:error, reason} ->
+        Logger.error("Failed to send batch: #{inspect(reason)}")
+        Enum.each(callers, fn from -> GenServer.reply(from, {:error, reason}) end)
+        %{state | batch: [], batch_size: 0}
+    end
+  end
 
   defp handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state) do
     uuid = chunk_metadata.uuid
@@ -515,8 +611,8 @@ defmodule Pulsar.Producer do
       producer_name: state.producer_name
     }
 
-    [:pulsar, :producer, :opened]
-    |> :telemetry.span(
+    :telemetry.span(
+      [:pulsar, :producer, :opened],
       start_metadata,
       fn ->
         result =
@@ -575,17 +671,6 @@ defmodule Pulsar.Producer do
         {result, stop_metadata}
       end
     )
-    |> case do
-      {:ok, new_state} ->
-        {:noreply, new_state, {:continue, :monitor_broker}}
-
-      {:error, {:ProducerFenced, _msg}} ->
-        ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
-        {:stop, {:shutdown, :producer_fenced}, state}
-
-      {:error, reason} ->
-        {:stop, reason, state}
-    end
   end
 
   defp create_producer(broker_pid, state) do
