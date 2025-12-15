@@ -41,7 +41,6 @@ defmodule Pulsar.Protocol do
   Returns the complete binary frame ready to send to the broker.
   """
   def encode_message(command_send, message_metadata, payload) do
-    # Encode just the command (BaseCommand) without size headers
     type = command_to_type(command_send)
     field_name = field_name_from_type(type)
 
@@ -53,15 +52,12 @@ defmodule Pulsar.Protocol do
 
     command_size = byte_size(command_binary)
 
-    # Encode message metadata
     metadata_encoded = Binary.MessageMetadata.encode(message_metadata)
     metadata_size = byte_size(metadata_encoded)
 
-    # Calculate CRC32-C checksum of everything after it (metadataSize + metadata + payload)
     checksum_data = <<metadata_size::32, metadata_encoded::binary, payload::binary>>
     checksum = :crc32cer.nif(checksum_data)
 
-    # Build the message part (magic + checksum + metadata_size + metadata + payload)
     message_part = <<
       0x0E01::16,
       checksum::32,
@@ -71,11 +67,8 @@ defmodule Pulsar.Protocol do
     >>
 
     message_part_size = byte_size(message_part)
-
-    # Total size = 4 (command_size field) + command_size + message_part_size
     total_size = 4 + command_size + message_part_size
 
-    # Build complete frame with correct total_size
     <<
       total_size::32,
       command_size::32,

@@ -17,6 +17,15 @@ defmodule Pulsar.ProducerGroup do
         producer_count: 3
       )
 
+      # Start with batching enabled
+      {:ok, group_pid} = ProducerGroup.start_link(
+        "my-topic-producer",
+        "persistent://public/default/my-topic",
+        batch_enabled: true,
+        batch_size: 100,
+        flush_interval: 10
+      )
+
       # Get all producer PIDs from the group
       producer_pids = ProducerGroup.get_producers(group_pid)
   """
@@ -37,6 +46,9 @@ defmodule Pulsar.ProducerGroup do
   - `opts` - Additional options:
     - `:producer_count` - Number of producer processes in this group (default: 1)
     - `:access_mode` - Producer access mode (default: :Shared)
+    - `:batch_enabled` - Enable batching (default: false)
+    - `:batch_size` - Max messages per batch (default: 100)
+    - `:flush_interval` - Flush interval in ms (default: 10)
     - Other options passed to individual producer processes
 
   ## Returns
@@ -74,7 +86,7 @@ defmodule Pulsar.ProducerGroup do
   end
 
   @doc """
-  Sends a message through the producer in this group.
+  Sends a message through a producer in this group.
 
   ## Parameters
 
@@ -116,7 +128,6 @@ defmodule Pulsar.ProducerGroup do
       "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
     )
 
-    # Create child specs for each producer in the group
     children = create_producer_children(name, topic, opts, producer_count)
 
     supervisor_opts = [

@@ -26,13 +26,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
         name: "message-options-producer"
       )
 
-    [producer] = Pulsar.get_producers(group_pid)
-
-    :ok =
-      Utils.wait_for(fn ->
-        state = :sys.get_state(producer)
-        state.producer_name != nil
-      end)
+    Utils.wait_for_producer_ready(group_pid)
 
     {:ok, _consumer_group} =
       Pulsar.start_consumer(@topic, "message-options-sub", @consumer_callback,
@@ -40,12 +34,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
         init_args: [notify_pid: self()]
       )
 
-    consumer =
-      receive do
-        {:consumer_ready, pid} -> pid
-      after
-        5000 -> flunk("Timeout waiting for consumer to be ready")
-      end
+    [consumer] = Utils.wait_for_consumer_ready(1)
 
     on_exit(fn ->
       Pulsar.Client.stop(@client)
