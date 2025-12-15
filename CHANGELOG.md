@@ -1,3 +1,9 @@
+## [2.6.0](https://github.com/efcasado/pulsar-elixir/compare/v2.5.1...v2.6.0) (2025-12-15)
+
+### Features
+
+* batching for producers ([#96](https://github.com/efcasado/pulsar-elixir/issues/96)) ([729c8fc](https://github.com/efcasado/pulsar-elixir/commit/729c8fcc86e8332be7ec95e9887459eee296dac6))
+
 ## [2.5.1](https://github.com/efcasado/pulsar-elixir/compare/v2.5.0...v2.5.1) (2025-12-10)
 
 ### Bug Fixes

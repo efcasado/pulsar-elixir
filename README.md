@@ -19,7 +19,7 @@ Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pulsar, "~> 2.5.1", hex: :pulsar_elixir}
+    {:pulsar, "~> 2.6.0", hex: :pulsar_elixir}
   ]
 end
 ```
