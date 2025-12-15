@@ -471,7 +471,7 @@ defmodule Pulsar.Producer do
     end
 
     # Reply to any pending batch callers with error
-    if state.batch_enabled and length(state.batch) > 0 do
+    if state.batch_enabled and not Enum.empty?(state.batch) do
       Enum.each(state.batch, fn {_message, from} ->
         GenServer.reply(from, {:error, :producer_terminated})
       end)
