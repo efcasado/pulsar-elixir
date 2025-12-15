@@ -512,13 +512,14 @@ defmodule Pulsar.Producer do
     batch = Enum.reverse(state.batch)
     messages = Enum.map(batch, fn {message, _from} -> message end)
     callers = Enum.map(batch, fn {_message, from} -> from end)
+    messages_count = length(messages)
 
     sequence_id = state.sequence_id + 1
 
     command_send = %Binary.CommandSend{
       producer_id: state.producer_id,
       sequence_id: sequence_id,
-      num_messages: length(messages)
+      num_messages: messages_count
     }
 
     single_messages_payload =
@@ -537,7 +538,7 @@ defmodule Pulsar.Producer do
       publish_time: System.system_time(:millisecond),
       compression: state.compression,
       uncompressed_size: uncompressed_size,
-      num_messages_in_batch: length(messages)
+      num_messages_in_batch: messages_count
     }
 
     compressed_payload = maybe_compress(message_metadata, single_messages_payload)
@@ -548,7 +549,7 @@ defmodule Pulsar.Producer do
       :ok ->
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
-          %{count: length(messages)},
+          %{count: messages_count},
           %{
             topic: state.topic,
             producer_name: state.producer_name,
