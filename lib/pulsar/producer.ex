@@ -309,10 +309,8 @@ defmodule Pulsar.Producer do
     new_size = state.batch_size + 1
 
     if new_size >= state.batch_size_threshold do
-      state = cancel_batch_timer(state)
       state = do_flush_batch(%{state | batch: new_batch, batch_size: new_size})
-      timer_ref = Process.send_after(self(), :flush_batch, state.flush_interval)
-      {:noreply, %{state | batch_flush_timer: timer_ref}}
+      {:noreply, state}
     else
       {:noreply, %{state | batch: new_batch, batch_size: new_size}}
     end
@@ -466,10 +464,6 @@ defmodule Pulsar.Producer do
   end
 
   def terminate(reason, state) do
-    if state.batch_flush_timer do
-      Process.cancel_timer(state.batch_flush_timer)
-    end
-
     # Reply to any pending batch callers with error
     if state.batch_enabled and not Enum.empty?(state.batch) do
       Enum.each(state.batch, fn {_message, from} ->
@@ -498,13 +492,6 @@ defmodule Pulsar.Producer do
   end
 
   ## Private Functions
-
-  defp cancel_batch_timer(%{batch_flush_timer: nil} = state), do: state
-
-  defp cancel_batch_timer(%{batch_flush_timer: timer_ref} = state) do
-    Process.cancel_timer(timer_ref)
-    %{state | batch_flush_timer: nil}
-  end
 
   defp do_flush_batch(%{batch: []} = state), do: state
 

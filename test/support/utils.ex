@@ -147,6 +147,18 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
+  Waits for the producer to be ready.
+  """
+  def wait_for_producer_ready(group_pid) do
+    wait_for(fn ->
+      case Pulsar.get_producers(group_pid) do
+        [p | _] -> :sys.get_state(p).ready == true
+        _ -> false
+      end
+    end)
+  end
+
+  @doc """
   Waits for the specified number of consumers to be ready.
 
   Consumers are considered ready when they send a `{:consumer_ready, pid}` message.
