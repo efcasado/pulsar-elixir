@@ -123,13 +123,12 @@ defmodule Pulsar.ProducerGroup do
   @impl true
   def init({name, topic, opts}) do
     producer_count = Keyword.get(opts, :producer_count, 1)
-    batch_enabled = Keyword.get(opts, :batch_enabled, false)
 
     Logger.info(
-      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)}, batching: #{batch_enabled})"
+      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
     )
 
-    producer_children = create_producer_children(name, topic, opts, producer_count)
+    children = create_producer_children(name, topic, opts, producer_count)
 
     supervisor_opts = [
       strategy: :one_for_one,
@@ -139,7 +138,7 @@ defmodule Pulsar.ProducerGroup do
       max_seconds: 60
     ]
 
-    Supervisor.init(producer_children, supervisor_opts)
+    Supervisor.init(children, supervisor_opts)
   end
 
   # Private functions
