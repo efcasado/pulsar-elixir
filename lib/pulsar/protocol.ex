@@ -198,4 +198,11 @@ defmodule Pulsar.Protocol do
     |> String.downcase()
     |> String.to_existing_atom()
   end
+
+  @spec to_key_value_list(map() | nil) :: [Binary.KeyValue.t()]
+  def to_key_value_list(nil), do: []
+
+  def to_key_value_list(props) when is_map(props) do
+    Enum.map(props, fn {k, v} -> %Binary.KeyValue{key: to_string(k), value: to_string(v)} end)
+  end
 end

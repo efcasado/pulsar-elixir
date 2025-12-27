@@ -25,13 +25,16 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
+      [producer] = Pulsar.get_producers(producer_pid)
+      producer_name = :sys.get_state(producer).producer_name
+
       messages = Enum.map(1..12, &"msg-#{&1}")
       send_messages(producer_pid, messages)
 
       assert_messages_received(consumer_pid, messages)
 
       # Should have 4 batch events (3+3+3+3=12 messages)
-      events = Utils.collect_events([:pulsar, :producer, :batch, :published])
+      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
       assert length(events) == 4
       assert Enum.all?(events, fn %{count: c} -> c == 3 end)
     end
@@ -41,10 +44,13 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
+      [producer] = Pulsar.get_producers(producer_pid)
+      producer_name = :sys.get_state(producer).producer_name
+
       assert {:ok, _} = Pulsar.send(producer_pid, "single-msg")
 
       assert_messages_received(consumer_pid, ["single-msg"])
-      assert_batch_telemetry(count: 1)
+      assert_batch_telemetry(count: 1, producer_name: producer_name)
     end
 
     @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
@@ -60,7 +66,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert state.ready == true
       assert state.batch == []
 
-      assert [] = Utils.collect_events([:pulsar, :producer, :batch, :published])
+      assert [] = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [state.producer_name])
     end
   end
 
@@ -82,7 +88,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     {:ok, producer_pid} =
       Pulsar.start_producer(
         topic,
-        [client: @client, name: "batch-#{suffix}-producer", batch_enabled: true] ++ opts
+        [client: @client, name: "#{suffix}-producer", batch_enabled: true] ++ opts
       )
 
     Utils.wait_for_producer_ready(producer_pid)
@@ -102,8 +108,8 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     Enum.each(expected_payloads, fn expected -> assert expected in payloads end)
   end
 
-  defp assert_batch_telemetry(count: expected_count) do
-    events = Utils.collect_events([:pulsar, :producer, :batch, :published])
+  defp assert_batch_telemetry(count: expected_count, producer_name: producer_name) do
+    events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
     assert [%{count: ^expected_count}] = events
   end
 end

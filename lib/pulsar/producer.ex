@@ -13,7 +13,9 @@ defmodule Pulsar.Producer do
 
   alias Pulsar.Config
   alias Pulsar.ProducerEpochStore
+  alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Schema
   alias Pulsar.ServiceDiscovery
 
   require Logger
@@ -39,7 +41,9 @@ defmodule Pulsar.Producer do
     :batch_size,
     :batch_size_threshold,
     :batch_flush_timer,
-    :flush_interval
+    :flush_interval,
+    :schema,
+    :schema_version
   ]
 
   @type t :: %__MODULE__{
@@ -62,7 +66,9 @@ defmodule Pulsar.Producer do
           batch_size: non_neg_integer(),
           batch_size_threshold: non_neg_integer(),
           batch_flush_timer: reference() | nil,
-          flush_interval: non_neg_integer()
+          flush_interval: non_neg_integer(),
+          schema: Schema.t() | nil,
+          schema_version: binary() | nil
         }
 
   ## Public API
@@ -116,6 +122,7 @@ defmodule Pulsar.Producer do
     {batch_enabled, genserver_opts} = Keyword.pop(genserver_opts, :batch_enabled, false)
     {batch_size_threshold, genserver_opts} = Keyword.pop(genserver_opts, :batch_size, 100)
     {flush_interval, genserver_opts} = Keyword.pop(genserver_opts, :flush_interval, 10)
+    {schema, genserver_opts} = Keyword.pop(genserver_opts, :schema, nil)
 
     {startup_delay_ms, genserver_opts} =
       Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
@@ -137,7 +144,8 @@ defmodule Pulsar.Producer do
       startup_jitter_ms: startup_jitter_ms,
       batch_enabled: batch_enabled,
       batch_size_threshold: batch_size_threshold,
-      flush_interval: flush_interval
+      flush_interval: flush_interval,
+      schema: schema
     }
 
     GenServer.start_link(__MODULE__, producer_config, [])
@@ -194,7 +202,8 @@ defmodule Pulsar.Producer do
       startup_jitter_ms: startup_jitter_ms,
       batch_enabled: batch_enabled,
       batch_size_threshold: batch_size_threshold,
-      flush_interval: flush_interval
+      flush_interval: flush_interval,
+      schema: schema
     } = producer_config
 
     producer_id = System.unique_integer([:positive, :monotonic])
@@ -225,7 +234,9 @@ defmodule Pulsar.Producer do
       batch_size: 0,
       batch_size_threshold: batch_size_threshold,
       batch_flush_timer: nil,
-      flush_interval: flush_interval
+      flush_interval: flush_interval,
+      schema: schema,
+      schema_version: nil
     }
 
     if is_nil(topic_epoch) do
@@ -264,6 +275,9 @@ defmodule Pulsar.Producer do
           {:error, {:ProducerFenced, _msg}} ->
             ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
             {:stop, {:shutdown, :producer_fenced}, state}
+
+          {:error, {:IncompatibleSchema, _msg} = reason} ->
+            {:stop, {:shutdown, reason}, state}
 
           {:error, reason} ->
             {:stop, reason, state}
@@ -332,18 +346,19 @@ defmodule Pulsar.Producer do
           compression: acc_state.compression,
           partition_key: Keyword.get(opts, :partition_key),
           ordering_key: Keyword.get(opts, :ordering_key),
-          properties: to_key_value_list(Keyword.get(opts, :properties)),
+          properties: Protocol.to_key_value_list(Keyword.get(opts, :properties)),
           event_time: to_timestamp(Keyword.get(opts, :event_time)),
           deliver_at_time: resolve_deliver_at_time(opts),
           uuid: Map.get(chunk_metadata, :uuid),
           chunk_id: Map.get(chunk_metadata, :chunk_id),
           num_chunks_from_msg: Map.get(chunk_metadata, :num_chunks),
-          total_chunk_msg_size: Map.get(chunk_metadata, :total_chunk_msg_size)
+          total_chunk_msg_size: Map.get(chunk_metadata, :total_chunk_msg_size),
+          schema_version: acc_state.schema_version
         }
 
         compressed_payload = maybe_compress(message_metadata, chunk_payload)
 
-        encoded_message = Pulsar.Protocol.encode_message(command_send, message_metadata, compressed_payload)
+        encoded_message = Protocol.encode_message(command_send, message_metadata, compressed_payload)
 
         case Pulsar.Broker.publish_message(acc_state.broker_pid, encoded_message) do
           :ok ->
@@ -447,7 +462,13 @@ defmodule Pulsar.Producer do
         ProducerEpochStore.put(state.client, state.topic, state.producer_name, state.access_mode, command.topic_epoch)
       end
 
-      {:noreply, %{state | ready: command.producer_ready, topic_epoch: command.topic_epoch}}
+      new_state =
+        state
+        |> Map.put(:ready, command.producer_ready)
+        |> Map.put(:topic_epoch, command.topic_epoch)
+        |> Map.put(:schema_version, command.schema_version)
+
+      {:noreply, new_state}
     else
       {:noreply, state}
     end
@@ -525,12 +546,13 @@ defmodule Pulsar.Producer do
       publish_time: System.system_time(:millisecond),
       compression: state.compression,
       uncompressed_size: uncompressed_size,
-      num_messages_in_batch: messages_count
+      num_messages_in_batch: messages_count,
+      schema_version: state.schema_version
     }
 
     compressed_payload = maybe_compress(message_metadata, single_messages_payload)
 
-    encoded_frame = Pulsar.Protocol.encode_message(command_send, message_metadata, compressed_payload)
+    encoded_frame = Protocol.encode_message(command_send, message_metadata, compressed_payload)
 
     case Pulsar.Broker.publish_message(state.broker_pid, encoded_frame) do
       :ok ->
@@ -636,6 +658,7 @@ defmodule Pulsar.Producer do
               |> Map.put(:registration_request_id, response.request_id)
               |> Map.put(:ready, Map.get(response, :producer_ready, true))
               |> Map.put(:topic_epoch, response.topic_epoch)
+              |> Map.put(:schema_version, response.schema_version)
 
             {:ok, state}
           else
@@ -682,7 +705,8 @@ defmodule Pulsar.Producer do
       producer_id: state.producer_id,
       producer_name: producer_name,
       producer_access_mode: state.access_mode,
-      topic_epoch: state.topic_epoch
+      topic_epoch: state.topic_epoch,
+      schema: Schema.to_binary(state.schema)
     }
 
     Pulsar.Broker.send_request(broker_pid, producer_command)
@@ -716,7 +740,7 @@ defmodule Pulsar.Producer do
       payload_size: byte_size(payload),
       partition_key: Map.get(msg, :partition_key),
       ordering_key: Map.get(msg, :ordering_key),
-      properties: to_key_value_list(Map.get(msg, :properties)),
+      properties: Protocol.to_key_value_list(Map.get(msg, :properties)),
       event_time: to_timestamp(Map.get(msg, :event_time)),
       sequence_id: sequence_id
     }
@@ -725,14 +749,6 @@ defmodule Pulsar.Producer do
     metadata_size = byte_size(encoded_metadata)
 
     <<metadata_size::32, encoded_metadata::binary, payload::binary>>
-  end
-
-  defp to_key_value_list(nil), do: []
-
-  defp to_key_value_list(props) when is_map(props) do
-    Enum.map(props, fn {k, v} ->
-      %Binary.KeyValue{key: to_string(k), value: to_string(v)}
-    end)
   end
 
   defp to_timestamp(%DateTime{} = dt), do: DateTime.to_unix(dt, :millisecond)
