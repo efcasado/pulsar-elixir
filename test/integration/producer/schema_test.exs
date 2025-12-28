@@ -1,7 +1,6 @@
 defmodule Pulsar.Integration.Producer.SchemaTest do
   use ExUnit.Case, async: true
 
-  alias Pulsar.Schema
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
@@ -49,10 +48,11 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       topic = "persistent://public/default/producer-schema-test-json"
       :ok = System.create_topic(topic)
       json_definition = Jason.encode!(%{type: "record", name: "TestRecord", fields: [%{name: "name", type: "string"}]})
-      schema = Schema.new!(type: :Json, definition: json_definition, name: "test-json-schema")
 
-      producer_pid = start_producer(topic, schema: schema)
-      assert %{schema: %Schema{type: :Json}} = get_producer_state(producer_pid)
+      producer_pid = start_producer(topic, schema: [type: :Json, definition: json_definition, name: "test-json-schema"])
+      state = get_producer_state(producer_pid)
+      assert %{schema: schema} = state
+      assert schema.type == :Json
 
       consumer_pid = start_consumer(topic, "json-schema-sub")
       assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
@@ -73,10 +73,10 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
           ]
         })
 
-      schema = Schema.new!(type: :Avro, definition: avro_definition, name: "test-avro-schema")
-
-      producer_pid = start_producer(topic, schema: schema)
-      assert %{schema: %Schema{type: :Avro}} = get_producer_state(producer_pid)
+      producer_pid = start_producer(topic, schema: [type: :Avro, definition: avro_definition, name: "test-avro-schema"])
+      state = get_producer_state(producer_pid)
+      assert %{schema: schema} = state
+      assert schema.type == :Avro
 
       consumer_pid = start_consumer(topic, "avro-schema-sub")
       # Pre-encoded Avro binary: id=21 (zigzag: 42), name="test" (length=4, zigzag: 8)
@@ -86,10 +86,13 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     test "batched messages work with schema" do
       topic = "persistent://public/default/schema-with-batching-test"
       :ok = System.create_topic(topic)
-      schema = Schema.new!(type: :String)
 
-      producer_pid = start_producer(topic, schema: schema, batch_enabled: true, batch_size: 3, flush_interval: 100)
-      assert %{schema: %Schema{type: :String}, batch_enabled: true} = get_producer_state(producer_pid)
+      producer_pid =
+        start_producer(topic, schema: [type: :String], batch_enabled: true, batch_size: 3, flush_interval: 100)
+
+      state = get_producer_state(producer_pid)
+      assert %{schema: schema, batch_enabled: true} = state
+      assert schema.type == :String
 
       consumer_pid = start_consumer(topic, "batch-schema-sub")
       messages = ["msg-1", "msg-2", "msg-3"]
@@ -107,21 +110,20 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     test "we get schema version from broker" do
       topic = "persistent://public/default/producer-schema-version-test"
       :ok = System.create_topic(topic)
-      schema = Schema.new!(type: :String)
 
-      producer_pid = start_producer(topic, schema: schema)
+      producer_pid = start_producer(topic, schema: [type: :String])
       state = get_producer_state(producer_pid)
 
-      assert %{schema: %Schema{type: :String}, schema_version: version} = state
+      assert %{schema: schema, schema_version: version} = state
+      assert schema.type == :String
       assert is_binary(version), "expected schema_version to be binary, got: #{inspect(version)}"
     end
 
     test "message metadata includes schema version" do
       topic = "persistent://public/default/producer-schema-msg-version-test"
       :ok = System.create_topic(topic)
-      schema = Schema.new!(type: :String)
 
-      producer_pid = start_producer(topic, schema: schema)
+      producer_pid = start_producer(topic, schema: [type: :String])
       consumer_pid = start_consumer(topic, "schema-version-sub")
 
       {:ok, _} = Pulsar.send(producer_pid, "test message")
@@ -135,15 +137,12 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       topic = "persistent://public/default/producer-schema-compat-test"
       :ok = System.create_topic(topic)
 
-      string_schema = Schema.new!(type: :String)
-      _producer1 = start_producer(topic, schema: string_schema, name: "compat-test-producer-1")
-
-      int_schema = Schema.new!(type: :Int32)
+      _producer1 = start_producer(topic, schema: [type: :String], name: "compat-test-producer-1")
 
       {:ok, producer_group} =
         Pulsar.start_producer(topic,
           client: @client,
-          schema: int_schema,
+          schema: [type: :Int32],
           name: "compat-test-producer-2"
         )
 
@@ -157,41 +156,43 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       topic = "persistent://public/default/producer-schema-evolution-test"
       :ok = System.create_topic(topic)
 
-      schema_v1 =
-        Schema.new!(
-          type: :Json,
-          definition:
-            Jason.encode!(%{
-              type: "record",
-              name: "User",
-              fields: [%{name: "name", type: "string"}]
-            }),
-          name: "user-schema"
+      producer1 =
+        start_producer(topic,
+          schema: [
+            type: :Json,
+            definition:
+              Jason.encode!(%{
+                type: "record",
+                name: "User",
+                fields: [%{name: "name", type: "string"}]
+              }),
+            name: "user-schema"
+          ]
         )
 
-      producer1 = start_producer(topic, schema: schema_v1)
       state1 = get_producer_state(producer1)
       version1 = state1.schema_version
 
       Pulsar.stop_producer(producer1)
 
       # Evolved schema with additional optional field
-      schema_v2 =
-        Schema.new!(
-          type: :Json,
-          definition:
-            Jason.encode!(%{
-              type: "record",
-              name: "User",
-              fields: [
-                %{name: "name", type: "string"},
-                %{name: "age", type: ["null", "int"], default: nil}
-              ]
-            }),
-          name: "user-schema"
+      producer2 =
+        start_producer(topic,
+          schema: [
+            type: :Json,
+            definition:
+              Jason.encode!(%{
+                type: "record",
+                name: "User",
+                fields: [
+                  %{name: "name", type: "string"},
+                  %{name: "age", type: ["null", "int"], default: nil}
+                ]
+              }),
+            name: "user-schema"
+          ]
         )
 
-      producer2 = start_producer(topic, schema: schema_v2)
       state2 = get_producer_state(producer2)
       version2 = state2.schema_version
 

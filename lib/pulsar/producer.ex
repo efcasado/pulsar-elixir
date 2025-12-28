@@ -91,6 +91,11 @@ defmodule Pulsar.Producer do
     - `:compression` - Compression algorithm (default: :NONE)
     - `:chunking_enabled` - Enable message chunking for large messages (default: false)
     - `:max_message_size` - Maximum size of each chunk in bytes when chunking is enabled (default: 5_242_880, which is 5MB)
+    - `:schema` - Schema configuration as keyword list (optional):
+      - `:type` - (required) Schema type (e.g., :Json, :String, :Avro)
+      - `:definition` - Schema definition (required for non-primitive types like Json, Avro)
+      - `:name` - Optional schema name
+      - `:properties` - Optional metadata properties as a map
     - `:startup_delay_ms` - Fixed startup delay in milliseconds before producer initialization (default: 1000, matches broker conn_timeout)
     - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
 
@@ -112,6 +117,12 @@ defmodule Pulsar.Producer do
         name: "my-producer",
         access_mode: :Exclusive
       )
+
+      # With schema
+      {:ok, producer} = Producer.start_link(
+        "persistent://public/default/my-topic",
+        schema: [type: :Json, definition: json_schema_def]
+      )
   """
   def start_link(topic, opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name, nil)
@@ -122,7 +133,8 @@ defmodule Pulsar.Producer do
     {batch_enabled, genserver_opts} = Keyword.pop(genserver_opts, :batch_enabled, false)
     {batch_size_threshold, genserver_opts} = Keyword.pop(genserver_opts, :batch_size, 100)
     {flush_interval, genserver_opts} = Keyword.pop(genserver_opts, :flush_interval, 10)
-    {schema, genserver_opts} = Keyword.pop(genserver_opts, :schema, nil)
+    {schema_opts, genserver_opts} = Keyword.pop(genserver_opts, :schema, nil)
+    schema = build_schema(schema_opts)
 
     {startup_delay_ms, genserver_opts} =
       Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
@@ -816,6 +828,15 @@ defmodule Pulsar.Producer do
       end)
     else
       [{payload, %{}}]
+    end
+  end
+
+  defp build_schema(nil), do: nil
+
+  defp build_schema(opts) when is_list(opts) do
+    case Schema.new(opts) do
+      {:ok, schema} -> schema
+      {:error, reason} -> raise ArgumentError, "invalid schema: #{inspect(reason)}"
     end
   end
 end
