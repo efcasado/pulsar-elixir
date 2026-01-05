@@ -752,14 +752,14 @@ defmodule Pulsar.Consumer do
 
   @impl true
   def handle_call({:send_flow, permits}, _from, state) do
-    flow_command = %Binary.CommandFlow{
-      consumer_id: state.consumer_id,
-      messagePermits: permits
-    }
+    case send_flow_command(state.broker_pid, state.consumer_id, permits, state.flow_outstanding_permits) do
+      :ok ->
+        new_permits = state.flow_outstanding_permits + permits
+        {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
 
-    :ok = Pulsar.Broker.send_command(state.broker_pid, flow_command)
-    new_permits = state.flow_outstanding_permits + permits
-    {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
+      error ->
+        {:reply, error, state}
+    end
   end
 
   def handle_call({:ack, message_ids}, _from, state) when is_list(message_ids) do
