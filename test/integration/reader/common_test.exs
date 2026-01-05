@@ -37,18 +37,17 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   end
 
   test "basic streaming with Enum.take" do
-    result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
-      |> Enum.take(5)
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client)
+    result = Enum.take(stream, 5)
 
     assert length(result) == 5
   end
 
   test "stream pipeline with lazy evaluation" do
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client)
+
     result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
+      stream
       |> Stream.map(fn msg -> String.replace(msg.payload, "Message ", "") end)
       |> Stream.map(&String.to_integer/1)
       |> Stream.filter(fn n -> rem(n, 2) == 0 end)
@@ -58,20 +57,21 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   end
 
   test "each enumeration restarts from beginning" do
-    stream =
-      Pulsar.Reader.stream(@topic, client: @client)
+    {:ok, stream1} = Pulsar.Reader.stream(@topic, client: @client)
+    {:ok, stream2} = Pulsar.Reader.stream(@topic, client: @client)
 
-    first_batch = Enum.take(stream, 3)
-    second_batch = Enum.take(stream, 3)
+    first_batch = Enum.take(stream1, 3)
+    second_batch = Enum.take(stream2, 3)
 
     assert Enum.map(first_batch, & &1.payload) == ["Message 1", "Message 2", "Message 3"]
     assert Enum.map(second_batch, & &1.payload) == ["Message 1", "Message 2", "Message 3"]
   end
 
   test "Stream.take vs Enum.take in pipeline" do
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client)
+
     result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
+      stream
       |> Stream.take(10)
       |> Stream.map(fn msg -> msg.payload end)
       |> Enum.take(5)
@@ -82,17 +82,17 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   test "process all messages with Enum.each" do
     counter = :counters.new(1, [:atomics])
 
-    @topic
-    |> Pulsar.Reader.stream(client: @client, timeout: 100)
-    |> Enum.each(fn _msg -> :counters.add(counter, 1, 1) end)
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, timeout: 100)
+    Enum.each(stream, fn _msg -> :counters.add(counter, 1, 1) end)
 
     assert :counters.get(counter, 1) == @num_messages
   end
 
   test "consume in chunks using Stream.chunk_every" do
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, timeout: 100)
+
     chunks =
-      @topic
-      |> Pulsar.Reader.stream(client: @client, timeout: 100)
+      stream
       |> Stream.map(& &1.payload)
       |> Stream.chunk_every(3)
       |> Enum.to_list()
@@ -111,14 +111,14 @@ defmodule Pulsar.Integration.Reader.CommonTest do
         name: :"empty_producer_#{:erlang.unique_integer([:positive])}"
       )
 
-    result =
-      unique_topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream} =
+      Pulsar.Reader.stream(unique_topic,
         client: @client,
         start_position: :latest,
         timeout: 500
       )
-      |> Enum.take(1)
+
+    result = Enum.take(stream, 1)
 
     assert result == []
   end

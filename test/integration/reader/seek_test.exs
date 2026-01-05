@@ -32,10 +32,8 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       end
 
     # Read all messages to get their publish times from Pulsar
-    messages =
-      @topic
-      |> Pulsar.Reader.stream(client: @client, timeout: 100)
-      |> Enum.to_list()
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, timeout: 100)
+    messages = Enum.to_list(stream)
 
     # Build lookup by payload -> {message_id, publish_time}
     message_info =
@@ -55,14 +53,14 @@ defmodule Pulsar.Integration.Reader.SeekTest do
   test "read from specific message_id", %{message_info: message_info} do
     %{message_id: %{ledgerId: ledger_id, entryId: entry_id}} = message_info[5]
 
-    messages =
-      @topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream} =
+      Pulsar.Reader.stream(@topic,
         client: @client,
         start_message_id: {ledger_id, entry_id},
         timeout: 100
       )
-      |> Enum.to_list()
+
+    messages = Enum.to_list(stream)
 
     assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)
@@ -72,14 +70,14 @@ defmodule Pulsar.Integration.Reader.SeekTest do
   test "read from timestamp", %{message_info: message_info} do
     %{publish_time: publish_time} = message_info[5]
 
-    messages =
-      @topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream} =
+      Pulsar.Reader.stream(@topic,
         client: @client,
         start_timestamp: publish_time,
         timeout: 100
       )
-      |> Enum.to_list()
+
+    messages = Enum.to_list(stream)
 
     assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)

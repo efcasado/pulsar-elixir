@@ -37,10 +37,8 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
   end
 
   test "stream with external client" do
-    result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
-      |> Enum.take(5)
+    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client)
+    result = Enum.take(stream, 5)
 
     assert length(result) == 5
   end
@@ -48,13 +46,13 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
   test "stream with internal client", %{broker: broker} do
     client_name = :"reader_internal_#{:erlang.unique_integer([:positive])}"
 
-    result =
-      @topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream} =
+      Pulsar.Reader.stream(@topic,
         host: broker.service_url,
         name: client_name
       )
-      |> Enum.take(5)
+
+    result = Enum.take(stream, 5)
 
     assert length(result) == 5
   end
@@ -63,21 +61,21 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
     name1 = :"reader_multi_1_#{:erlang.unique_integer([:positive])}"
     name2 = :"reader_multi_2_#{:erlang.unique_integer([:positive])}"
 
-    result1 =
-      @topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream1} =
+      Pulsar.Reader.stream(@topic,
         host: broker.service_url,
         name: name1
       )
-      |> Enum.take(5)
 
-    result2 =
-      @topic
-      |> Pulsar.Reader.stream(
+    result1 = Enum.take(stream1, 5)
+
+    {:ok, stream2} =
+      Pulsar.Reader.stream(@topic,
         host: broker.service_url,
         name: name2
       )
-      |> Enum.take(5)
+
+    result2 = Enum.take(stream2, 5)
 
     assert length(result1) == 5
     assert length(result2) == 5
@@ -98,13 +96,13 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
   test "stream cleanup on halt" do
     timeout_ms = 100
 
-    result =
-      @topic
-      |> Pulsar.Reader.stream(
+    {:ok, stream} =
+      Pulsar.Reader.stream(@topic,
         client: @client,
         timeout: timeout_ms
       )
-      |> Enum.to_list()
+
+    result = Enum.to_list(stream)
 
     assert length(result) == @num_messages
 
@@ -119,5 +117,18 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
       end)
 
     assert remaining == []
+  end
+
+  test "internal client is cleaned up on consumer start failure", %{broker: broker} do
+    client_name = :"reader_cleanup_on_failure_#{:erlang.unique_integer([:positive])}"
+    invalid_topic = "persistent://nonexistent/namespace/topic"
+
+    assert {:error, _reason} =
+             Pulsar.Reader.stream(invalid_topic,
+               host: broker.service_url,
+               name: client_name
+             )
+
+    assert Process.whereis(client_name) == nil
   end
 end
