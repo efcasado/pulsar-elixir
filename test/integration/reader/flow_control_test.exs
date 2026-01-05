@@ -42,16 +42,15 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "small flow_permits triggers refills" do
-    result =
+    messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 100)
       |> Enum.to_list()
 
-    assert length(result) == @num_messages
+    assert length(messages) == @num_messages
 
-    stats = Utils.collect_flow_stats()
-
-    [{_consumer_id, consumer_stats}] = Map.to_list(stats)
+    consumer_id = hd(messages).command.consumer_id
+    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == 5
     assert consumer_stats.requested_total == @num_messages + 5
@@ -59,15 +58,15 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "flow_permits of 1 triggers refill on every message" do
-    result =
+    messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 100)
       |> Enum.to_list()
 
-    assert length(result) == @num_messages
+    assert length(messages) == @num_messages
 
-    stats = Utils.collect_flow_stats()
-    [{_consumer_id, consumer_stats}] = Map.to_list(stats)
+    consumer_id = hd(messages).command.consumer_id
+    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == @num_messages + 1
     assert consumer_stats.requested_total == @num_messages + 1
@@ -75,15 +74,15 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "large flow_permits requires only initial request" do
-    result =
+    messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 100)
       |> Enum.to_list()
 
-    assert length(result) == @num_messages
+    assert length(messages) == @num_messages
 
-    stats = Utils.collect_flow_stats()
-    [{_consumer_id, consumer_stats}] = Map.to_list(stats)
+    consumer_id = hd(messages).command.consumer_id
+    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == 1
     assert consumer_stats.requested_total == 1000
