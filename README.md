@@ -27,8 +27,19 @@ end
 
 ## Quick Start
 
-Assuming you have Pulsar running on `localhost:6650` and that you have implemented a basic
-consumer like the one below:
+Assuming you have Pulsar running on `localhost:6650`, the quickest way to consume messages
+from a Pulsar topic is using the Reader interace as shown below
+
+```elixir
+Pulsar.Reader.stream(
+  host: "pulsar://localhost:6650",
+  topic: "persistent://my-tenant/my-namespace/my-topic"
+)
+|> Enum.take(5)
+```
+
+For more complex scenarios and assuming that you have implemented a basic consumer like the
+one below:
 
 ```elixir
 defmodule MyPulsarConsumer do
@@ -178,5 +189,5 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Compaction                         | ✅        |
 | Consumer  | Schema                             | ❌        |
 | Consumer  | Configurable flow control settings | ✅        |
-| Reader    |                                    | ❌        |
+| Reader    |                                    | ✅        |
 | TableView |                                    | ❌        |
