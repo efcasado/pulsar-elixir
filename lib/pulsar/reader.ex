@@ -9,12 +9,10 @@ defmodule Pulsar.Reader do
   Basic usage with automatic connection:
 
       # Read 10 messages from earliest
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/my-topic",
+      Pulsar.Reader.stream("persistent://public/default/my-topic",
         host: "pulsar://localhost:6650",
         start_position: :earliest
       )
-
-      stream
       |> Stream.take(10)
       |> Enum.each(fn message ->
         IO.inspect(message.payload)
@@ -26,31 +24,27 @@ defmodule Pulsar.Reader do
       {:ok, _pid} = Pulsar.start(host: "pulsar://localhost:6650")
 
       # Later, in your code
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/my-topic",
+      Pulsar.Reader.stream("persistent://public/default/my-topic",
         client: :default,
         start_position: :earliest
       )
-
-      stream
       |> Stream.map(fn message -> process(message) end)
       |> Stream.run()
 
   With custom flow control:
 
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/my-topic",
+      Pulsar.Reader.stream("persistent://public/default/my-topic",
         host: "pulsar://localhost:6650",
         flow_permits: 50  # Request 50 messages at a time
       )
-      Enum.take(stream, 100)
+      |> Enum.take(100)
 
   Reading from a specific message:
 
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/my-topic",
+      Pulsar.Reader.stream("persistent://public/default/my-topic",
         host: "pulsar://localhost:6650",
         start_message_id: {123, 456}  # {ledger_id, entry_id}
       )
-
-      stream
       |> Stream.each(&process/1)
       |> Stream.run()
 
@@ -79,8 +73,8 @@ defmodule Pulsar.Reader do
   only for the duration of the stream. The connection is automatically closed when
   the stream completes or is halted.
 
-      {:ok, stream} = Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650")
-      Enum.take(stream, 10)
+      Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650")
+      |> Enum.take(10)
       # Connection automatically closed after consuming 10 messages
 
   ### External Client Mode (client)
@@ -94,8 +88,8 @@ defmodule Pulsar.Reader do
       ]
 
       # Use the existing client
-      {:ok, stream} = Pulsar.Reader.stream(topic, client: :default)
-      Enum.take(stream, 10)
+      Pulsar.Reader.stream(topic, client: :default)
+      |> Enum.take(10)
       # Client remains running
 
   ## Partitioned Topics
@@ -133,8 +127,8 @@ defmodule Pulsar.Reader do
   @doc """
   Creates a stream of messages from a Pulsar topic.
 
-  Returns `{:ok, stream}` where `stream` yields `Pulsar.Message` structs,
-  or `{:error, reason}` if the reader cannot be initialized.
+  Returns a `Stream` that yields `Pulsar.Message` structs. If initialization
+  fails, the stream emits `{:error, reason}` as the first (and only) element.
 
   The stream handles connection lifecycle automatically based on whether
   you provide `:host` or `:client`.
@@ -142,45 +136,37 @@ defmodule Pulsar.Reader do
   ## Examples
 
       # Read with internal connection (closes automatically)
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/topic",
+      Pulsar.Reader.stream("persistent://public/default/topic",
         host: "pulsar://localhost:6650",
         start_position: :earliest
       )
-      stream |> Enum.take(5)
+      |> Enum.take(5)
 
       # Read with external client (remains open)
-      {:ok, stream} = Pulsar.Reader.stream("persistent://public/default/topic",
+      Pulsar.Reader.stream("persistent://public/default/topic",
         client: :default,
         start_position: :latest
       )
-      stream
       |> Stream.filter(&interesting?/1)
       |> Enum.to_list()
 
-      # Handle errors
-      case Pulsar.Reader.stream("persistent://public/default/topic",
-             host: "pulsar://invalid:6650"
-           ) do
-        {:ok, stream} -> Enum.take(stream, 10)
-        {:error, reason} -> Logger.error("Failed to start reader: \#{inspect(reason)}")
+      # Handle errors (emitted as first element if initialization fails)
+      Pulsar.Reader.stream("persistent://public/default/topic",
+        host: "pulsar://invalid:6650"
+      )
+      |> Enum.take(1)
+      |> case do
+        [{:error, reason}] -> Logger.error("Failed: \#{inspect(reason)}")
+        messages -> process(messages)
       end
   """
-  @spec stream(String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  @spec stream(String.t(), keyword()) :: Enumerable.t()
   def stream(topic, opts \\ []) do
-    case start_reader(topic, opts) do
-      {:error, reason} ->
-        {:error, reason}
-
-      initial_state ->
-        stream =
-          Stream.resource(
-            fn -> initial_state end,
-            fn state -> next_message(state) end,
-            fn state -> stop_reader(state) end
-          )
-
-        {:ok, stream}
-    end
+    Stream.resource(
+      fn -> start_reader(topic, opts) end,
+      fn state -> next_message(state) end,
+      fn state -> stop_reader(state) end
+    )
   end
 
   @supported_options [
@@ -194,7 +180,9 @@ defmodule Pulsar.Reader do
     :read_compacted,
     :timeout,
     :auth,
-    :socket_opts
+    :socket_opts,
+    :startup_delay_ms,
+    :startup_jitter_ms
   ]
 
   defp start_reader(topic, opts) do
@@ -234,6 +222,8 @@ defmodule Pulsar.Reader do
     start_timestamp = Keyword.get(opts, :start_timestamp)
     read_compacted = Keyword.get(opts, :read_compacted, false)
     timeout = Keyword.get(opts, :timeout, 60_000)
+    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, 0)
+    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, 0)
 
     subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
     reader_ref = make_ref()
@@ -247,8 +237,8 @@ defmodule Pulsar.Reader do
       start_timestamp: start_timestamp,
       read_compacted: read_compacted,
       flow_initial: 0,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0,
+      startup_delay_ms: startup_delay_ms,
+      startup_jitter_ms: startup_jitter_ms,
       init_args: [self(), reader_ref]
     ]
 
@@ -287,6 +277,14 @@ defmodule Pulsar.Reader do
   defp cleanup_client_on_error(:internal, client_name), do: Pulsar.Client.stop(client_name)
   defp cleanup_client_on_error(:external, _client_name), do: :ok
 
+  defp next_message({:error, reason}) do
+    {[{:error, reason}], :halted}
+  end
+
+  defp next_message(:halted) do
+    {:halt, :halted}
+  end
+
   defp next_message(state) do
     case :queue.out(state.buffer) do
       {{:value, {consumer_pid, message}}, new_buffer} ->
@@ -308,6 +306,8 @@ defmodule Pulsar.Reader do
         end
     end
   end
+
+  defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
     case Pulsar.stop_consumer(state.consumer_group_pid) do

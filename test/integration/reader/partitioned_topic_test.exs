@@ -39,8 +39,10 @@ defmodule Pulsar.Integration.Reader.PartitionedTopicTest do
   end
 
   test "reads messages from all partitions" do
-    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client)
-    result = Enum.take(stream, @num_messages)
+    result =
+      @topic
+      |> Pulsar.Reader.stream(client: @client)
+      |> Enum.take(@num_messages)
 
     assert length(result) == @num_messages
 

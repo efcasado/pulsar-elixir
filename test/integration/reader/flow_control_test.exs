@@ -42,8 +42,10 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "small flow_permits triggers refills" do
-    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, flow_permits: 5, timeout: 100)
-    messages = Enum.to_list(stream)
+    messages =
+      @topic
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 100)
+      |> Enum.to_list()
 
     assert length(messages) == @num_messages
 
@@ -56,8 +58,10 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "flow_permits of 1 triggers refill on every message" do
-    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, flow_permits: 1, timeout: 100)
-    messages = Enum.to_list(stream)
+    messages =
+      @topic
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 100)
+      |> Enum.to_list()
 
     assert length(messages) == @num_messages
 
@@ -70,8 +74,10 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "large flow_permits requires only initial request" do
-    {:ok, stream} = Pulsar.Reader.stream(@topic, client: @client, flow_permits: 1000, timeout: 100)
-    messages = Enum.to_list(stream)
+    messages =
+      @topic
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 100)
+      |> Enum.to_list()
 
     assert length(messages) == @num_messages
 
