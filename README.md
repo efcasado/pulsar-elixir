@@ -31,11 +31,11 @@ Assuming you have Pulsar running on `localhost:6650`, the quickest way to consum
 from a Pulsar topic is using the Reader interace as shown below
 
 ```elixir
-Pulsar.Reader.stream(
-  host: "pulsar://localhost:6650",
-  topic: "persistent://my-tenant/my-namespace/my-topic"
-)
-|> Enum.take(5)
+"persistent://my-tenant/my-namespace/my-topic"
+|> Pulsar.Reader.stream(host: "pulsar://localhost:6650", timeout: 100)
+|> Enum.map(fn msg -> String.to_integer(msg.payload) end)
+|> Enum.filter(fn n -> rem(n, 2) == 0 end)
+|> Enum.map(fn n -> n * 2 end)
 ```
 
 For more complex scenarios and assuming that you have implemented a basic consumer like the
