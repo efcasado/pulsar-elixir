@@ -102,6 +102,16 @@ defmodule Pulsar.Reader do
   If you need per-partition ordering, consider using separate Reader streams for
   each partition (e.g., `"persistent://tenant/ns/topic-partition-0"`).
 
+  ## Process Ownership
+
+  The stream is bound to the process that creates it. Messages are delivered to
+  the creating process's mailbox, so you cannot pass the stream to another process
+  for consumption.
+
+  For multi-process consumption patterns, use the `Pulsar.Consumer` API directly
+  or consider [off_broadway_pulsar](https://github.com/efcasado/off_broadway_pulsar)
+  for Broadway-based pipelines.
+
   ## Stream Termination
 
   The stream terminates when any of these conditions is met:
