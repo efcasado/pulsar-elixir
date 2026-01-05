@@ -202,95 +202,90 @@ defmodule Pulsar.Reader do
 
     {connection_mode, client_name} = resolve_connection_mode(opts)
 
-    client_result =
-      case connection_mode do
-        :internal ->
-          host = Keyword.fetch!(opts, :host)
-          auth = Keyword.get(opts, :auth)
-          socket_opts = Keyword.get(opts, :socket_opts)
-
-          client_opts =
-            [name: client_name, host: host]
-            |> maybe_put(:auth, auth)
-            |> maybe_put(:socket_opts, socket_opts)
-
-          case Pulsar.Client.start_link(client_opts) do
-            {:ok, _pid} -> :ok
-            {:error, {:already_started, _pid}} -> :ok
-            {:error, reason} -> {:error, {:client_start_failed, reason}}
-          end
-
-        :external ->
-          :ok
-      end
-
-    case client_result do
-      {:error, reason} ->
-        {:error, reason}
-
-      :ok ->
-        flow_permits = Keyword.get(opts, :flow_permits, @default_flow_permits)
-        start_position = Keyword.get(opts, :start_position, :earliest)
-        start_message_id = Keyword.get(opts, :start_message_id)
-        start_timestamp = Keyword.get(opts, :start_timestamp)
-        read_compacted = Keyword.get(opts, :read_compacted, false)
-        timeout = Keyword.get(opts, :timeout, 60_000)
-
-        subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
-
-        reader_ref = make_ref()
-
-        consumer_opts = [
-          client: client_name,
-          subscription_type: :Exclusive,
-          durable: false,
-          initial_position: start_position,
-          start_message_id: start_message_id,
-          start_timestamp: start_timestamp,
-          read_compacted: read_compacted,
-          flow_initial: 0,
-          startup_delay_ms: 0,
-          startup_jitter_ms: 0,
-          init_args: [self(), reader_ref]
-        ]
-
-        case Pulsar.start_consumer(
-               topic,
-               subscription_name,
-               Pulsar.Reader.Callback,
-               consumer_opts
-             ) do
-          {:ok, consumer_group_pid} ->
-            consumer_pids = wait_for_consumers_ready(consumer_group_pid, reader_ref)
-
-            Enum.each(consumer_pids, fn pid ->
-              :ok = Consumer.send_flow(pid, flow_permits)
-            end)
-
-            permits_by_consumer =
-              Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
-
-            %{
-              consumer_pids: consumer_pids,
-              consumer_group_pid: consumer_group_pid,
-              client_name: client_name,
-              connection_mode: connection_mode,
-              flow_permits: flow_permits,
-              permits_by_consumer: permits_by_consumer,
-              timeout: timeout,
-              reader_ref: reader_ref,
-              buffer: :queue.new()
-            }
-
-          {:error, reason} ->
-            if connection_mode == :internal do
-              Pulsar.Client.stop(client_name)
-            end
-
-            {:error, reason}
-        end
+    with :ok <- ensure_client_started(connection_mode, client_name, opts),
+         {:ok, state} <- start_consumer(topic, connection_mode, client_name, opts) do
+      state
     end
   end
+
+  defp ensure_client_started(:external, _client_name, _opts), do: :ok
+
+  defp ensure_client_started(:internal, client_name, opts) do
+    host = Keyword.fetch!(opts, :host)
+    auth = Keyword.get(opts, :auth)
+    socket_opts = Keyword.get(opts, :socket_opts)
+
+    client_opts =
+      [name: client_name, host: host]
+      |> maybe_put(:auth, auth)
+      |> maybe_put(:socket_opts, socket_opts)
+
+    case Pulsar.Client.start_link(client_opts) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, {:client_start_failed, reason}}
+    end
+  end
+
+  defp start_consumer(topic, connection_mode, client_name, opts) do
+    flow_permits = Keyword.get(opts, :flow_permits, @default_flow_permits)
+    start_position = Keyword.get(opts, :start_position, :earliest)
+    start_message_id = Keyword.get(opts, :start_message_id)
+    start_timestamp = Keyword.get(opts, :start_timestamp)
+    read_compacted = Keyword.get(opts, :read_compacted, false)
+    timeout = Keyword.get(opts, :timeout, 60_000)
+
+    subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
+    reader_ref = make_ref()
+
+    consumer_opts = [
+      client: client_name,
+      subscription_type: :Exclusive,
+      durable: false,
+      initial_position: start_position,
+      start_message_id: start_message_id,
+      start_timestamp: start_timestamp,
+      read_compacted: read_compacted,
+      flow_initial: 0,
+      startup_delay_ms: 0,
+      startup_jitter_ms: 0,
+      init_args: [self(), reader_ref]
+    ]
+
+    case Pulsar.start_consumer(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
+      {:ok, consumer_group_pid} ->
+        {:ok, build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout)}
+
+      {:error, reason} ->
+        cleanup_client_on_error(connection_mode, client_name)
+        {:error, reason}
+    end
+  end
+
+  defp build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout) do
+    consumer_pids = wait_for_consumers_ready(consumer_group_pid, reader_ref)
+
+    Enum.each(consumer_pids, fn pid ->
+      :ok = Consumer.send_flow(pid, flow_permits)
+    end)
+
+    permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
+
+    %{
+      consumer_pids: consumer_pids,
+      consumer_group_pid: consumer_group_pid,
+      client_name: client_name,
+      connection_mode: connection_mode,
+      flow_permits: flow_permits,
+      permits_by_consumer: permits_by_consumer,
+      timeout: timeout,
+      reader_ref: reader_ref,
+      buffer: :queue.new()
+    }
+  end
+
+  defp cleanup_client_on_error(:internal, client_name), do: Pulsar.Client.stop(client_name)
+  defp cleanup_client_on_error(:external, _client_name), do: :ok
 
   defp next_message(state) do
     case :queue.out(state.buffer) do
