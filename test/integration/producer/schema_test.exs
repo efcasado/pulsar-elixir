@@ -8,35 +8,6 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   @moduletag :integration
   @client :producer_schema_test_client
 
-  defp start_producer(topic, opts) do
-    {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))
-    Utils.wait_for_producer_ready(pid)
-    pid
-  end
-
-  defp start_consumer(topic, sub_name) do
-    {:ok, _} =
-      Pulsar.start_consumer(topic, sub_name, DummyConsumer,
-        client: @client,
-        initial_position: :earliest,
-        init_args: [notify_pid: self()]
-      )
-
-    [pid] = Utils.wait_for_consumer_ready(1)
-    pid
-  end
-
-  defp get_producer_state(producer_pid) do
-    [producer] = Pulsar.get_producers(producer_pid)
-    :sys.get_state(producer)
-  end
-
-  defp assert_send(producer_pid, consumer_pid, payload) do
-    {:ok, _} = Pulsar.send(producer_pid, payload)
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
-    assert [%{payload: ^payload}] = DummyConsumer.get_messages(consumer_pid)
-  end
-
   setup_all do
     broker = System.broker()
     {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
@@ -198,5 +169,34 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
       assert version1 != version2
     end
+  end
+
+  defp start_producer(topic, opts) do
+    {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))
+    Utils.wait_for_producer_ready(pid)
+    pid
+  end
+
+  defp start_consumer(topic, sub_name) do
+    {:ok, _} =
+      Pulsar.start_consumer(topic, sub_name, DummyConsumer,
+        client: @client,
+        initial_position: :earliest,
+        init_args: [notify_pid: self()]
+      )
+
+    [pid] = Utils.wait_for_consumer_ready(1)
+    pid
+  end
+
+  defp get_producer_state(producer_pid) do
+    [producer] = Pulsar.get_producers(producer_pid)
+    :sys.get_state(producer)
+  end
+
+  defp assert_send(producer_pid, consumer_pid, payload) do
+    {:ok, _} = Pulsar.send(producer_pid, payload)
+    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
+    assert [%{payload: ^payload}] = DummyConsumer.get_messages(consumer_pid)
   end
 end
