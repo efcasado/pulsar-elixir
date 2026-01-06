@@ -1063,7 +1063,6 @@ defmodule Pulsar.Consumer do
         command: command,
         metadata: metadata,
         payload: payload,
-        value: nil,
         single_metadata: single_metadata,
         broker_metadata: broker_metadata,
         message_id_to_ack: message_id_to_ack,
@@ -1078,7 +1077,6 @@ defmodule Pulsar.Consumer do
       command: Map.get(chunk_metadata, :commands, []),
       metadata: Map.get(chunk_metadata, :metadatas, []),
       payload: payload,
-      value: nil,
       single_metadata: [],
       broker_metadata: Map.get(chunk_metadata, :broker_metadatas, []),
       message_id_to_ack: Map.get(chunk_metadata, :message_ids, []),
@@ -1358,5 +1356,4 @@ defmodule Pulsar.Consumer do
       {:error, reason} -> raise ArgumentError, "invalid schema: #{inspect(reason)}"
     end
   end
-
 end
