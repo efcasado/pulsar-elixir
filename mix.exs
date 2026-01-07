@@ -31,7 +31,8 @@ defmodule Pulsar.MixProject do
         main: "Pulsar",
         extras: [
           "README.md",
-          "docs/chunking.md"
+          "docs/chunking.md",
+          "docs/schemas.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
