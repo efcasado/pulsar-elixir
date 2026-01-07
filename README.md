@@ -19,7 +19,7 @@ Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pulsar, "~> 2.6.0", hex: :pulsar_elixir}
+    {:pulsar, "~> 2.7.0", hex: :pulsar_elixir}
   ]
 end
 ```
@@ -27,8 +27,19 @@ end
 
 ## Quick Start
 
-Assuming you have Pulsar running on `localhost:6650` and that you have implemented a basic
-consumer like the one below:
+Assuming you have Pulsar running on `localhost:6650`, the quickest way to consume messages
+from a Pulsar topic is using the Reader interace as shown below
+
+```elixir
+"persistent://my-tenant/my-namespace/my-topic"
+|> Pulsar.Reader.stream(host: "pulsar://localhost:6650", timeout: 100)
+|> Enum.map(fn msg -> String.to_integer(msg.payload) end)
+|> Enum.filter(fn n -> rem(n, 2) == 0 end)
+|> Enum.map(fn n -> n * 2 end)
+```
+
+For more complex scenarios and assuming that you have implemented a basic consumer like the
+one below:
 
 ```elixir
 defmodule MyPulsarConsumer do
@@ -178,5 +189,5 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Compaction                         | ✅        |
 | Consumer  | Schema                             | ⚠️        |
 | Consumer  | Configurable flow control settings | ✅        |
-| Reader    |                                    | ❌        |
+| Reader    |                                    | ✅        |
 | TableView |                                    | ❌        |

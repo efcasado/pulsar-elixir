@@ -4,7 +4,7 @@ defmodule Pulsar.MixProject do
   def project do
     [
       app: :pulsar,
-      version: "2.6.0",
+      version: "2.7.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -33,6 +33,7 @@ defmodule Pulsar.MixProject do
           "README.md",
           "docs/chunking.md",
           "docs/schemas.md"
+          "docs/reader.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
