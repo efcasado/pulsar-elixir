@@ -32,7 +32,7 @@ defmodule Pulsar.MixProject do
         extras: [
           "README.md",
           "docs/chunking.md",
-          "docs/schemas.md"
+          "docs/schemas.md",
           "docs/reader.md"
         ],
         groups_for_extras: [
