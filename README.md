@@ -170,7 +170,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Producer  | Batching                           | ✅        |
 | Producer  | Chunking                           | ✅        |
 | Producer  | Compression                        | ✅        |
-| Producer  | Schema                             | ⚠️        |
+| Producer  | Schema                             | ✅        |
 | Producer  | Partitioned topics                 | ✅        |
 | Producer  | Access modes                       | ✅        |
 | Consumer  | ACK                                | ✅        |
@@ -187,7 +187,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Dead letter topic                  | ✅        |
 | Consumer  | Compression                        | ✅        |
 | Consumer  | Compaction                         | ✅        |
-| Consumer  | Schema                             | ⚠️        |
+| Consumer  | Schema                             | ✅        |
 | Consumer  | Configurable flow control settings | ✅        |
 | Reader    |                                    | ✅        |
 | TableView |                                    | ❌        |
