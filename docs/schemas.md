@@ -77,7 +77,7 @@ config :pulsar,
 
 **Schema options:**
 - **`:type`** - (required) The schema type
-- **`:definition`** - Schema definition (required for non-primitive types). For `:Json` and `:Avro`, can be a struct, map, or list (automatically JSON-encoded) or a binary string.
+- **`:definition`** - Schema definition (required for non-primitive types). For `:Json` and `:Avro`, can be a struct or map (automatically JSON-encoded) or a binary string.
 - **`:name`** - Optional schema name
 - **`:properties`** - Optional metadata as a map
 

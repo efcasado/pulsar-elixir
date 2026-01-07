@@ -42,7 +42,7 @@ defmodule Pulsar.Schema do
   ## Options
 
   - `:type` - (required) The schema type (e.g., `:Json`, `:String`, `:Avro`)
-  - `:definition` - The schema definition (required for non-primitive types). For `:Json` and `:Avro` schemas, can be a struct, map, list, or binary string. Structs and maps will be automatically JSON-encoded.
+  - `:definition` - The schema definition (required for non-primitive types). For `:Json` and `:Avro` schemas, can be a struct, map, or binary string. Structs and maps will be automatically JSON-encoded.
   - `:name` - Optional schema name
   - `:properties` - Optional metadata properties as a map
 
@@ -128,7 +128,7 @@ defmodule Pulsar.Schema do
     validate_definition(type, Map.from_struct(def))
   end
 
-  defp validate_definition(type, def) when type in [:Json, :Avro] and (is_map(def) or is_list(def)) do
+  defp validate_definition(type, def) when type in [:Json, :Avro] and is_map(def) do
     case Jason.encode(def) do
       {:ok, encoded} -> {:ok, encoded}
       {:error, reason} -> {:error, {:json_encode_failed, reason}}
