@@ -18,7 +18,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     test "json schema" do
       topic = "persistent://public/default/producer-schema-test-json"
       :ok = System.create_topic(topic)
-      json_definition = Jason.encode!(%{type: "record", name: "TestRecord", fields: [%{name: "name", type: "string"}]})
+      json_definition = %{type: "record", name: "TestRecord", fields: [%{name: "name", type: "string"}]}
 
       producer_pid = start_producer(topic, schema: [type: :Json, definition: json_definition, name: "test-json-schema"])
       state = get_producer_state(producer_pid)
@@ -33,16 +33,15 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       topic = "persistent://public/default/producer-schema-test-avro"
       :ok = System.create_topic(topic)
 
-      avro_definition =
-        Jason.encode!(%{
-          type: "record",
-          name: "User",
-          namespace: "com.example",
-          fields: [
-            %{name: "id", type: "int"},
-            %{name: "name", type: "string"}
-          ]
-        })
+      avro_definition = %{
+        type: "record",
+        name: "User",
+        namespace: "com.example",
+        fields: [
+          %{name: "id", type: "int"},
+          %{name: "name", type: "string"}
+        ]
+      }
 
       producer_pid = start_producer(topic, schema: [type: :Avro, definition: avro_definition, name: "test-avro-schema"])
       state = get_producer_state(producer_pid)
@@ -52,6 +51,34 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       consumer_pid = start_consumer(topic, "avro-schema-sub")
       # Pre-encoded Avro binary: id=21 (zigzag: 42), name="test" (length=4, zigzag: 8)
       assert_send(producer_pid, consumer_pid, <<0, 42, 8, "test">>)
+    end
+
+    defmodule TestSchemaStruct do
+      @moduledoc false
+      defstruct [:type, :name, :fields]
+    end
+
+    test "json schema with struct definition" do
+      topic = "persistent://public/default/producer-schema-test-json-struct"
+      :ok = System.create_topic(topic)
+
+      struct_def = %TestSchemaStruct{
+        type: "record",
+        name: "TestRecord",
+        fields: [%{name: "name", type: "string"}]
+      }
+
+      producer_pid =
+        start_producer(topic, schema: [type: :Json, definition: struct_def, name: "test-json-struct-schema"])
+
+      state = get_producer_state(producer_pid)
+      assert %{schema: schema} = state
+      assert schema.type == :Json
+      assert is_binary(schema.definition)
+      assert String.contains?(schema.definition, "TestRecord")
+
+      consumer_pid = start_consumer(topic, "json-schema-struct-sub")
+      assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
     end
 
     test "batched messages work with schema" do
@@ -131,12 +158,11 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         start_producer(topic,
           schema: [
             type: :Json,
-            definition:
-              Jason.encode!(%{
-                type: "record",
-                name: "User",
-                fields: [%{name: "name", type: "string"}]
-              }),
+            definition: %{
+              type: "record",
+              name: "User",
+              fields: [%{name: "name", type: "string"}]
+            },
             name: "user-schema"
           ]
         )
@@ -151,15 +177,14 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         start_producer(topic,
           schema: [
             type: :Json,
-            definition:
-              Jason.encode!(%{
-                type: "record",
-                name: "User",
-                fields: [
-                  %{name: "name", type: "string"},
-                  %{name: "age", type: ["null", "int"], default: nil}
-                ]
-              }),
+            definition: %{
+              type: "record",
+              name: "User",
+              fields: [
+                %{name: "name", type: "string"},
+                %{name: "age", type: ["null", "int"], default: nil}
+              ]
+            },
             name: "user-schema"
           ]
         )

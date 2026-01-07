@@ -42,7 +42,7 @@ defmodule Pulsar.Schema do
   ## Options
 
   - `:type` - (required) The schema type (e.g., `:Json`, `:String`, `:Avro`)
-  - `:definition` - The schema definition (required for non-primitive types)
+  - `:definition` - The schema definition (required for non-primitive types). For `:Json` and `:Avro` schemas, can be a struct, map, list, or binary string. Structs and maps will be automatically JSON-encoded.
   - `:name` - Optional schema name
   - `:properties` - Optional metadata properties as a map
 
@@ -56,7 +56,11 @@ defmodule Pulsar.Schema do
       # JSON schema (Pulsar uses Avro-style record format)
       {:ok, schema} = Pulsar.Schema.new(
         type: :Json,
-        definition: ~s({"type": "record", "name": "User", "fields": [{"name": "id", "type": "int"}]})
+        definition: %{
+          type: "record",
+          name: "User",
+          fields: [%{name: "id", type: "int"}]
+        }
       )
 
       # String schema (primitive, no definition needed)
@@ -119,6 +123,18 @@ defmodule Pulsar.Schema do
   defp validate_definition(type, def) when type in @primitive_types, do: {:ok, def || <<>>}
   defp validate_definition(_type, nil), do: {:error, :definition_required}
   defp validate_definition(_type, def) when is_binary(def), do: {:ok, def}
+
+  defp validate_definition(type, %{__struct__: _} = def) when type in [:Json, :Avro] do
+    validate_definition(type, Map.from_struct(def))
+  end
+
+  defp validate_definition(type, def) when type in [:Json, :Avro] and (is_map(def) or is_list(def)) do
+    case Jason.encode(def) do
+      {:ok, encoded} -> {:ok, encoded}
+      {:error, reason} -> {:error, {:json_encode_failed, reason}}
+    end
+  end
+
   defp validate_definition(_type, def), do: {:error, {:invalid_definition, def}}
 
   defp validate_properties(nil), do: {:ok, nil}

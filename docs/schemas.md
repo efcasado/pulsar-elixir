@@ -77,7 +77,7 @@ config :pulsar,
 
 **Schema options:**
 - **`:type`** - (required) The schema type
-- **`:definition`** - Schema definition (required for non-primitive types)
+- **`:definition`** - Schema definition (required for non-primitive types). For `:Json` and `:Avro`, can be a struct, map, or list (automatically JSON-encoded) or a binary string.
 - **`:name`** - Optional schema name
 - **`:properties`** - Optional metadata as a map
 
@@ -91,14 +91,14 @@ Pulsar.send(producer, "Application started")
 
 **JSON schema** (uses Avro record format):
 ```elixir
-schema_def = Jason.encode!(%{
+schema_def = %{
   type: "record",
   name: "User",
   fields: [
     %{name: "id", type: "int"},
     %{name: "name", type: "string"}
   ]
-})
+}
 
 {:ok, producer} = Pulsar.start_producer(
   "users",
