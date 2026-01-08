@@ -14,8 +14,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     on_exit(fn -> Pulsar.Client.stop(@client) end)
   end
 
-  describe "consumer schema registration" do
-    test "consumer successfully registers schema with broker" do
+  test "consumer successfully registers schema with broker" do
       topic = "persistent://public/default/consumer-schema-registration-test-#{:erlang.unique_integer([:positive])}"
 
       producer_pid = start_producer(topic, schema: [type: :String])
@@ -48,10 +47,8 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
       [message] = DummyConsumer.get_messages(consumer_pid)
       assert message.payload == "test message"
     end
-  end
 
-  describe "schema compatibility validation" do
-    test "incompatible schema types are rejected" do
+  test "incompatible schema types are rejected" do
       topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
 
       start_producer(topic, schema: [type: :String])
@@ -68,7 +65,6 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
       ref = Process.monitor(consumer_group)
       assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}, 10_000
     end
-  end
 
   defp start_producer(topic, opts) do
     {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))

@@ -4,7 +4,9 @@
 
 [Schemas](https://pulsar.apache.org/docs/next/schema-overview/) in Apache Pulsar enable type-safe messaging by defining the structure and type of message data. When producers or consumers register with a schema, the broker validates compatibility and tracks schema versions.
 
-> **Note:** This library currently supports schema registration and compatibility validation. However, payload encoding and decoding must be handled manually by the application. Automatic serialization/deserialization may be added in future versions.
+> #### Note {: .info}
+>
+> This library currently supports schema registration and compatibility validation. However, payload encoding and decoding must be handled manually by the application. Automatic serialization/deserialization may be added in future versions.
 
 ## Supported Schema Types
 
