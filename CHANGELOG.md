@@ -1,3 +1,9 @@
+## [2.8.0](https://github.com/efcasado/pulsar-elixir/compare/v2.7.0...v2.8.0) (2026-01-09)
+
+### Features
+
+* pulsar schemas ([#97](https://github.com/efcasado/pulsar-elixir/issues/97)) ([9014553](https://github.com/efcasado/pulsar-elixir/commit/90145537fe2b3bd297cbb7cc8fadf11c42f0ff8a))
+
 ## [2.7.0](https://github.com/efcasado/pulsar-elixir/compare/v2.6.1...v2.7.0) (2026-01-05)
 
 ### Features
