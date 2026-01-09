@@ -30,6 +30,7 @@ defmodule Pulsar.Consumer do
   alias Pulsar.Config
   alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Schema
   alias Pulsar.ServiceDiscovery
 
   require Logger
@@ -63,7 +64,9 @@ defmodule Pulsar.Consumer do
     :chunked_message_contexts,
     :max_pending_chunked_messages,
     :expire_incomplete_chunked_message_after,
-    :chunk_cleanup_interval
+    :chunk_cleanup_interval,
+    :schema,
+    :schema_version
   ]
 
   @type t :: %__MODULE__{
@@ -91,7 +94,9 @@ defmodule Pulsar.Consumer do
           dead_letter_producer_pid: pid() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
-          expire_incomplete_chunked_message_after: non_neg_integer()
+          expire_incomplete_chunked_message_after: non_neg_integer(),
+          schema: Schema.t() | nil,
+          schema_version: binary() | nil
         }
 
   ## Public API
@@ -159,7 +164,10 @@ defmodule Pulsar.Consumer do
 
     {startup_delay_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_delay_ms, Config.startup_delay())
     {startup_jitter_ms, genserver_opts} = Keyword.pop(genserver_opts, :startup_jitter_ms, Config.startup_jitter())
+    {schema_opts, genserver_opts} = Keyword.pop(genserver_opts, :schema, nil)
     {client, _genserver_opts} = Keyword.pop(genserver_opts, :client, :default)
+
+    schema = build_schema(schema_opts)
 
     consumer_config = %{
       client: client,
@@ -184,7 +192,8 @@ defmodule Pulsar.Consumer do
       expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
       chunk_cleanup_interval: chunk_cleanup_interval,
       startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms
+      startup_jitter_ms: startup_jitter_ms,
+      schema: schema
     }
 
     GenServer.start_link(__MODULE__, consumer_config, [])
@@ -337,7 +346,8 @@ defmodule Pulsar.Consumer do
       expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
       chunk_cleanup_interval: chunk_cleanup_interval,
       startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms
+      startup_jitter_ms: startup_jitter_ms,
+      schema: schema
     } = consumer_config
 
     {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(dead_letter_policy)
@@ -367,7 +377,9 @@ defmodule Pulsar.Consumer do
       chunked_message_contexts: %{},
       max_pending_chunked_messages: max_pending_chunked_messages,
       expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
-      chunk_cleanup_interval: chunk_cleanup_interval
+      chunk_cleanup_interval: chunk_cleanup_interval,
+      schema: schema,
+      schema_version: nil
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
@@ -404,7 +416,8 @@ defmodule Pulsar.Consumer do
              initial_position: state.initial_position,
              durable: state.durable,
              force_create_topic: state.force_create_topic,
-             read_compacted: state.read_compacted
+             read_compacted: state.read_compacted,
+             schema: state.schema
            ) do
       {:noreply,
        %{
@@ -452,7 +465,8 @@ defmodule Pulsar.Consumer do
                initial_position: state.initial_position,
                durable: state.durable,
                force_create_topic: state.force_create_topic,
-               read_compacted: state.read_compacted
+               read_compacted: state.read_compacted,
+               schema: state.schema
              ) do
           {:ok, _response} ->
             {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
@@ -845,6 +859,7 @@ defmodule Pulsar.Consumer do
     durable = Keyword.get(opts, :durable, true)
     force_create_topic = Keyword.get(opts, :force_create_topic, true)
     read_compacted = Keyword.get(opts, :read_compacted, false)
+    schema = Keyword.get(opts, :schema)
 
     subscribe_command =
       %Binary.CommandSubscribe{
@@ -857,7 +872,8 @@ defmodule Pulsar.Consumer do
         initialPosition: initial_position,
         durable: durable,
         force_topic_creation: force_create_topic,
-        read_compacted: read_compacted
+        read_compacted: read_compacted,
+        schema: Schema.to_binary(schema)
       }
 
     Pulsar.Broker.send_request(broker_pid, subscribe_command)
@@ -1328,5 +1344,16 @@ defmodule Pulsar.Consumer do
     end
 
     %{state | chunked_message_contexts: remaining}
+  end
+
+  # Schema helpers
+
+  defp build_schema(nil), do: nil
+
+  defp build_schema(opts) when is_list(opts) do
+    case Schema.new(opts) do
+      {:ok, schema} -> schema
+      {:error, reason} -> raise ArgumentError, "invalid schema: #{inspect(reason)}"
+    end
   end
 end
