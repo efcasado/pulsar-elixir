@@ -274,6 +274,10 @@ defmodule Pulsar.Broker do
     wait = next_backoff(broker)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
+    # Explicitly close the socket to ensure the remote broker cleans up consumers/producers.
+    # This is safe to call even if the socket is already closed.
+    close_socket(broker)
+
     # Fail all pending requests immediately to prevent timeouts
     broker = fail_all_pending_requests(broker, :connection_lost)
 
@@ -970,6 +974,20 @@ defmodule Pulsar.Broker do
   defp broker_key(broker_url) do
     %URI{host: host, port: port} = URI.parse(broker_url)
     "#{host}:#{port}"
+  end
+
+  defp close_socket(%__MODULE__{socket: nil}), do: :ok
+
+  defp close_socket(%__MODULE__{socket_module: :gen_tcp, socket: socket}) do
+    :gen_tcp.close(socket)
+  rescue
+    _ -> :ok
+  end
+
+  defp close_socket(%__MODULE__{socket_module: :ssl, socket: socket}) do
+    :ssl.close(socket)
+  rescue
+    _ -> :ok
   end
 
   # Helper to find and remove entries by monitor reference
