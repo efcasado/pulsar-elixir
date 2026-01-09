@@ -1,3 +1,9 @@
+## [2.8.2](https://github.com/efcasado/pulsar-elixir/compare/v2.8.1...v2.8.2) (2026-01-09)
+
+### Bug Fixes
+
+* dangling tcp connections ([dc51ea5](https://github.com/efcasado/pulsar-elixir/commit/dc51ea5aa91dc5ad1ea7c520a2fddbea1d0a9c7b))
+
 ## [2.8.1](https://github.com/efcasado/pulsar-elixir/compare/v2.8.0...v2.8.1) (2026-01-09)
 
 ## [2.8.0](https://github.com/efcasado/pulsar-elixir/compare/v2.7.0...v2.8.0) (2026-01-09)
