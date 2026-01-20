@@ -65,7 +65,7 @@ defmodule Pulsar.MixProject do
       {:uniq, "~> 0.6.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.39.1", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40.0", only: :dev, runtime: false},
       {:excoveralls, "~> 0.18.5", only: :test},
       {:junit_formatter, "~> 3.4", only: :test},
       {:styler, "~> 1.2", only: [:dev, :test], runtime: false},
