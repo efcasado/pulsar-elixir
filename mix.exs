@@ -59,7 +59,7 @@ defmodule Pulsar.MixProject do
       {:jason, "~> 1.4"},
       {:nimble_lz4, "~> 1.1"},
       {:oauth2, "~> 2.1"},
-      {:protobuf, "~> 0.15.0"},
+      {:protobuf, "~> 0.16.0"},
       {:snappyer, "~> 1.2"},
       {:telemetry, "~> 1.0"},
       {:uniq, "~> 0.6.2"},
