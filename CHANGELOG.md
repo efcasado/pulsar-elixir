@@ -1,3 +1,5 @@
+## [2.8.4](https://github.com/efcasado/pulsar-elixir/compare/v2.8.3...v2.8.4) (2026-01-25)
+
 ## [2.8.3](https://github.com/efcasado/pulsar-elixir/compare/v2.8.2...v2.8.3) (2026-01-21)
 
 ## [2.8.2](https://github.com/efcasado/pulsar-elixir/compare/v2.8.1...v2.8.2) (2026-01-09)
