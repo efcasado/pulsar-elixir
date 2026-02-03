@@ -186,6 +186,8 @@ defmodule Pulsar do
     producers =
       Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
 
+    {name, opts} = Keyword.pop(opts, :name, @app_supervisor)
+
     # Get client configurations - support both :clients (multi-client) and :host (single client)
     clients_config =
       case Keyword.get(opts, :clients, Application.get_env(:pulsar, :clients)) do
@@ -207,7 +209,7 @@ defmodule Pulsar do
         )
       end)
 
-    sup_opts = [strategy: :one_for_one, name: @app_supervisor]
+    sup_opts = [strategy: :one_for_one, name: name]
     {:ok, pid} = Supervisor.start_link(children, sup_opts)
 
     # Start consumers
