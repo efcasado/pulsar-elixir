@@ -201,7 +201,10 @@ defmodule Pulsar do
     # Start clients (brokers are now started within each client)
     children =
       Enum.map(clients_config, fn {client_name, client_opts} ->
-        %{id: {Pulsar.Client, client_name}, start: {Pulsar.Client, :start_link, [Keyword.put(client_opts, :name, client_name)]}}
+        Supervisor.child_spec(
+          {Pulsar.Client, Keyword.put(client_opts, :name, client_name)},
+          id: {Pulsar.Client, client_name}
+        )
       end)
 
     sup_opts = [strategy: :one_for_one, name: @app_supervisor]
