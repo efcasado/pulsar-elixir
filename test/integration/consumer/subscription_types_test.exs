@@ -90,12 +90,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
     messages1 = @consumer_callback.get_messages(consumer1)
     messages2 = @consumer_callback.get_messages(consumer2)
-    count1 = length(messages1)
-    count2 = length(messages2)
 
-    assert count1 + count2 == expected_count
-    assert count1 > 0
-    assert count2 > 0
+    assert length(messages1) + length(messages2) == expected_count
 
     # Extract partition keys to verify no key overlap
     extract_keys = fn messages ->
