@@ -14,8 +14,8 @@ env:
   MIX_ENV: test
 
 jobs:
-  test:
-    name: Test
+  build:
+    name: Build
     runs-on: ubuntu-latest
     if: "!contains(github.event.head_commit.message, '[skip tests]')"
 
@@ -77,17 +77,64 @@ jobs:
     - name: Check Dialyzer
       run: mix dialyzer --format github --format dialyxir
 
+  test:
+    name: Test - ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip tests]')"
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [client, consumer, producer, reader]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install mise
+      uses: jdx/mise-action@v2
+      with:
+        experimental: true
+
+    - name: Cache mise tools
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.local/share/mise
+          ~/.cache/mise
+        key: ${{ runner.os }}-mise-${{ hashFiles('.mise.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-mise-
+
+    - name: Install tools with mise
+      run: mise install
+
+    - name: Cache Mix dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-mix-
+
+    - name: Get Mix dependencies
+      run: mix deps.get
+
+    - name: Compile
+      run: mix compile
+
     - name: Add broker hostnames to /etc/hosts
       run: |
         echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
 
-    - name: Run tests
-      run: mix coveralls.github --max-cases 2
+    - name: Run ${{ matrix.suite }} tests
+      run: mix coveralls.github test/integration/${{ matrix.suite }}
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v2.2.0
       if: always()
       with:
-        name: Test Results
+        name: Test Results - ${{ matrix.suite }}
         path: test/reports/junit.xml
         reporter: java-junit
