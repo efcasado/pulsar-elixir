@@ -169,6 +169,9 @@ defmodule Pulsar do
         ]
       )
 
+      # Setting custom supervisor process name
+      {:ok, pid} = Pulsar.start(name: :custom_pulsar_supervisor)
+
       # Later, stop it
       :ok = Pulsar.stop(pid)
   """
