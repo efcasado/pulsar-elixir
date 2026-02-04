@@ -189,8 +189,6 @@ defmodule Pulsar do
     producers =
       Keyword.get(opts, :producers, Application.get_env(:pulsar, :producers, []))
 
-    {name, opts} = Keyword.pop(opts, :name, @app_supervisor)
-
     # Get client configurations - support both :clients (multi-client) and :host (single client)
     clients_config =
       case Keyword.get(opts, :clients, Application.get_env(:pulsar, :clients)) do
@@ -203,17 +201,13 @@ defmodule Pulsar do
           clients
       end
 
-    # Start clients (brokers are now started within each client)
-    children =
-      Enum.map(clients_config, fn {client_name, client_opts} ->
-        Supervisor.child_spec(
-          {Pulsar.Client, Keyword.put(client_opts, :name, client_name)},
-          id: {Pulsar.Client, client_name}
-        )
-      end)
+    sup_opts = [strategy: :one_for_one, name: @app_supervisor]
+    {:ok, pid} = Supervisor.start_link([], sup_opts)
 
-    sup_opts = [strategy: :one_for_one, name: name]
-    {:ok, pid} = Supervisor.start_link(children, sup_opts)
+    # Start clients (brokers are now started within each client)
+    Enum.each(clients_config, fn {client_name, client_opts} ->
+      Pulsar.start_client(client_name, client_opts)
+    end)
 
     # Start consumers
     Enum.each(consumers, fn {consumer_name, consumer_opts} ->
@@ -278,6 +272,14 @@ defmodule Pulsar do
   """
   @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
   defdelegate stop_broker(broker_url, opts \\ []), to: Pulsar.Client
+
+  @spec start_client(atom(), Keyword.t()) :: Supervisor.on_start_child()
+  def start_client(client_name, client_opts) do
+    Supervisor.start_child(
+      @app_supervisor,
+      %{id: client_name, start: {Pulsar.Client, :start_link, [Keyword.put(client_opts, :name, client_name)]}}
+    )
+  end
 
   @doc """
   Starts a consumer for a topic (regular or partitioned).
@@ -355,7 +357,6 @@ defmodule Pulsar do
       ...> )
       {:ok, #PID<0.456.0>}
   """
-
   @spec start_consumer(String.t(), String.t(), module(), keyword()) :: {:ok, pid} | {:error, term}
   def start_consumer(topic, subscription_name, callback_module, opts \\ []) do
     client = Keyword.get(opts, :client, @default_client)
