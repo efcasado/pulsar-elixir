@@ -1,3 +1,9 @@
+## [2.8.7](https://github.com/efcasado/pulsar-elixir/compare/v2.8.6...v2.8.7) (2026-02-04)
+
+### Bug Fixes
+
+* cannot start multiple clients from configuration ([#108](https://github.com/efcasado/pulsar-elixir/issues/108)) ([35e640b](https://github.com/efcasado/pulsar-elixir/commit/35e640bc4f75b053bfb87a4e0d77d603c48bc218))
+
 ## [2.8.6](https://github.com/efcasado/pulsar-elixir/compare/v2.8.5...v2.8.6) (2026-02-03)
 
 ## [2.8.5](https://github.com/efcasado/pulsar-elixir/compare/v2.8.4...v2.8.5) (2026-01-29)
