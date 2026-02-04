@@ -206,7 +206,8 @@ defmodule Pulsar do
 
     # Start clients (brokers are now started within each client)
     Enum.each(clients_config, fn {client_name, client_opts} ->
-      Pulsar.start_client(client_name, client_opts)
+      opts = Keyword.put(client_opts, :name, client_name)
+      Pulsar.start_client(opts)
     end)
 
     # Start consumers
@@ -273,11 +274,32 @@ defmodule Pulsar do
   @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
   defdelegate stop_broker(broker_url, opts \\ []), to: Pulsar.Client
 
-  @spec start_client(atom(), Keyword.t()) :: Supervisor.on_start_child()
-  def start_client(client_name, client_opts) do
+  @doc """
+  Starts a client.
+
+  This is the primary way to create dynamic clients when they are not defined
+  in the application configuration.
+
+  ## Parameters
+
+  - `opts` - Client parameters - check `Pulsar.Client.start_link/1` for details.
+
+  ## Examples
+
+      iex> {:ok, client_pid} = Pulsar.start_client(
+      ...>   name: :my_client,
+      ...>   host: "pulsar://localhost:6650"
+      ...> )
+      {:ok, #PID<0.456.0>}
+  """
+  @spec start_client(Keyword.t()) :: Supervisor.on_start_child()
+  def start_client(opts) do
+    opts = Keyword.put_new(opts, :name, @default_client)
+    name = Keyword.get(opts, :name, @default_client)
+
     Supervisor.start_child(
       @app_supervisor,
-      %{id: client_name, start: {Pulsar.Client, :start_link, [Keyword.put(client_opts, :name, client_name)]}}
+      %{id: name, start: {Pulsar.Client, :start_link, [opts]}}
     )
   end
 
