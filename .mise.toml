@@ -10,24 +10,25 @@ PULSAR_PROTOCOL = "v3.3.2"
 [tasks.deps]
 description = "Get Elixir dependencies"
 run = "mix deps.get"
-file = "mix.lock"
+sources = ["mix.lock"]
 
 # Protobuf tasks
 [tasks."proto:download"]
 description = "Download Pulsar protobuf definitions"
 run = "curl -o pulsar.proto https://raw.githubusercontent.com/apache/pulsar/refs/tags/{{env.PULSAR_PROTOCOL}}/pulsar-common/src/main/proto/PulsarApi.proto"
 
-[tasks."proto:install-plugin"]
-description = "Install protobuf Elixir plugin"
-run = "mix escript.install hex protobuf 0.15.0 --force"
+[tasks."proto:build-plugin"]
+description = "Build protoc-gen-elixir escript from the local :protobuf dependency"
+run = "cd deps/protobuf && mix deps.get && mix escript.build"
+depends = ["deps"]
 
 [tasks."proto:generate"]
 description = "Generate Elixir code from protobuf"
 run = [
-    "protoc --plugin=$(mise where elixir)/.mix/escripts/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
+    "protoc --plugin=./deps/protobuf/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
     "mv lib/pulsar.pb.ex lib/pulsar/protocol/binary.ex"
 ]
-depends = ["proto:download", "proto:install-plugin"]
+depends = ["proto:download", "proto:build-plugin"]
 
 [tasks.setup]
 description = "Setup development environment"
