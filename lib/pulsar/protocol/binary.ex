@@ -170,6 +170,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.Schema.Type do
   field(:LocalDateTime, 19)
   field(:ProtobufNative, 20)
   field(:AutoConsume, 21)
+  field(:External, 22)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandSubscribe.SubType do
@@ -524,6 +525,14 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata do
     json_name: "nullPartitionKey",
     default: false
   )
+
+  field(:compacted_batch_indexes, 31,
+    repeated: true,
+    type: :int32,
+    json_name: "compactedBatchIndexes"
+  )
+
+  field(:schema_id, 32, optional: true, type: :bytes, json_name: "schemaId")
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.SingleMessageMetadata do
@@ -652,6 +661,20 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags do
     optional: true,
     type: :bool,
     json_name: "supportsGetPartitionedMetadataWithoutAutoCreation",
+    default: false
+  )
+
+  field(:supports_repl_dedup_by_lid_and_eid, 6,
+    optional: true,
+    type: :bool,
+    json_name: "supportsReplDedupByLidAndEid",
+    default: false
+  )
+
+  field(:supports_topic_watcher_reconcile, 7,
+    optional: true,
+    type: :bool,
+    json_name: "supportsTopicWatcherReconcile",
     default: false
   )
 end
@@ -894,6 +917,8 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopic do
     type: :string,
     json_name: "advertisedListenerName"
   )
+
+  field(:properties, 8, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandLookupTopicResponse do
@@ -1466,6 +1491,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespace do
 
   field(:topics_pattern, 4, optional: true, type: :string, json_name: "topicsPattern")
   field(:topics_hash, 5, optional: true, type: :string, json_name: "topicsHash")
+  field(:properties, 6, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetTopicsOfNamespaceResponse do

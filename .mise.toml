@@ -4,7 +4,7 @@ erlang = "29.0"
 protoc = "25.1"
 
 [env]
-PULSAR_PROTOCOL = "v3.3.2"
+PULSAR_PROTOCOL = "v4.2.1"
 
 # Core development tasks
 [tasks.deps]
