@@ -132,7 +132,7 @@ jobs:
       run: mix coveralls.github test/integration/${{ matrix.suite }} --parallel
 
     - name: Publish Test Report
-      uses: dorny/test-reporter@v2.2.0
+      uses: dorny/test-reporter@v3.0.0
       if: always()
       with:
         name: Test Results - ${{ matrix.suite }}
