@@ -6,8 +6,6 @@ defmodule Pulsar.Integration.Producer.CommonTest do
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
-  require Logger
-
   @moduletag :integration
   @client :producer_common_test_client
   @topic "persistent://public/default/producer-common-test"

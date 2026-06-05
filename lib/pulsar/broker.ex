@@ -908,7 +908,7 @@ defmodule Pulsar.Broker do
 
   defp parse_data(data, buffer, pending_bytes, broker, commands) when pending_bytes > 0 do
     case data do
-      <<missing_chunk::bytes-size(pending_bytes), rest::binary>> ->
+      <<missing_chunk::bytes-size(^pending_bytes), rest::binary>> ->
         command = Pulsar.Protocol.decode(buffer <> missing_chunk)
         parse_data(rest, <<>>, 0, broker, [command | commands])
 

@@ -3,8 +3,6 @@ defmodule Pulsar.Integration.Client.CommonTest do
 
   alias Pulsar.Test.Support.System
 
-  require Logger
-
   @moduletag :integration
 
   test "can spawn multiple clients at once" do

@@ -5,8 +5,6 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
-  require Logger
-
   @moduletag :integration
   @client :reliability_test_client
   @topic "persistent://public/default/reliability-test-topic"

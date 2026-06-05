@@ -5,8 +5,6 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
-  require Logger
-
   @moduletag :integration
   @client :dead_letter_policy_test_client
   @topic "persistent://public/default/dlq-test-topic"
