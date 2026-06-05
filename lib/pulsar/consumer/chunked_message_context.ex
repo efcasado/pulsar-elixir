@@ -7,8 +7,6 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   chunks in any order, assembling the complete payload once all chunks are received.
   """
 
-  require Logger
-
   defstruct [
     :uuid,
     :chunks,

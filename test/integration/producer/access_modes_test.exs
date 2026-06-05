@@ -6,8 +6,6 @@ defmodule Pulsar.Integration.AccessModesTest do
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
-  require Logger
-
   @moduletag :integration
   @client :access_modes_test_client
   @shared_topic "persistent://public/default/producer-shared-test"

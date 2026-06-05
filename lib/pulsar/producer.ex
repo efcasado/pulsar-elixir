@@ -815,7 +815,7 @@ defmodule Pulsar.Producer do
         offset = chunk_id * chunk_size
         remaining = payload_size - offset
         current_chunk_size = min(remaining, chunk_size)
-        <<_skip::binary-size(offset), chunk_data::binary-size(current_chunk_size), _rest::binary>> = payload
+        <<_skip::binary-size(^offset), chunk_data::binary-size(^current_chunk_size), _rest::binary>> = payload
 
         chunk_metadata = %{
           uuid: uuid,

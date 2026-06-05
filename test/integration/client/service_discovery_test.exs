@@ -7,8 +7,6 @@ defmodule Pulsar.Integration.Client.ServiceDiscoveryTest do
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
 
-  require Logger
-
   @moduletag :integration
   @client :service_discovery_test_client
   @topic "persistent://public/default/service-discovery-test-topic"

@@ -14,14 +14,6 @@ defmodule Pulsar.MixProject do
         plt_add_apps: [:mix, :ex_unit]
       ],
       test_coverage: [tool: ExCoveralls],
-      preferred_cli_env: [
-        coveralls: :test,
-        "coveralls.detail": :test,
-        "coveralls.post": :test,
-        "coveralls.html": :test,
-        "coveralls.cobertura": :test,
-        "coveralls.github": :test
-      ],
       aliases: aliases(),
       name: "Pulsar",
       description: description(),
@@ -38,6 +30,19 @@ defmodule Pulsar.MixProject do
         groups_for_extras: [
           Guides: ~r/docs\/.*/
         ]
+      ]
+    ]
+  end
+
+  def cli do
+    [
+      preferred_envs: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.post": :test,
+        "coveralls.html": :test,
+        "coveralls.cobertura": :test,
+        "coveralls.github": :test
       ]
     ]
   end

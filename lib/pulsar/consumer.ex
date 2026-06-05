@@ -1104,7 +1104,7 @@ defmodule Pulsar.Consumer do
 
     payload_size = single_metadata.payload_size
 
-    <<payload::bytes-size(payload_size), rest::binary>> = data
+    <<payload::bytes-size(^payload_size), rest::binary>> = data
 
     # Build individual message as {metadata, payload} tuple
     message = {single_metadata, payload}
