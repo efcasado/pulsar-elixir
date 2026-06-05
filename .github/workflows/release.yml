@@ -13,7 +13,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v5
+        id: release
         with:
           token: ${{ secrets.GH_PAT_HEX }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Install mise
+        if: ${{ steps.release.outputs.release_created }}
+        uses: jdx/mise-action@v2
+        with:
+          experimental: true
+
+      - name: Install tools with mise
+        if: ${{ steps.release.outputs.release_created }}
+        run: mise install
+
+      - name: Publish package to Hex
+        if: ${{ steps.release.outputs.release_created }}
+        shell: 'script -q -e -c "bash --noprofile --norc -eo pipefail {0}"'
+        run: make publish
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
