@@ -9,4 +9,4 @@ updates:
       - "efcasado"
     rebase-strategy: "auto"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "deps"
