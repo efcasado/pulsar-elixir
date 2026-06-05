@@ -29,7 +29,7 @@ jobs:
         experimental: true
 
     - name: Cache mise tools
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.local/share/mise
@@ -42,7 +42,7 @@ jobs:
       run: mise install
 
     - name: Cache Mix dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           deps
@@ -52,7 +52,7 @@ jobs:
           ${{ runner.os }}-mix-
 
     - name: Cache plt files
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       id: cache-plt
       with:
         path: |
@@ -96,7 +96,7 @@ jobs:
         experimental: true
 
     - name: Cache mise tools
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.local/share/mise
@@ -109,7 +109,7 @@ jobs:
       run: mise install
 
     - name: Cache Mix dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           deps
