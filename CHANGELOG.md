@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.8.19](https://github.com/efcasado/pulsar-elixir/compare/v2.8.18...v2.8.19) (2026-06-05)
+
+
+### Dependencies
+
+* bump credo from 1.7.18 to 1.7.19 ([#127](https://github.com/efcasado/pulsar-elixir/issues/127)) ([e3ff5fc](https://github.com/efcasado/pulsar-elixir/commit/e3ff5fcca83d1cf712f99acd20363ad197927858))
+* bump erlang and elixir versions to 29 and 1.20 ([953a9a8](https://github.com/efcasado/pulsar-elixir/commit/953a9a8e5173564c0d6a6568e8a0a197151edeaa))
+* bump oauth2 from 2.1.0 to 2.1.1 ([#124](https://github.com/efcasado/pulsar-elixir/issues/124)) ([25e78e3](https://github.com/efcasado/pulsar-elixir/commit/25e78e3f82469f4b9e7c1231adde36c62a829ed6))
+* bump protobuf from 0.16.0 to 0.16.1 ([6a21a12](https://github.com/efcasado/pulsar-elixir/commit/6a21a12ea1f5ef61d35dcd638987926b0e72a05b))
+* bump pulsar protocol to pulsar 4.2.1 ([#136](https://github.com/efcasado/pulsar-elixir/issues/136)) ([41af52f](https://github.com/efcasado/pulsar-elixir/commit/41af52fcbecad6401cb63ad32c1e92421311d5c3))
+* **ci:** bump actions/cache from 4 to 5 ([#132](https://github.com/efcasado/pulsar-elixir/issues/132)) ([ed8c07f](https://github.com/efcasado/pulsar-elixir/commit/ed8c07f6518a3e74347c92ff78a82b30f1000690))
+* **ci:** bump actions/checkout from 4 to 6 ([#133](https://github.com/efcasado/pulsar-elixir/issues/133)) ([6540d2c](https://github.com/efcasado/pulsar-elixir/commit/6540d2c0ffbeeb9a41034fb80c3c86ac4dd5a7fa))
+* **ci:** bump dorny/test-reporter from 2.2.0 to 3.0.0 ([#135](https://github.com/efcasado/pulsar-elixir/issues/135)) ([d5721bf](https://github.com/efcasado/pulsar-elixir/commit/d5721bf41c67a8bd362d074a78ea405027578b9b))
+* **ci:** bump jdx/mise-action from 2 to 4 ([#134](https://github.com/efcasado/pulsar-elixir/issues/134)) ([e5626b3](https://github.com/efcasado/pulsar-elixir/commit/e5626b36ff1c93d742db1479365aa0a15900ccdb))
+
+
+### Build System
+
+* use mix dependency to generate protobuf modules ([9d78579](https://github.com/efcasado/pulsar-elixir/commit/9d78579d2dd293e01180c4d5344939d5e635b122))
+
+
+### Continuous Integration
+
+* configure dependabot to bump gha dependencies ([817cde9](https://github.com/efcasado/pulsar-elixir/commit/817cde9b7e71cb5473af7d2d9fa4b586faac2763))
+* fix issue with parallel coveralls jobs ([98cac09](https://github.com/efcasado/pulsar-elixir/commit/98cac09d1f3f13240fc984b0f7feda23c6121da3))
+* fix typo in dialyzer plt cache key ([3a64326](https://github.com/efcasado/pulsar-elixir/commit/3a64326fa61dce13d6e2496d075936e732ce4fa6))
+* migrate releases to release-please ([9e6d60f](https://github.com/efcasado/pulsar-elixir/commit/9e6d60fd92f25c88efac2c305b09b6b213db25bb))
+* migrate releases to release-please ([#126](https://github.com/efcasado/pulsar-elixir/issues/126)) ([9eeaa5c](https://github.com/efcasado/pulsar-elixir/commit/9eeaa5c2d08ca08c7517cb3a021ca4e6f2f9f0d6))
+* migrate releases to release-please ([#128](https://github.com/efcasado/pulsar-elixir/issues/128)) ([0a1675e](https://github.com/efcasado/pulsar-elixir/commit/0a1675ede89c8203e2dcd342245ce9f1e6f7f642))
+
 ## [2.8.18](https://github.com/efcasado/pulsar-elixir/compare/v2.8.17...v2.8.18) (2026-05-30)
 
 ## [2.8.17](https://github.com/efcasado/pulsar-elixir/compare/v2.8.16...v2.8.17) (2026-05-21)
