@@ -129,7 +129,7 @@ jobs:
         echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
 
     - name: Run ${{ matrix.suite }} tests
-      run: mix coveralls.github test/integration/${{ matrix.suite }}
+      run: mix coveralls.github test/integration/${{ matrix.suite }} --parallel
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v2.2.0
@@ -138,3 +138,15 @@ jobs:
         name: Test Results - ${{ matrix.suite }}
         path: test/reports/junit.xml
         reporter: java-junit
+
+  finish-coverage:
+    name: Finish Coverage
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Close coveralls parallel build
+      uses: coverallsapp/github-action@v2
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        parallel-finished: true
