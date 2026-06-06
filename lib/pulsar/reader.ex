@@ -373,25 +373,8 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_consumers_ready(consumer_group_pid, reader_ref) do
-    expected_count = count_consumers(consumer_group_pid)
+    expected_count = length(Pulsar.get_consumers(consumer_group_pid))
     collect_ready_messages(expected_count, [], 5_000, reader_ref)
-  end
-
-  defp count_consumers(consumer_group_pid) do
-    case Supervisor.which_children(consumer_group_pid) do
-      # PartitionedConsumer - children are ConsumerGroup supervisors
-      [{_id, _pid, :supervisor, [Pulsar.ConsumerGroup]} | _] = children ->
-        # Each ConsumerGroup has 1 consumer (we use consumer_count: 1 implicitly)
-        length(children)
-
-      # ConsumerGroup - children are Consumer workers
-      [{_id, _pid, :worker, [Consumer]} | _] = children ->
-        length(children)
-
-      # Empty or unknown structure, assume 1
-      _ ->
-        1
-    end
   end
 
   defp collect_ready_messages(0, pids, _timeout, _reader_ref), do: pids

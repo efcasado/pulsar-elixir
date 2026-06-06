@@ -11,6 +11,42 @@ defmodule Pulsar.ServiceDiscovery do
 
   require Logger
 
+  @doc """
+  Returns the number of partitions for `topic`.
+
+  Performs a single `partitioned-topic-metadata` lookup against a random broker.
+  Returns `{:ok, partitions}` where `partitions` is `0` for a non-partitioned
+  topic, or `{:error, reason}` if the lookup failed.
+  """
+  @spec partition_count(String.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def partition_count(topic, opts \\ []) do
+    client = Keyword.get(opts, :client, :default)
+
+    :telemetry.span(
+      [:pulsar, :service_discovery, :partition_count],
+      %{},
+      fn ->
+        result = do_partition_count(Pulsar.Client.random_broker(client), topic)
+
+        metadata = %{success: match?({:ok, _}, result), client: client}
+        {result, metadata}
+      end
+    )
+  end
+
+  defp do_partition_count(broker, topic) do
+    case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
+      {:ok, %{response: :Success, partitions: partitions}} ->
+        {:ok, partitions}
+
+      {:ok, %{response: :Failed, error: error}} ->
+        {:error, {:partition_metadata_check_failed, error}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @spec lookup_topic(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
   def lookup_topic(topic, opts \\ []) do
     client = Keyword.get(opts, :client, :default)

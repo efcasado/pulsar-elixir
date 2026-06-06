@@ -63,7 +63,8 @@ defmodule Pulsar.PartitionedProducer do
   def get_partition_groups(supervisor_pid) do
     supervisor_pid
     |> Supervisor.which_children()
-    |> Enum.map(fn {partition_topic, group_pid, :supervisor, _modules} ->
+    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
+    |> Enum.map(fn {partition_topic, group_pid, _type, _modules} ->
       {partition_topic, group_pid}
     end)
   end
@@ -121,7 +122,7 @@ defmodule Pulsar.PartitionedProducer do
   defp route_partition(partition_groups, num_partitions, opts) do
     partition_index = select_partition(opts, num_partitions)
 
-    case Enum.find(partition_groups, fn {topic, _pid} -> partition_index(topic) == partition_index end) do
+    case Enum.find(partition_groups, fn {topic, _pid} -> Pulsar.PartitionTopic.index(topic) == partition_index end) do
       {_topic, group_pid} -> {:ok, group_pid}
       nil -> {:error, {:partition_not_found, partition_index}}
     end
@@ -131,39 +132,42 @@ defmodule Pulsar.PartitionedProducer do
   def init({name, topic, partitions, opts}) do
     Logger.info("Starting partitioned producer for topic #{topic} with #{partitions} partitions")
 
-    children =
-      0
-      |> Range.new(partitions - 1)
-      |> Enum.map(fn partition_index ->
-        partition_topic = "#{topic}-partition-#{partition_index}"
-        partition_group_name = "#{name}-partition-#{partition_index}"
+    build_child_spec = fn partition_index ->
+      partition_child_spec(partition_index, name, topic, opts)
+    end
 
-        %{
-          id: partition_topic,
-          start: {
-            Pulsar.ProducerGroup,
-            :start_link,
-            [
-              partition_group_name,
-              partition_topic,
-              opts
-            ]
-          },
-          restart: :permanent,
-          type: :supervisor
-        }
-      end)
+    partition_children = Enum.map(0..(partitions - 1), build_child_spec)
 
-    Supervisor.init(children, strategy: :one_for_one)
+    discovery_children =
+      Pulsar.PartitionDiscovery.child_specs(self(),
+        topic: topic,
+        client: Keyword.get(opts, :client, @default_client),
+        interval_ms: Keyword.get(opts, :partition_discovery_interval_ms, Pulsar.PartitionDiscovery.default_interval_ms()),
+        build_child_spec: build_child_spec
+      )
+
+    Supervisor.init(partition_children ++ discovery_children, strategy: :one_for_one)
   end
 
-  # Extracts the numeric partition index from a partition topic name of the
-  # form "<base-topic>-partition-<index>".
-  defp partition_index(partition_topic) do
-    partition_topic
-    |> String.split("-partition-")
-    |> List.last()
-    |> String.to_integer()
+  # Builds the ProducerGroup child spec for a single partition.
+  defp partition_child_spec(partition_index, name, topic, opts) do
+    partition_topic = Pulsar.PartitionTopic.name(topic, partition_index)
+    partition_group_name = Pulsar.PartitionTopic.name(name, partition_index)
+
+    %{
+      id: partition_topic,
+      start: {
+        Pulsar.ProducerGroup,
+        :start_link,
+        [
+          partition_group_name,
+          partition_topic,
+          opts
+        ]
+      },
+      restart: :permanent,
+      type: :supervisor
+    }
   end
 
   defp select_partition(opts, num_partitions) do
