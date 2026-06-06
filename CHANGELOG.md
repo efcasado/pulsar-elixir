@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.9.0](https://github.com/efcasado/pulsar-elixir/compare/v2.8.19...v2.9.0) (2026-06-06)
+
+
+### Features
+
+* partition auto-discovery ([73df1cd](https://github.com/efcasado/pulsar-elixir/commit/73df1cdf4e1cdc95b9fbf8522c6926325557c3f0))
+
+
+### Bug Fixes
+
+* configurable partition auto-discovery interval ([935567b](https://github.com/efcasado/pulsar-elixir/commit/935567b6315328e64ff9fa9680b03a538fcae9c7))
+* **producer:** routing bug on topics with 10+ partitions ([a255bc8](https://github.com/efcasado/pulsar-elixir/commit/a255bc8fe5954a9844d25b544c360b602f488a5e))
+
+
+### Tests
+
+* **consumer:** improve test reliability ([c99e44a](https://github.com/efcasado/pulsar-elixir/commit/c99e44aab1f70c6e71d5ed9266066d714d0561ff))
+
+
+### Continuous Integration
+
+* limit test concurrency to improve ci reliability ([adaae35](https://github.com/efcasado/pulsar-elixir/commit/adaae35fd96191ff3c69960a4fd261f1bf5acb1e))
+
 ## [2.8.19](https://github.com/efcasado/pulsar-elixir/compare/v2.8.18...v2.8.19) (2026-06-05)
 
 
