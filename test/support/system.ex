@@ -123,6 +123,24 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
+  def update_partitions(topic, n) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "update-partitioned-topic",
+      topic,
+      "--partitions",
+      "#{n}"
+    ]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
   def unload_topic(topic) do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "unload", topic]

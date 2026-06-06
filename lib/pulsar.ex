@@ -37,8 +37,9 @@ defmodule Pulsar do
           │       │   └── C2
           │       ├── ConsumerGroup partition-1
           │       │   └── C3
-          │       └── ConsumerGroup partition-2
-          │           └── C4
+          │       ├── ConsumerGroup partition-2
+          │       │   └── C4
+          │       └── PartitionDiscovery (polls for newly added partitions)
           │
           └── ProducerSupervisor
               ├── ProducerGroup: my-topic
@@ -49,8 +50,9 @@ defmodule Pulsar do
                   │   └── P2
                   ├── ProducerGroup partition-1
                   │   └── P3
-                  └── ProducerGroup partition-2
-                      └── P4
+                  ├── ProducerGroup partition-2
+                  │   └── P4
+                  └── PartitionDiscovery (polls for newly added partitions)
 
   ### Consumer/Producer Architecture
 
@@ -321,6 +323,9 @@ defmodule Pulsar do
     - `:flow_threshold` - Flow permits threshold for refill (default: 50)
     - `:flow_refill` - Flow permits refill amount (default: 50)
     - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
+    - `:partition_discovery_interval_ms` - For partitioned topics, how often to poll
+      for newly added partitions, in milliseconds (default: 60000). Set to `false`
+      to disable auto-discovery. Discovery is grow-only.
     - Other options passed to ConsumerGroup supervisor
 
   ## Return Values
@@ -502,20 +507,20 @@ defmodule Pulsar do
   def get_consumers(group_pid, opts \\ [])
 
   def get_consumers(group_pid, _opts) when is_pid(group_pid) do
-    case Supervisor.which_children(group_pid) do
-      [] ->
+    children = Supervisor.which_children(group_pid)
+
+    cond do
+      children == [] ->
         []
 
-      [{_id, _child_pid, :worker, [Pulsar.Consumer]} | _] ->
-        # This is a ConsumerGroup - children are Consumer processes
-        Pulsar.ConsumerGroup.get_consumers(group_pid)
-
-      [{_id, _child_pid, :supervisor, _modules} | _] ->
-        # This is a PartitionedConsumer - children are ConsumerGroup supervisors
+      # PartitionedConsumer - has ConsumerGroup supervisors as children
+      # (alongside a partition discovery worker).
+      partitioned?(children) ->
         Pulsar.PartitionedConsumer.get_consumers(group_pid)
 
-      _ ->
-        {:error, :unknown_supervisor_type}
+      # ConsumerGroup - children are Consumer worker processes.
+      true ->
+        Pulsar.ConsumerGroup.get_consumers(group_pid)
     end
   end
 
@@ -549,6 +554,9 @@ defmodule Pulsar do
       - `:Exclusive` - Only one producer can publish. Other producers get errors immediately.
       - `:WaitForExclusive` - Wait for exclusive access if another producer is connected
       - `:ExclusiveWithFencing` - Immediately remove any existing producer
+    - `:partition_discovery_interval_ms` - For partitioned topics, how often to poll
+      for newly added partitions, in milliseconds (default: 60000). Set to `false`
+      to disable auto-discovery. Discovery is grow-only.
     - Other options passed to individual producer processes
 
   ## Producer Naming and Registry
@@ -716,17 +724,19 @@ defmodule Pulsar do
   def get_producers(group_pid, opts \\ [])
 
   def get_producers(group_pid, _opts) when is_pid(group_pid) do
-    # Check which type of supervisor this is based on child type
-    case Supervisor.which_children(group_pid) do
-      [] ->
+    children = Supervisor.which_children(group_pid)
+
+    cond do
+      children == [] ->
         []
 
-      [{_id, _, :supervisor, _} | _] ->
-        # PartitionedProducer (children are ProducerGroups - supervisors)
+      # PartitionedProducer - has ProducerGroup supervisors as children
+      # (alongside a partition discovery worker).
+      partitioned?(children) ->
         Pulsar.PartitionedProducer.get_producers(group_pid)
 
-      [{_id, _, :worker, _} | _] ->
-        # ProducerGroup (children are Producer workers)
+      # ProducerGroup - children are Producer worker processes.
+      true ->
         Pulsar.ProducerGroup.get_producers(group_pid)
     end
   end
@@ -932,10 +942,19 @@ defmodule Pulsar do
   end
 
   defp send_to_producer(producer_pid, message, opts) do
-    case Supervisor.which_children(producer_pid) do
-      [{_id, _, :supervisor, _} | _] -> Pulsar.PartitionedProducer.send_message(producer_pid, message, opts)
-      _ -> Pulsar.ProducerGroup.send_message(producer_pid, message, opts)
+    if producer_pid |> Supervisor.which_children() |> partitioned?() do
+      Pulsar.PartitionedProducer.send_message(producer_pid, message, opts)
+    else
+      Pulsar.ProducerGroup.send_message(producer_pid, message, opts)
     end
+  end
+
+  # A partitioned consumer/producer supervises one group supervisor per
+  # partition; a plain group supervises worker processes. The presence of any
+  # `:supervisor` child therefore distinguishes the two, regardless of the
+  # partition discovery worker that also runs under the partitioned supervisor.
+  defp partitioned?(children) do
+    Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
@@ -959,14 +978,9 @@ defmodule Pulsar do
   @spec do_check_partitioned_topic(String.t(), atom()) ::
           {:ok, integer()} | {:error, term()}
   defp do_check_partitioned_topic(topic, client) do
-    broker = Pulsar.Client.random_broker(client)
-
-    case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
-      {:ok, %{response: :Success, partitions: partitions}} ->
+    case Pulsar.ServiceDiscovery.partition_count(topic, client: client) do
+      {:ok, partitions} ->
         {:ok, partitions}
-
-      {:ok, %{response: :Failed, error: error}} ->
-        {:error, {:partition_metadata_check_failed, error}}
 
       {:error, reason} ->
         Logger.warning("Error checking partitioned topic metadata for #{topic}: #{inspect(reason)}")

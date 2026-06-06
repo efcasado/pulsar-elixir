@@ -8,6 +8,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
   @client :partition_topic_test_client
   @topic "persistent://public/default/partition-topic-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
+  @discovery_interval_ms 200
   @messages [
     {"key1", "Message 1 for key1"},
     {"key2", "Message 1 for key2"},
@@ -73,6 +74,28 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     assert consumed_messages == expected_count
   end
 
+  test "discovers partitions added to the topic" do
+    test_id = :erlang.unique_integer([:positive])
+    topic = "persistent://public/default/partition-discovery-consumer-#{test_id}"
+
+    System.create_topic(topic, 3)
+
+    opts = Keyword.put(subscription_options(1), :partition_discovery_interval_ms, @discovery_interval_ms)
+
+    {:ok, partitioned_consumer_pid} =
+      Pulsar.start_consumer(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
+
+    assert wait_for_partition_count(partitioned_consumer_pid, 3) == :ok
+
+    System.update_partitions(topic, 6)
+
+    # The discovery poller should pick up the new partitions and start a
+    # consumer group for each one, without restarting the existing groups.
+    assert wait_for_partition_count(partitioned_consumer_pid, 6) == :ok
+
+    :ok = Pulsar.stop_consumer(partitioned_consumer_pid)
+  end
+
   defp subscription_options(count) do
     [
       client: @client,
@@ -82,5 +105,11 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       flow_threshold: 0,
       flow_refill: 1
     ]
+  end
+
+  defp wait_for_partition_count(partitioned_consumer_pid, expected) do
+    Utils.wait_for(fn ->
+      length(Pulsar.PartitionedConsumer.get_partition_groups(partitioned_consumer_pid)) == expected
+    end)
   end
 end

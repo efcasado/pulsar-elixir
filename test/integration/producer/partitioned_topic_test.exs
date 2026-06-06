@@ -8,6 +8,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
   @moduletag :integration
   @client :partitioned_producer_test_client
   @topic "persistent://public/default/partitioned-producer-test"
+  @discovery_interval_ms 200
 
   setup_all do
     broker = System.broker()
@@ -157,6 +158,30 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.stop_consumer(consumer_pid)
   end
 
+  test "discovers partitions added to the topic" do
+    test_id = :erlang.unique_integer([:positive])
+    topic = "persistent://public/default/partition-discovery-producer-#{test_id}"
+
+    System.create_topic(topic, 3)
+
+    {:ok, producer_pid} =
+      Pulsar.start_producer(topic,
+        client: @client,
+        name: "partition-discovery-producer-#{test_id}",
+        partition_discovery_interval_ms: @discovery_interval_ms
+      )
+
+    assert wait_for_partition_count(producer_pid, 3) == :ok
+
+    System.update_partitions(topic, 6)
+
+    # The discovery poller should pick up the new partitions and start a
+    # producer group for each one, without restarting the existing groups.
+    assert wait_for_partition_count(producer_pid, 6) == :ok
+
+    :ok = Pulsar.stop_producer(producer_pid)
+  end
+
   defp wait_for_producers_ready(partitioned_producer_pid) do
     Utils.wait_for(fn ->
       producers = Pulsar.PartitionedProducer.get_producers(partitioned_producer_pid)
@@ -166,6 +191,12 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
           state = :sys.get_state(producer)
           state.producer_name != nil
         end)
+    end)
+  end
+
+  defp wait_for_partition_count(partitioned_producer_pid, expected) do
+    Utils.wait_for(fn ->
+      length(Pulsar.PartitionedProducer.get_partition_groups(partitioned_producer_pid)) == expected
     end)
   end
 end
