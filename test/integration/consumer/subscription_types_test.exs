@@ -50,37 +50,48 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         "shared",
         @consumer_callback,
-        subscription_options(:Shared, 2)
+        manual_flow_options(:Shared, 2)
       )
 
     [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer1) +
-        @consumer_callback.count_messages(consumer2) ==
-        expected_count
-    end)
+    # With manual flow control, grant one permit to each consumer per round so
+    # the broker dispatches exactly one message to each. This makes the Shared
+    # distribution deterministic (verifying round-robin) instead of racing on
+    # which consumer drains the pre-produced backlog first.
+    rounds = div(expected_count, 2)
 
-    count1 = @consumer_callback.count_messages(consumer1)
-    count2 = @consumer_callback.count_messages(consumer2)
+    for round <- 1..rounds do
+      :ok = Pulsar.Consumer.send_flow(consumer1, 1)
+      :ok = Pulsar.Consumer.send_flow(consumer2, 1)
 
-    assert count1 + count2 == expected_count
-    assert count1 > 0
-    assert count2 > 0
+      Utils.wait_for(fn ->
+        @consumer_callback.count_messages(consumer1) == round and
+          @consumer_callback.count_messages(consumer2) == round
+      end)
+    end
+
+    assert @consumer_callback.count_messages(consumer1) == rounds
+    assert @consumer_callback.count_messages(consumer2) == rounds
   end
 
   test "key_shared subscription partitions by key", %{expected_count: expected_count} do
-    opts = subscription_options(:Key_Shared, 2)
-
     {:ok, _key_shared_group} =
       Pulsar.start_consumer(
         @topic,
         "key-shared",
         @consumer_callback,
-        opts
+        manual_flow_options(:Key_Shared, 2)
       )
 
     [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+
+    # With manual flow control, only grant permits once BOTH consumers are
+    # subscribed, so Key_Shared hash ranges are split between them before any
+    # message is dispatched. Otherwise the first consumer can drain backlog for
+    # keys that later belong to the second consumer's range, causing key overlap.
+    :ok = Pulsar.Consumer.send_flow(consumer1, expected_count)
+    :ok = Pulsar.Consumer.send_flow(consumer2, expected_count)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer1) +
@@ -174,6 +185,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       flow_initial: 1,
       flow_threshold: 0,
       flow_refill: 1,
+      init_args: [notify_pid: self()]
+    ]
+  end
+
+  # Manual flow control (flow_initial: 0 disables automatic permits), so the
+  # test can grant permits explicitly once all consumers are subscribed.
+  defp manual_flow_options(type, count) do
+    [
+      client: @client,
+      subscription_type: type,
+      initial_position: :earliest,
+      consumer_count: count,
+      flow_initial: 0,
       init_args: [notify_pid: self()]
     ]
   end
