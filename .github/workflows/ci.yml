@@ -131,7 +131,7 @@ jobs:
     - name: Run ${{ matrix.suite }} tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: mix coveralls.github test/integration/${{ matrix.suite }} --parallel
+      run: mix coveralls.github test/integration/${{ matrix.suite }} --parallel --max-cases 2
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v3.0.0
