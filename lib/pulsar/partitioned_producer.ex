@@ -142,7 +142,7 @@ defmodule Pulsar.PartitionedProducer do
       Pulsar.PartitionDiscovery.child_specs(self(),
         topic: topic,
         client: Keyword.get(opts, :client, @default_client),
-        interval_ms: Keyword.get(opts, :partition_discovery_interval_ms, Pulsar.PartitionDiscovery.default_interval_ms()),
+        interval_ms: Keyword.get(opts, :partition_discovery_interval_ms, Pulsar.Config.partition_discovery_interval()),
         build_child_spec: build_child_spec
       )
 
