@@ -7,6 +7,7 @@ defmodule Pulsar.Config do
   @default_cleanup_interval 30_000
   @default_client_version "Pulsar Elixir Client"
   @default_max_backoff 60_000
+  @default_partition_discovery_interval_ms 60_000
   @default_ping_interval 60_000
   @default_request_timeout 60_000
   @default_startup_delay_ms 1000
@@ -22,6 +23,10 @@ defmodule Pulsar.Config do
 
   def max_backoff do
     Application.get_env(:pulsar, :max_backoff, @default_max_backoff)
+  end
+
+  def partition_discovery_interval do
+    Application.get_env(:pulsar, :partition_discovery_interval_ms, @default_partition_discovery_interval_ms)
   end
 
   def ping_interval do

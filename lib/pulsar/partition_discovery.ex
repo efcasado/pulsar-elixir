@@ -18,12 +18,6 @@ defmodule Pulsar.PartitionDiscovery do
 
   require Logger
 
-  @default_interval_ms 60_000
-
-  @doc "The default poll interval, in milliseconds, when none is configured."
-  @spec default_interval_ms() :: pos_integer()
-  def default_interval_ms, do: @default_interval_ms
-
   @doc """
   Returns the child spec(s) for a discovery poller attached to `supervisor`.
 
