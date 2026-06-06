@@ -104,14 +104,26 @@ defmodule Pulsar.PartitionedProducer do
     partition_groups = get_partition_groups(supervisor_pid)
     num_partitions = length(partition_groups)
 
-    if num_partitions == 0 do
-      {:error, :no_producers_available}
-    else
-      partition_index = select_partition(opts, num_partitions)
-      # Sort by topic name to ensure consistent ordering, then get by index
-      {_topic, group_pid} = partition_groups |> Enum.sort() |> Enum.at(partition_index)
+    case route_partition(partition_groups, num_partitions, opts) do
+      {:ok, group_pid} -> Pulsar.ProducerGroup.send_message(group_pid, message, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-      Pulsar.ProducerGroup.send_message(group_pid, message, opts)
+  # Selects the target partition group for a message.
+  #
+  # Routing resolves the partition's actual index, parsed from its topic suffix,
+  # rather than its position in a sorted list. Sorting topic names
+  # lexicographically would misorder partitions once there are 10+
+  # (e.g. "...-partition-10" sorts before "...-partition-2").
+  defp route_partition(_partition_groups, 0, _opts), do: {:error, :no_producers_available}
+
+  defp route_partition(partition_groups, num_partitions, opts) do
+    partition_index = select_partition(opts, num_partitions)
+
+    case Enum.find(partition_groups, fn {topic, _pid} -> partition_index(topic) == partition_index end) do
+      {_topic, group_pid} -> {:ok, group_pid}
+      nil -> {:error, {:partition_not_found, partition_index}}
     end
   end
 
@@ -143,6 +155,15 @@ defmodule Pulsar.PartitionedProducer do
       end)
 
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  # Extracts the numeric partition index from a partition topic name of the
+  # form "<base-topic>-partition-<index>".
+  defp partition_index(partition_topic) do
+    partition_topic
+    |> String.split("-partition-")
+    |> List.last()
+    |> String.to_integer()
   end
 
   defp select_partition(opts, num_partitions) do
