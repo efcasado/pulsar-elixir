@@ -51,7 +51,7 @@ defmodule Pulsar.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {Pulsar, []}
+      mod: {Pulsar.Application, []}
     ]
   end
 
