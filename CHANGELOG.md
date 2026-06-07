@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.10.0](https://github.com/efcasado/pulsar-elixir/compare/v2.9.0...v2.10.0) (2026-06-07)
+
+
+### Features
+
+* ability to fetch a consumer's fully resolved topic ([b13bcab](https://github.com/efcasado/pulsar-elixir/commit/b13bcab5424aabe442d8063b64cdf4fb1d94d1af))
+
+
+### Code Refactoring
+
+* dedicated application callback module ([e2dd713](https://github.com/efcasado/pulsar-elixir/commit/e2dd713b2c2e044e4a965aa021d609a33c38aec0))
+
+
+### Continuous Integration
+
+* simplify and pin pulsar setup in docker-compose ([ff405fb](https://github.com/efcasado/pulsar-elixir/commit/ff405fb74f684e29a5c30520f36a77a04dd96a81))
+
 ## [2.9.0](https://github.com/efcasado/pulsar-elixir/compare/v2.8.19...v2.9.0) (2026-06-06)
 
 
