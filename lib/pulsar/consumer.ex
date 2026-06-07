@@ -208,6 +208,18 @@ defmodule Pulsar.Consumer do
   end
 
   @doc """
+  Returns the fully resolved topic this consumer is subscribed to.
+
+  For partitioned topics, this returns the specific partition topic
+  (e.g. `persistent://public/default/my-topic-partition-0`) rather than
+  the base topic name passed to `start_link/5`.
+  """
+  @spec topic(GenServer.server()) :: String.t()
+  def topic(consumer) do
+    GenServer.call(consumer, :topic)
+  end
+
+  @doc """
   Sends a flow command to request more messages from the broker.
 
   Use this function when you've disabled automatic flow control by setting
@@ -765,6 +777,10 @@ defmodule Pulsar.Consumer do
   end
 
   @impl true
+  def handle_call(:topic, _from, state) do
+    {:reply, state.topic, state}
+  end
+
   def handle_call({:send_flow, permits}, _from, state) do
     case send_flow_command(state.broker_pid, state.consumer_id, permits, state.flow_outstanding_permits) do
       :ok ->
