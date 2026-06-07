@@ -21,3 +21,14 @@ updates:
     rebase-strategy: "auto"
     commit-message:
       prefix: "deps"
+
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "efcasado"
+    rebase-strategy: "auto"
+    commit-message:
+      prefix: "deps"
