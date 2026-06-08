@@ -26,7 +26,8 @@ depends = ["deps"]
 description = "Generate Elixir code from protobuf"
 run = [
     "protoc --plugin=./deps/protobuf/protoc-gen-elixir pulsar.proto --elixir_out=./lib --elixir_opt=package_prefix=pulsar.protocol.binary",
-    "mv lib/pulsar.pb.ex lib/pulsar/protocol/binary.ex"
+    "mv lib/pulsar/protocol/binary/pulsar/proto/pulsar.pb.ex lib/pulsar/protocol/binary.ex",
+    "rm -rf lib/pulsar/protocol/binary/pulsar"
 ]
 depends = ["proto:download", "proto:build-plugin"]
 
