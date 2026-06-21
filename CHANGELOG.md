@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.10.1](https://github.com/efcasado/pulsar-elixir/compare/v2.10.0...v2.10.1) (2026-06-19)
+
+
+### Dependencies
+
+* bump protobuf from 0.16.1 to 0.17.0 ([e49cbc7](https://github.com/efcasado/pulsar-elixir/commit/e49cbc71abe649fc9fd23e6024815589317d456e))
+* **ci:** bump actions/checkout from 6 to 7 ([#149](https://github.com/efcasado/pulsar-elixir/issues/149)) ([1cda711](https://github.com/efcasado/pulsar-elixir/commit/1cda7114dd22f5e3df276eb243f8c0865b55589e))
+* **ci:** bump apachepulsar/pulsar from 4.2.1 to 4.2.2 ([#147](https://github.com/efcasado/pulsar-elixir/issues/147)) ([20200b3](https://github.com/efcasado/pulsar-elixir/commit/20200b365f2c8925e82618bd8e336af3e25cab9f))
+
 ## [2.10.0](https://github.com/efcasado/pulsar-elixir/compare/v2.9.0...v2.10.0) (2026-06-07)
 
 
