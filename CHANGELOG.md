@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.2](https://github.com/efcasado/pulsar-elixir/compare/v2.10.1...v2.10.2) (2026-06-25)
+
+
+### Dependencies
+
+* bump actions/cache from 5 to 6 ([#150](https://github.com/efcasado/pulsar-elixir/issues/150)) ([2beb6f1](https://github.com/efcasado/pulsar-elixir/commit/2beb6f114ca0c202e6ad635970901e12c8efe2da))
+
 ## [2.10.1](https://github.com/efcasado/pulsar-elixir/compare/v2.10.0...v2.10.1) (2026-06-19)
 
 
