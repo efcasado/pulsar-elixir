@@ -442,7 +442,8 @@ defmodule Pulsar.Broker do
       client_version: Config.client_version(),
       protocol_version: Config.protocol_version(),
       auth_method_name: auth_method_name,
-      auth_data: auth_data
+      auth_data: auth_data,
+      feature_flags: %Binary.FeatureFlags{supports_scalable_topics: true}
     }
 
     case send_command_internal(connect_command, broker) do
