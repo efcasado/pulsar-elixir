@@ -1,15 +1,14 @@
 x-broker: &broker
   restart: on-failure
   environment: &broker-environment
-    metadataStoreUrl: zk:zookeeper:2181
-    zookeeperServers: zookeeper:2181
+    metadataStoreUrl: oxia://oxia:6648/default
     clusterName: cluster-a
     managedLedgerDefaultEnsembleSize: 1
     managedLedgerDefaultWriteQuorum: 1
     managedLedgerDefaultAckQuorum: 1
     PULSAR_MEM: -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m
   depends_on:
-    zookeeper:
+    oxia:
       condition: service_healthy
     bookie:
       condition: service_started
@@ -20,22 +19,15 @@ x-broker: &broker
     retries: 5
 
 services:
-  zookeeper:
-    image: apachepulsar/pulsar:5.0.0-M1
-    container_name: zookeeper
+  oxia:
+    image: oxia/oxia:0.16.7
+    container_name: oxia
     restart: on-failure
-    environment:
-      metadataStoreUrl: zk:zookeeper:2181
-      PULSAR_MEM: -Xms256m -Xmx256m -XX:MaxDirectMemorySize=256m
     command:
-      - bash
-      - -c
-      - |
-        bin/apply-config-from-env.py conf/zookeeper.conf && \
-        bin/generate-zookeeper-config.sh conf/zookeeper.conf && \
-        exec bin/pulsar zookeeper
+      - oxia
+      - standalone
     healthcheck:
-      test: ["CMD", "bin/pulsar-zookeeper-ruok.sh"]
+      test: ["CMD", "oxia", "health", "--port=6648"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -49,12 +41,12 @@ services:
       - |
         bin/pulsar initialize-cluster-metadata \
         --cluster cluster-a \
-        --zookeeper zookeeper:2181 \
-        --configuration-store zookeeper:2181 \
+        --metadata-store oxia://oxia:6648/default \
+        --configuration-store oxia://oxia:6648/default \
         --web-service-url http://broker1:8080 \
         --broker-service-url pulsar://broker1:6650
     depends_on:
-      zookeeper:
+      oxia:
         condition: service_healthy
 
   bookie:
@@ -63,15 +55,14 @@ services:
     restart: on-failure
     environment:
       clusterName: cluster-a
-      zkServers: zookeeper:2181
-      metadataServiceUri: metadata-store:zk:zookeeper:2181
+      metadataServiceUri: metadata-store:oxia://oxia:6648/default
       advertisedAddress: bookie
       journalDirectories: /tmp/bookie/journal
       ledgerDirectories: /tmp/bookie/ledgers
       journalSyncData: "false"
       BOOKIE_MEM: -Xms512m -Xmx512m -XX:MaxDirectMemorySize=256m
     depends_on:
-      zookeeper:
+      oxia:
         condition: service_healthy
       pulsar-init:
         condition: service_completed_successfully
