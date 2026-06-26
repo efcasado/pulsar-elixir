@@ -149,6 +149,18 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
+  @doc """
+  Terminates a topic: no further messages can be published, and consumers that
+  have caught up are notified via `CommandReachedEndOfTopic`.
+  """
+  def terminate_topic(topic) do
+    broker = broker()
+    command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "terminate", topic]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
   def produce_messages(topic, messages, broker \\ broker()) do
     base_cmd = [
       "bin/pulsar-client",

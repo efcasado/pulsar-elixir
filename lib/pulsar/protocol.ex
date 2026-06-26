@@ -196,6 +196,10 @@ defmodule Pulsar.Protocol do
     :redeliverUnacknowledgedMessages
   end
 
+  defp field_name_from_type(:REACHED_END_OF_TOPIC) do
+    :reachedEndOfTopic
+  end
+
   defp field_name_from_type(:SCALABLE_TOPIC_LOOKUP) do
     :scalableTopicLookup
   end

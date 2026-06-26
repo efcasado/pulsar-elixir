@@ -552,6 +552,13 @@ defmodule Pulsar.Consumer do
     {:stop, :broker_close_requested, state}
   end
 
+  # Reaching the end of a (terminated or sealed) topic is informational: there
+  # are simply no more messages to deliver. Keep running.
+  def handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state) do
+    Logger.debug("Reached end of topic for #{state.topic}")
+    {:noreply, state}
+  end
+
   def handle_info({:broker_message, message_data}, state) do
     {messages, new_state} =
       case message_data do
