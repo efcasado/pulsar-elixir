@@ -126,6 +126,32 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.KeySharedMode do
   field(:STICKY, 1)
 end
 
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.SegmentState do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "pulsar.proto.SegmentState",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:ACTIVE, 0)
+  field(:SEALED, 1)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableConsumerType do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "pulsar.proto.ScalableConsumerType",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:STREAM, 0)
+  field(:CHECKPOINT, 1)
+end
+
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.TxnAction do
   @moduledoc false
 
@@ -351,6 +377,18 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand.Type do
   field(:WATCH_TOPIC_UPDATE, 66)
   field(:WATCH_TOPIC_LIST_CLOSE, 67)
   field(:TOPIC_MIGRATED, 68)
+  field(:SCALABLE_TOPIC_LOOKUP, 70)
+  field(:SCALABLE_TOPIC_UPDATE, 71)
+  field(:SCALABLE_TOPIC_CLOSE, 72)
+  field(:SCALABLE_TOPIC_SUBSCRIBE, 73)
+  field(:SCALABLE_TOPIC_SUBSCRIBE_RESPONSE, 74)
+  field(:SCALABLE_TOPIC_ASSIGNMENT_UPDATE, 75)
+  field(:WATCH_SCALABLE_TOPICS, 76)
+  field(:WATCH_SCALABLE_TOPICS_UPDATE, 77)
+  field(:WATCH_SCALABLE_TOPICS_CLOSE, 78)
+  field(:WATCH_TC_ASSIGNMENTS, 79)
+  field(:WATCH_TC_ASSIGNMENTS_UPDATE, 80)
+  field(:WATCH_TC_ASSIGNMENTS_CLOSE, 81)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.Schema do
@@ -675,6 +713,20 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.FeatureFlags do
     optional: true,
     type: :bool,
     json_name: "supportsTopicWatcherReconcile",
+    default: false
+  )
+
+  field(:supports_scalable_topics, 8,
+    optional: true,
+    type: :bool,
+    json_name: "supportsScalableTopics",
+    default: false
+  )
+
+  field(:supports_tc_metadata_discovery, 9,
+    optional: true,
+    type: :bool,
+    json_name: "supportsTcMetadataDiscovery",
     default: false
   )
 end
@@ -1564,6 +1616,371 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTopicListClose do
   field(:watcher_id, 2, required: true, type: :uint64, json_name: "watcherId")
 end
 
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.SegmentInfoProto do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.SegmentInfoProto",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:segment_id, 1, required: true, type: :uint64, json_name: "segmentId")
+  field(:hash_start, 2, required: true, type: :uint32, json_name: "hashStart")
+  field(:hash_end, 3, required: true, type: :uint32, json_name: "hashEnd")
+
+  field(:state, 4,
+    required: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.SegmentState,
+    enum: true
+  )
+
+  field(:parent_ids, 5, repeated: true, type: :uint64, json_name: "parentIds")
+  field(:child_ids, 6, repeated: true, type: :uint64, json_name: "childIds")
+  field(:created_at_epoch, 7, required: true, type: :uint64, json_name: "createdAtEpoch")
+  field(:sealed_at_epoch, 8, optional: true, type: :uint64, json_name: "sealedAtEpoch")
+  field(:created_at_ms, 9, required: true, type: :uint64, json_name: "createdAtMs")
+  field(:sealed_at_ms, 10, optional: true, type: :uint64, json_name: "sealedAtMs")
+  field(:legacy_topic_name, 11, optional: true, type: :string, json_name: "legacyTopicName")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.SegmentBrokerAddress do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.SegmentBrokerAddress",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:segment_id, 1, required: true, type: :uint64, json_name: "segmentId")
+  field(:broker_url, 2, required: true, type: :string, json_name: "brokerUrl")
+  field(:broker_url_tls, 3, optional: true, type: :string, json_name: "brokerUrlTls")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicDAG do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.ScalableTopicDAG",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:epoch, 1, required: true, type: :uint64)
+  field(:segments, 2, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.SegmentInfoProto)
+
+  field(:segment_brokers, 3,
+    repeated: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.SegmentBrokerAddress,
+    json_name: "segmentBrokers"
+  )
+
+  field(:controller_broker_url, 4, optional: true, type: :string, json_name: "controllerBrokerUrl")
+
+  field(:controller_broker_url_tls, 5,
+    optional: true,
+    type: :string,
+    json_name: "controllerBrokerUrlTls"
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicLookup do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicLookup",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:session_id, 1, required: true, type: :uint64, json_name: "sessionId")
+  field(:topic, 2, required: true, type: :string)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicUpdate do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicUpdate",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:session_id, 1, required: true, type: :uint64, json_name: "sessionId")
+  field(:dag, 2, optional: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicDAG)
+
+  field(:error, 3,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    enum: true
+  )
+
+  field(:message, 4, optional: true, type: :string)
+  field(:resolved_topic_name, 5, optional: true, type: :string, json_name: "resolvedTopicName")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicClose do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicClose",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:session_id, 1, required: true, type: :uint64, json_name: "sessionId")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableAssignedSegment do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.ScalableAssignedSegment",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:segment_id, 1, required: true, type: :uint64, json_name: "segmentId")
+  field(:hash_start, 2, required: true, type: :uint32, json_name: "hashStart")
+  field(:hash_end, 3, required: true, type: :uint32, json_name: "hashEnd")
+  field(:segment_topic, 4, required: true, type: :string, json_name: "segmentTopic")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableConsumerAssignment do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.ScalableConsumerAssignment",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:layout_epoch, 1, required: true, type: :uint64, json_name: "layoutEpoch")
+
+  field(:segments, 2,
+    repeated: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableAssignedSegment
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicSubscribe do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicSubscribe",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+  field(:topic, 2, required: true, type: :string)
+  field(:subscription, 3, required: true, type: :string)
+  field(:consumer_name, 4, required: true, type: :string, json_name: "consumerName")
+  field(:consumer_id, 5, required: true, type: :uint64, json_name: "consumerId")
+
+  field(:consumer_type, 6,
+    required: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableConsumerType,
+    json_name: "consumerType",
+    enum: true
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicSubscribeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicSubscribeResponse",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
+
+  field(:error, 2,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    enum: true
+  )
+
+  field(:message, 3, optional: true, type: :string)
+
+  field(:assignment, 4,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableConsumerAssignment
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicAssignmentUpdate do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandScalableTopicAssignmentUpdate",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:consumer_id, 1, required: true, type: :uint64, json_name: "consumerId")
+
+  field(:assignment, 2,
+    required: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableConsumerAssignment
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopics do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchScalableTopics",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+  field(:namespace, 2, required: true, type: :string)
+
+  field(:property_filters, 3,
+    repeated: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue,
+    json_name: "propertyFilters"
+  )
+
+  field(:current_hash, 4, optional: true, type: :string, json_name: "currentHash")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicsSnapshot do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.ScalableTopicsSnapshot",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:topics, 1, repeated: true, type: :string)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicsDiff do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.ScalableTopicsDiff",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:added, 1, repeated: true, type: :string)
+  field(:removed, 2, repeated: true, type: :string)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopicsUpdate do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchScalableTopicsUpdate",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  oneof(:event, 0)
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+
+  field(:snapshot, 2,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicsSnapshot,
+    oneof: 0
+  )
+
+  field(:diff, 3,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ScalableTopicsDiff,
+    oneof: 0
+  )
+
+  field(:error, 4,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    enum: true
+  )
+
+  field(:message, 5, optional: true, type: :string)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopicsClose do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchScalableTopicsClose",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignments do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchTcAssignments",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.TcAssignment do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.TcAssignment",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:tc_id, 1, required: true, type: :uint64, json_name: "tcId")
+  field(:broker_service_url, 2, optional: true, type: :string, json_name: "brokerServiceUrl")
+
+  field(:broker_service_url_tls, 3,
+    optional: true,
+    type: :string,
+    json_name: "brokerServiceUrlTls"
+  )
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.TcAssignmentsSnapshot do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.TcAssignmentsSnapshot",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:parallelism, 1, required: true, type: :uint32)
+  field(:assignments, 2, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.TcAssignment)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignmentsUpdate do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchTcAssignmentsUpdate",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+
+  field(:snapshot, 2,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.TcAssignmentsSnapshot
+  )
+
+  field(:error, 3,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.ServerError,
+    enum: true
+  )
+
+  field(:message, 4, optional: true, type: :string)
+end
+
+defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignmentsClose do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "pulsar.proto.CommandWatchTcAssignmentsClose",
+    protoc_gen_elixir_version: "0.17.0",
+    syntax: :proto2
+
+  field(:watch_id, 1, required: true, type: :uint64, json_name: "watchId")
+end
+
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetSchema do
   @moduledoc false
 
@@ -1610,6 +2027,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetOrCreateSchema do
   field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:topic, 2, required: true, type: :string)
   field(:schema, 3, required: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Schema)
+  field(:producerName, 4, optional: true, type: :string)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandGetOrCreateSchemaResponse do
@@ -1643,6 +2061,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTcClientConnectRequest do
 
   field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
   field(:tc_id, 2, required: true, type: :uint64, json_name: "tcId", default: 0)
+  field(:scalable, 3, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandTcClientConnectResponse do
@@ -1673,8 +2092,9 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandNewTxn do
     syntax: :proto2
 
   field(:request_id, 1, required: true, type: :uint64, json_name: "requestId")
-  field(:txn_ttl_seconds, 2, optional: true, type: :uint64, json_name: "txnTtlSeconds", default: 0)
+  field(:txn_ttl_millis, 2, optional: true, type: :uint64, json_name: "txnTtlMillis", default: 0)
   field(:tc_id, 3, optional: true, type: :uint64, json_name: "tcId", default: 0)
+  field(:scalable, 4, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandNewTxnResponse do
@@ -1724,6 +2144,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddPartitionToTxn do
 
   field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:partitions, 4, repeated: true, type: :string)
+  field(:scalable, 5, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddPartitionToTxnResponse do
@@ -1785,6 +2206,7 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddSubscriptionToTxn do
 
   field(:txnid_most_bits, 3, optional: true, type: :uint64, json_name: "txnidMostBits", default: 0)
   field(:subscription, 4, repeated: true, type: Pulsar.Protocol.Binary.Pulsar.Proto.Subscription)
+  field(:scalable, 5, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandAddSubscriptionToTxnResponse do
@@ -1840,6 +2262,8 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxn do
     json_name: "txnAction",
     enum: true
   )
+
+  field(:scalable, 5, optional: true, type: :bool, default: false)
 end
 
 defmodule Pulsar.Protocol.Binary.Pulsar.Proto.CommandEndTxnResponse do
@@ -2246,5 +2670,65 @@ defmodule Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand do
   field(:topicMigrated, 68,
     optional: true,
     type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandTopicMigrated
+  )
+
+  field(:scalableTopicLookup, 70,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicLookup
+  )
+
+  field(:scalableTopicUpdate, 71,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicUpdate
+  )
+
+  field(:scalableTopicClose, 72,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicClose
+  )
+
+  field(:scalableTopicSubscribe, 73,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicSubscribe
+  )
+
+  field(:scalableTopicSubscribeResponse, 74,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicSubscribeResponse
+  )
+
+  field(:scalableTopicAssignmentUpdate, 75,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandScalableTopicAssignmentUpdate
+  )
+
+  field(:watchScalableTopics, 76,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopics
+  )
+
+  field(:watchScalableTopicsUpdate, 77,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopicsUpdate
+  )
+
+  field(:watchScalableTopicsClose, 78,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchScalableTopicsClose
+  )
+
+  field(:watchTcAssignments, 79,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignments
+  )
+
+  field(:watchTcAssignmentsUpdate, 80,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignmentsUpdate
+  )
+
+  field(:watchTcAssignmentsClose, 81,
+    optional: true,
+    type: Pulsar.Protocol.Binary.Pulsar.Proto.CommandWatchTcAssignmentsClose
   )
 end
