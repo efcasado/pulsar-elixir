@@ -504,80 +504,19 @@ defmodule Pulsar.Broker do
 
   # Automatic cleanup when monitored processes exit
   def connected(:info, {:DOWN, monitor_ref, :process, pid, reason}, broker) do
-    # Find and remove the consumer/producer that died
+    # Find and remove the consumer/producer/watcher that died, and tell the
+    # broker it is gone (each owes a different close command, if any).
     {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
     {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
     {watcher_id, watcher_close, new_watchers} = remove_watcher_by_monitor_ref(broker.watchers, monitor_ref, pid)
 
-    broker_after_consumer =
-      if consumer_id do
-        Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server")
+    broker =
+      broker
+      |> close_after_exit(consumer_id, close_consumer_command(consumer_id), reason, "consumer")
+      |> close_after_exit(producer_id, close_producer_command(producer_id), reason, "producer")
+      |> close_after_exit(watcher_id, watcher_close, reason, "scalable watcher")
 
-        close_consumer_command = %Binary.CommandCloseConsumer{
-          consumer_id: consumer_id,
-          request_id: System.unique_integer([:positive, :monotonic])
-        }
-
-        case send_command_internal(close_consumer_command, broker) do
-          {:ok, updated_broker} ->
-            updated_broker
-
-          {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}")
-
-            updated_broker
-        end
-      else
-        broker
-      end
-
-    broker_after_producer =
-      if producer_id do
-        Logger.info("Producer #{producer_id} exited: #{inspect(reason)}, sending CloseProducer to server")
-
-        close_producer_command = %Binary.CommandCloseProducer{
-          producer_id: producer_id,
-          request_id: System.unique_integer([:positive, :monotonic])
-        }
-
-        case send_command_internal(close_producer_command, broker_after_consumer) do
-          {:ok, updated_broker} ->
-            updated_broker
-
-          {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send CloseProducer for producer #{producer_id}: #{inspect(send_error)}")
-
-            updated_broker
-        end
-      else
-        broker_after_consumer
-      end
-
-    broker_after_watcher =
-      if watcher_id && watcher_close do
-        Logger.info(
-          "Scalable watcher #{watcher_id} exited: #{inspect(reason)}, sending #{inspect(watcher_close.__struct__)} to server"
-        )
-
-        case send_command_internal(watcher_close, broker_after_producer) do
-          {:ok, updated_broker} ->
-            updated_broker
-
-          {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send close for scalable watcher #{watcher_id}: #{inspect(send_error)}")
-
-            updated_broker
-        end
-      else
-        broker_after_producer
-      end
-
-    new_broker = %{
-      broker_after_watcher
-      | consumers: new_consumers,
-        producers: new_producers,
-        watchers: new_watchers
-    }
+    new_broker = %{broker | consumers: new_consumers, producers: new_producers, watchers: new_watchers}
 
     {:keep_state, new_broker}
   end
@@ -1099,6 +1038,35 @@ defmodule Pulsar.Broker do
           {found_id, found_close, acc_map}
         end
     end)
+  end
+
+  defp close_consumer_command(nil), do: nil
+
+  defp close_consumer_command(consumer_id) do
+    %Binary.CommandCloseConsumer{consumer_id: consumer_id, request_id: System.unique_integer([:positive, :monotonic])}
+  end
+
+  defp close_producer_command(nil), do: nil
+
+  defp close_producer_command(producer_id) do
+    %Binary.CommandCloseProducer{producer_id: producer_id, request_id: System.unique_integer([:positive, :monotonic])}
+  end
+
+  # Sends the close command (if any) owed for a monitored process that exited.
+  defp close_after_exit(broker, nil, _command, _reason, _label), do: broker
+  defp close_after_exit(broker, _id, nil, _reason, _label), do: broker
+
+  defp close_after_exit(broker, id, command, reason, label) do
+    Logger.info("#{label} #{id} exited: #{inspect(reason)}, sending #{inspect(command.__struct__)} to server")
+
+    case send_command_internal(command, broker) do
+      {:ok, updated_broker} ->
+        updated_broker
+
+      {{:error, send_error}, updated_broker} ->
+        Logger.warning("Failed to send close for #{label} #{id}: #{inspect(send_error)}")
+        updated_broker
+    end
   end
 
   defp route_to_watcher(broker, id, command) do
