@@ -150,6 +150,21 @@ defmodule Pulsar.Test.Support.System do
   end
 
   @doc """
+  Returns a subscription's message backlog (unacknowledged count) from
+  `topics stats`, for asserting cursor/ack effects without redelivery timing.
+  """
+  def subscription_backlog(topic, subscription) do
+    broker = broker()
+    command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "stats", topic]
+    {raw, 0} = docker_exec(broker.container, command)
+
+    {start, _} = :binary.match(raw, "{")
+    json = binary_part(raw, start, byte_size(raw) - start)
+
+    get_in(Jason.decode!(json), ["subscriptions", subscription, "msgBacklog"])
+  end
+
+  @doc """
   Terminates a topic: no further messages can be published, and consumers that
   have caught up are notified via `CommandReachedEndOfTopic`.
   """
