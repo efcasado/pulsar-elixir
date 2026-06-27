@@ -42,7 +42,12 @@ defmodule Pulsar.Broker do
     :actions,
     # Broker-specific state
     :consumers,
-    :producers
+    :producers,
+    :sessions,
+    # Scalable topic STREAM/CHECKPOINT consumer registrations:
+    # consumer_id -> {owner_pid, ref}. Routes pushed
+    # CommandScalableTopicAssignmentUpdate to the owning coordinator.
+    :assignments
   ]
 
   @type t :: %__MODULE__{
@@ -60,7 +65,9 @@ defmodule Pulsar.Broker do
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
-          producers: %{integer() => {pid(), reference()}}
+          producers: %{integer() => {pid(), reference()}},
+          sessions: %{integer() => {pid(), reference()}},
+          assignments: %{integer() => {pid(), reference()}}
         }
 
   ## Public API
@@ -110,6 +117,24 @@ defmodule Pulsar.Broker do
   @spec register_producer(GenServer.server(), integer(), pid()) :: :ok
   def register_producer(broker, producer_id, producer_pid) do
     :gen_statem.call(broker, {:register_producer, producer_id, producer_pid})
+  end
+
+  @doc """
+  Registers a scalable topic watch session with this broker and monitors the process.
+  """
+  @spec register_scalable_session(GenServer.server(), integer(), pid()) :: :ok
+  def register_scalable_session(broker, session_id, owner_pid) do
+    :gen_statem.call(broker, {:register_scalable_session, session_id, owner_pid})
+  end
+
+  @doc """
+  Registers a scalable topic STREAM/CHECKPOINT consumer so the broker routes
+  pushed `CommandScalableTopicAssignmentUpdate`s (keyed by `consumer_id`) to
+  `owner_pid` as `{:broker_message, command}`.
+  """
+  @spec register_scalable_consumer(GenServer.server(), integer(), pid()) :: :ok
+  def register_scalable_consumer(broker, consumer_id, owner_pid) do
+    :gen_statem.call(broker, {:register_scalable_consumer, consumer_id, owner_pid})
   end
 
   @doc """
@@ -260,6 +285,8 @@ defmodule Pulsar.Broker do
       requests: %{},
       consumers: %{},
       producers: %{},
+      sessions: %{},
+      assignments: %{},
       prev_backoff: 0
     }
 
@@ -469,11 +496,35 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker, actions}
   end
 
+  def connected({:call, from}, {:register_scalable_session, session_id, owner_pid}, broker) do
+    monitor_ref = Process.monitor(owner_pid)
+
+    new_sessions = Map.put(broker.sessions, session_id, {owner_pid, monitor_ref})
+    new_broker = %{broker | sessions: new_sessions}
+
+    Logger.debug("Registered scalable topic session #{session_id} and monitoring process")
+    actions = [{:reply, from, :ok}]
+    {:keep_state, new_broker, actions}
+  end
+
+  def connected({:call, from}, {:register_scalable_consumer, consumer_id, owner_pid}, broker) do
+    monitor_ref = Process.monitor(owner_pid)
+
+    new_assignments = Map.put(broker.assignments, consumer_id, {owner_pid, monitor_ref})
+    new_broker = %{broker | assignments: new_assignments}
+
+    Logger.debug("Registered scalable consumer #{consumer_id} and monitoring process")
+    actions = [{:reply, from, :ok}]
+    {:keep_state, new_broker, actions}
+  end
+
   # Automatic cleanup when monitored processes exit
   def connected(:info, {:DOWN, monitor_ref, :process, pid, reason}, broker) do
     # Find and remove the consumer/producer that died
     {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
     {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
+    {session_id, new_sessions} = remove_by_monitor_ref(broker.sessions, monitor_ref, pid)
+    {_assignment_id, new_assignments} = remove_by_monitor_ref(broker.assignments, monitor_ref, pid)
 
     broker_after_consumer =
       if consumer_id do
@@ -519,7 +570,33 @@ defmodule Pulsar.Broker do
         broker_after_consumer
       end
 
-    new_broker = %{broker_after_producer | consumers: new_consumers, producers: new_producers}
+    broker_after_session =
+      if session_id do
+        Logger.info("Scalable session #{session_id} exited: #{inspect(reason)}, sending ScalableTopicClose to server")
+
+        close_session_command = %Binary.CommandScalableTopicClose{session_id: session_id}
+
+        case send_command_internal(close_session_command, broker_after_producer) do
+          {:ok, updated_broker} ->
+            updated_broker
+
+          {{:error, send_error}, updated_broker} ->
+            Logger.warning("Failed to send ScalableTopicClose for session #{session_id}: #{inspect(send_error)}")
+
+            updated_broker
+        end
+      else
+        broker_after_producer
+      end
+
+    new_broker = %{
+      broker_after_session
+      | consumers: new_consumers,
+        producers: new_producers,
+        sessions: new_sessions,
+        assignments: new_assignments
+    }
+
     {:keep_state, new_broker}
   end
 
@@ -690,6 +767,11 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker}
   end
 
+  defp handle_command(%Binary.CommandScalableTopicSubscribeResponse{request_id: request_id} = command, broker) do
+    new_broker = reply_to_request(broker, request_id, {:ok, command})
+    {:keep_state, new_broker}
+  end
+
   defp handle_command(%Binary.CommandError{request_id: request_id} = error, broker) do
     reply = {:error, {error.error, error.message}}
     new_broker = reply_to_request(broker, request_id, reply)
@@ -713,6 +795,42 @@ defmodule Pulsar.Broker do
 
       {consumer_pid, _monitor_ref} ->
         send(consumer_pid, {:broker_message, {command, metadata, payload, broker_metadata}})
+        :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandScalableTopicUpdate{session_id: session_id} = command, broker) do
+    case Map.get(broker.sessions, session_id) do
+      nil ->
+        Logger.warning("Received scalable topic update for unknown session #{session_id}")
+        :keep_state_and_data
+
+      {owner_pid, _monitor_ref} ->
+        send(owner_pid, {:broker_message, command})
+        :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandScalableTopicAssignmentUpdate{consumer_id: consumer_id} = command, broker) do
+    case Map.get(broker.assignments, consumer_id) do
+      nil ->
+        Logger.warning("Received scalable assignment update for unknown consumer #{consumer_id}")
+        :keep_state_and_data
+
+      {owner_pid, _monitor_ref} ->
+        send(owner_pid, {:broker_message, command})
+        :keep_state_and_data
+    end
+  end
+
+  defp handle_command(%Binary.CommandReachedEndOfTopic{consumer_id: consumer_id} = command, broker) do
+    case Map.get(broker.consumers, consumer_id) do
+      nil ->
+        Logger.debug("Reached end of topic for unknown consumer #{consumer_id}")
+        :keep_state_and_data
+
+      {consumer_pid, _monitor_ref} ->
+        send(consumer_pid, {:broker_message, command})
         :keep_state_and_data
     end
   end

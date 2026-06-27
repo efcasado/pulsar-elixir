@@ -327,6 +327,51 @@ defmodule Pulsar do
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
+    if scalable_topic?(topic) do
+      # Scalable topic (PIP-460/466/468), addressed by the topic:// scheme.
+      # `:scalable_type` selects the consumer model (default `:queue`):
+      #   * :queue  - fan out over every segment (Shared, individual acks)
+      #   * :stream - register with the controller and consume the assigned
+      #               subset (ordered, one consumer per segment)
+      start = scalable_consumer_start(Keyword.get(opts, :scalable_type, :queue), name, topic, subscription_name, subscription_type, callback_module, opts)
+
+      child_spec = %{id: name, start: start, restart: :permanent, type: :supervisor}
+
+      DynamicSupervisor.start_child(consumer_supervisor, child_spec)
+    else
+      start_classic_consumer(
+        topic,
+        subscription_name,
+        subscription_type,
+        callback_module,
+        name,
+        consumer_supervisor,
+        client,
+        opts
+      )
+    end
+  end
+
+  defp scalable_consumer_start(:stream, name, topic, subscription_name, _subscription_type, callback_module, opts) do
+    # Stream consumers are ordered; the per-segment subscription type is fixed
+    # (Failover), so subscription_type is not forwarded.
+    {Pulsar.ScalableStreamConsumer, :start_link, [name, topic, subscription_name, callback_module, opts]}
+  end
+
+  defp scalable_consumer_start(_queue, name, topic, subscription_name, subscription_type, callback_module, opts) do
+    {Pulsar.ScalableConsumer, :start_link, [name, topic, subscription_name, subscription_type, callback_module, opts]}
+  end
+
+  defp start_classic_consumer(
+         topic,
+         subscription_name,
+         subscription_type,
+         callback_module,
+         name,
+         consumer_supervisor,
+         client,
+         opts
+       ) do
     case check_partitioned_topic(topic, client) do
       {:ok, 0} ->
         # Regular topic - create single consumer group
@@ -451,6 +496,16 @@ defmodule Pulsar do
     cond do
       children == [] ->
         []
+
+      # ScalableStreamConsumer - has a ScalableAssignment worker driving the
+      # assigned per-segment consumer groups.
+      stream_scalable?(children) ->
+        Pulsar.ScalableStreamConsumer.get_consumers(group_pid)
+
+      # ScalableConsumer (queue) - has a ScalableTopology worker driving
+      # per-segment consumer groups.
+      scalable?(children) ->
+        Pulsar.ScalableConsumer.get_consumers(group_pid)
 
       # PartitionedConsumer - has ConsumerGroup supervisors as children
       # (alongside a partition discovery worker).
@@ -895,6 +950,16 @@ defmodule Pulsar do
   defp partitioned?(children) do
     Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
+
+  defp scalable?(children) do
+    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableTopology end)
+  end
+
+  defp stream_scalable?(children) do
+    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableAssignment end)
+  end
+
+  defp scalable_topic?(topic), do: String.starts_with?(topic, "topic://")
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
   defp check_partitioned_topic(_topic, _client, attempts \\ 10, delay_ms \\ 500)
