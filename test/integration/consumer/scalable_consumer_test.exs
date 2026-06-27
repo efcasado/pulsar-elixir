@@ -82,7 +82,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
       Pulsar.start_consumer(topic, "stream-multi-sub", @consumer_callback, stream_options())
 
     assert :ok = Utils.wait_for(fn -> total_consumed(consumer) == length(messages) end)
-    assert length(Pulsar.ScalableStreamConsumer.get_segment_groups(consumer)) == 2
+    assert length(Pulsar.ScalableConsumer.get_segment_groups(consumer)) == 2
 
     :ok = Pulsar.stop_consumer(consumer)
   end
@@ -95,7 +95,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
     {:ok, consumer} =
       Pulsar.start_consumer(topic, "stream-split-sub", @consumer_callback, stream_options())
 
-    assert length(Pulsar.ScalableStreamConsumer.get_segment_groups(consumer)) == 1
+    assert length(Pulsar.ScalableConsumer.get_segment_groups(consumer)) == 1
 
     # The consumer drains segment 0 (it acks as it consumes). The controller
     # withholds the children until the parent is drained, so only after that does
@@ -105,7 +105,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
     assert :ok = Utils.wait_for(fn -> total_consumed(consumer) == length(before) end)
 
     System.split_scalable_segment(path, 0)
-    assert :ok = Utils.wait_for(fn -> length(Pulsar.ScalableStreamConsumer.get_segment_groups(consumer)) > 1 end)
+    assert :ok = Utils.wait_for(fn -> length(Pulsar.ScalableConsumer.get_segment_groups(consumer)) > 1 end)
 
     # Messages produced after the split route to the active children and are
     # consumed by the newly assigned groups.

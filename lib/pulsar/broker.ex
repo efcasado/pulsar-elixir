@@ -43,11 +43,12 @@ defmodule Pulsar.Broker do
     # Broker-specific state
     :consumers,
     :producers,
-    :sessions,
-    # Scalable topic STREAM/CHECKPOINT consumer registrations:
-    # consumer_id -> {owner_pid, ref}. Routes pushed
-    # CommandScalableTopicAssignmentUpdate to the owning coordinator.
-    :assignments
+    # Scalable topic watchers: id -> {owner_pid, ref, close_command}. Routes
+    # pushed topology/assignment commands to the owning watcher (keyed by the
+    # wire id - session_id for a DAG watch, consumer_id for a STREAM/CHECKPOINT
+    # registration). `close_command`, if any, is sent to the broker when the
+    # owner exits.
+    :watchers
   ]
 
   @type t :: %__MODULE__{
@@ -66,8 +67,7 @@ defmodule Pulsar.Broker do
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
           producers: %{integer() => {pid(), reference()}},
-          sessions: %{integer() => {pid(), reference()}},
-          assignments: %{integer() => {pid(), reference()}}
+          watchers: %{integer() => {pid(), reference(), struct() | nil}}
         }
 
   ## Public API
@@ -120,21 +120,17 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Registers a scalable topic watch session with this broker and monitors the process.
-  """
-  @spec register_scalable_session(GenServer.server(), integer(), pid()) :: :ok
-  def register_scalable_session(broker, session_id, owner_pid) do
-    :gen_statem.call(broker, {:register_scalable_session, session_id, owner_pid})
-  end
+  Registers a scalable topic watcher and monitors `owner_pid`.
 
-  @doc """
-  Registers a scalable topic STREAM/CHECKPOINT consumer so the broker routes
-  pushed `CommandScalableTopicAssignmentUpdate`s (keyed by `consumer_id`) to
-  `owner_pid` as `{:broker_message, command}`.
+  `id` is the wire id the broker routes pushed commands by (a `session_id` for a
+  DAG watch, a `consumer_id` for a STREAM/CHECKPOINT registration); matching
+  `CommandScalableTopicUpdate`/`CommandScalableTopicAssignmentUpdate` messages
+  are delivered to `owner_pid` as `{:broker_message, command}`. `close_command`,
+  if given, is sent to the broker when the owner exits.
   """
-  @spec register_scalable_consumer(GenServer.server(), integer(), pid()) :: :ok
-  def register_scalable_consumer(broker, consumer_id, owner_pid) do
-    :gen_statem.call(broker, {:register_scalable_consumer, consumer_id, owner_pid})
+  @spec register_watcher(GenServer.server(), integer(), pid(), struct() | nil) :: :ok
+  def register_watcher(broker, id, owner_pid, close_command \\ nil) do
+    :gen_statem.call(broker, {:register_watcher, id, owner_pid, close_command})
   end
 
   @doc """
@@ -285,8 +281,7 @@ defmodule Pulsar.Broker do
       requests: %{},
       consumers: %{},
       producers: %{},
-      sessions: %{},
-      assignments: %{},
+      watchers: %{},
       prev_backoff: 0
     }
 
@@ -496,24 +491,13 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker, actions}
   end
 
-  def connected({:call, from}, {:register_scalable_session, session_id, owner_pid}, broker) do
+  def connected({:call, from}, {:register_watcher, id, owner_pid, close_command}, broker) do
     monitor_ref = Process.monitor(owner_pid)
 
-    new_sessions = Map.put(broker.sessions, session_id, {owner_pid, monitor_ref})
-    new_broker = %{broker | sessions: new_sessions}
+    new_watchers = Map.put(broker.watchers, id, {owner_pid, monitor_ref, close_command})
+    new_broker = %{broker | watchers: new_watchers}
 
-    Logger.debug("Registered scalable topic session #{session_id} and monitoring process")
-    actions = [{:reply, from, :ok}]
-    {:keep_state, new_broker, actions}
-  end
-
-  def connected({:call, from}, {:register_scalable_consumer, consumer_id, owner_pid}, broker) do
-    monitor_ref = Process.monitor(owner_pid)
-
-    new_assignments = Map.put(broker.assignments, consumer_id, {owner_pid, monitor_ref})
-    new_broker = %{broker | assignments: new_assignments}
-
-    Logger.debug("Registered scalable consumer #{consumer_id} and monitoring process")
+    Logger.debug("Registered scalable watcher #{id} and monitoring process")
     actions = [{:reply, from, :ok}]
     {:keep_state, new_broker, actions}
   end
@@ -523,8 +507,7 @@ defmodule Pulsar.Broker do
     # Find and remove the consumer/producer that died
     {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
     {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
-    {session_id, new_sessions} = remove_by_monitor_ref(broker.sessions, monitor_ref, pid)
-    {_assignment_id, new_assignments} = remove_by_monitor_ref(broker.assignments, monitor_ref, pid)
+    {watcher_id, watcher_close, new_watchers} = remove_watcher_by_monitor_ref(broker.watchers, monitor_ref, pid)
 
     broker_after_consumer =
       if consumer_id do
@@ -570,18 +553,18 @@ defmodule Pulsar.Broker do
         broker_after_consumer
       end
 
-    broker_after_session =
-      if session_id do
-        Logger.info("Scalable session #{session_id} exited: #{inspect(reason)}, sending ScalableTopicClose to server")
+    broker_after_watcher =
+      if watcher_id && watcher_close do
+        Logger.info(
+          "Scalable watcher #{watcher_id} exited: #{inspect(reason)}, sending #{inspect(watcher_close.__struct__)} to server"
+        )
 
-        close_session_command = %Binary.CommandScalableTopicClose{session_id: session_id}
-
-        case send_command_internal(close_session_command, broker_after_producer) do
+        case send_command_internal(watcher_close, broker_after_producer) do
           {:ok, updated_broker} ->
             updated_broker
 
           {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send ScalableTopicClose for session #{session_id}: #{inspect(send_error)}")
+            Logger.warning("Failed to send close for scalable watcher #{watcher_id}: #{inspect(send_error)}")
 
             updated_broker
         end
@@ -590,11 +573,10 @@ defmodule Pulsar.Broker do
       end
 
     new_broker = %{
-      broker_after_session
+      broker_after_watcher
       | consumers: new_consumers,
         producers: new_producers,
-        sessions: new_sessions,
-        assignments: new_assignments
+        watchers: new_watchers
     }
 
     {:keep_state, new_broker}
@@ -800,27 +782,11 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_command(%Binary.CommandScalableTopicUpdate{session_id: session_id} = command, broker) do
-    case Map.get(broker.sessions, session_id) do
-      nil ->
-        Logger.warning("Received scalable topic update for unknown session #{session_id}")
-        :keep_state_and_data
-
-      {owner_pid, _monitor_ref} ->
-        send(owner_pid, {:broker_message, command})
-        :keep_state_and_data
-    end
+    route_to_watcher(broker, session_id, command)
   end
 
   defp handle_command(%Binary.CommandScalableTopicAssignmentUpdate{consumer_id: consumer_id} = command, broker) do
-    case Map.get(broker.assignments, consumer_id) do
-      nil ->
-        Logger.warning("Received scalable assignment update for unknown consumer #{consumer_id}")
-        :keep_state_and_data
-
-      {owner_pid, _monitor_ref} ->
-        send(owner_pid, {:broker_message, command})
-        :keep_state_and_data
-    end
+    route_to_watcher(broker, consumer_id, command)
   end
 
   defp handle_command(%Binary.CommandReachedEndOfTopic{consumer_id: consumer_id} = command, broker) do
@@ -1120,5 +1086,30 @@ defmodule Pulsar.Broker do
           {found_id, acc_map}
         end
     end)
+  end
+
+  # Like remove_by_monitor_ref/3 but for watcher entries, which also carry a
+  # close command. Returns {id, close_command, new_map}.
+  defp remove_watcher_by_monitor_ref(watchers, target_monitor_ref, target_pid) do
+    Enum.reduce(watchers, {nil, nil, watchers}, fn
+      {id, {pid, monitor_ref, close_command}}, {found_id, found_close, acc_map} ->
+        if monitor_ref == target_monitor_ref and pid == target_pid do
+          {id, close_command, Map.delete(acc_map, id)}
+        else
+          {found_id, found_close, acc_map}
+        end
+    end)
+  end
+
+  defp route_to_watcher(broker, id, command) do
+    case Map.get(broker.watchers, id) do
+      nil ->
+        Logger.warning("Received #{inspect(command.__struct__)} for unknown scalable watcher #{id}")
+        :keep_state_and_data
+
+      {owner_pid, _monitor_ref, _close_command} ->
+        send(owner_pid, {:broker_message, command})
+        :keep_state_and_data
+    end
   end
 end

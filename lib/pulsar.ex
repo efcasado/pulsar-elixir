@@ -328,14 +328,19 @@ defmodule Pulsar do
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
     if scalable_topic?(topic) do
-      # Scalable topic (PIP-460/466/468), addressed by the topic:// scheme.
-      # `:scalable_type` selects the consumer model (default `:queue`):
-      #   * :queue  - fan out over every segment (Shared, individual acks)
-      #   * :stream - register with the controller and consume the assigned
-      #               subset (ordered, one consumer per segment)
-      start = scalable_consumer_start(Keyword.get(opts, :scalable_type, :queue), name, topic, subscription_name, subscription_type, callback_module, opts)
-
-      child_spec = %{id: name, start: start, restart: :permanent, type: :supervisor}
+      # Scalable topic (PIP-460/466/468), addressed by the topic:// scheme. The
+      # `:scalable_type` option (in opts) selects the consumer model - `:queue`
+      # (default) or `:stream`; `subscription_type` is forwarded for `:queue`.
+      child_spec = %{
+        id: name,
+        start: {
+          Pulsar.ScalableConsumer,
+          :start_link,
+          [name, topic, subscription_name, callback_module, opts]
+        },
+        restart: :permanent,
+        type: :supervisor
+      }
 
       DynamicSupervisor.start_child(consumer_supervisor, child_spec)
     else
@@ -350,16 +355,6 @@ defmodule Pulsar do
         opts
       )
     end
-  end
-
-  defp scalable_consumer_start(:stream, name, topic, subscription_name, _subscription_type, callback_module, opts) do
-    # Stream consumers are ordered; the per-segment subscription type is fixed
-    # (Failover), so subscription_type is not forwarded.
-    {Pulsar.ScalableStreamConsumer, :start_link, [name, topic, subscription_name, callback_module, opts]}
-  end
-
-  defp scalable_consumer_start(_queue, name, topic, subscription_name, subscription_type, callback_module, opts) do
-    {Pulsar.ScalableConsumer, :start_link, [name, topic, subscription_name, subscription_type, callback_module, opts]}
   end
 
   defp start_classic_consumer(
@@ -497,13 +492,8 @@ defmodule Pulsar do
       children == [] ->
         []
 
-      # ScalableStreamConsumer - has a ScalableAssignment worker driving the
-      # assigned per-segment consumer groups.
-      stream_scalable?(children) ->
-        Pulsar.ScalableStreamConsumer.get_consumers(group_pid)
-
-      # ScalableConsumer (queue) - has a ScalableTopology worker driving
-      # per-segment consumer groups.
+      # ScalableConsumer (queue or stream) - has a ScalableWatcher worker driving
+      # the per-segment consumer groups.
       scalable?(children) ->
         Pulsar.ScalableConsumer.get_consumers(group_pid)
 
@@ -952,11 +942,7 @@ defmodule Pulsar do
   end
 
   defp scalable?(children) do
-    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableTopology end)
-  end
-
-  defp stream_scalable?(children) do
-    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableAssignment end)
+    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableWatcher end)
   end
 
   defp scalable_topic?(topic), do: String.starts_with?(topic, "topic://")

@@ -1,49 +1,54 @@
 defmodule Pulsar.ScalableConsumer do
   @moduledoc """
-  A supervisor that fans out one consumer group per segment of a scalable topic
-  (PIP-460/466/468).
+  A supervisor that consumes a scalable topic (PIP-460/466/468) by fanning out
+  one `Pulsar.ConsumerGroup` per segment.
 
-  This is the scalable-topic analogue of `Pulsar.PartitionedConsumer`: where the
-  partitioned variant runs one `Pulsar.ConsumerGroup` per partition, this runs
-  one per segment. The segment set is driven by a single `Pulsar.ScalableTopology`
-  watcher started in reconcile mode — it adds a consumer group child to this
-  supervisor for each active segment as the topology changes (analogous to how
-  `Pulsar.PartitionDiscovery` grows a `PartitionedConsumer`).
+  This is the scalable-topic analogue of `Pulsar.PartitionedConsumer`. The
+  segment set is driven by a single `Pulsar.ScalableWatcher` started in one of
+  two modes via `:scalable_type`:
 
-  Splits that add segments are picked up automatically, and segments that leave
-  the DAG (GC'd once drained) have their consumer groups torn down. Both legacy
-  segments (a regular topic resolved through the scalable lookup) and native
-  segments (addressed by a computed `segment://…` URI) are consumed via the
-  classic subscribe path.
+    * `:queue` (default) — consume *every* segment of the DAG (Shared, individual
+      acks). The analogue of how `Pulsar.PartitionDiscovery` grows a
+      `PartitionedConsumer`, but push-based and bidirectional (segments are also
+      removed when GC'd).
+    * `:stream` — register with the controller and consume only the *assigned*
+      subset of segments (Failover per segment, ordered). The broker guarantees
+      per-key ordering across split/merge by withholding child segments until
+      their parent has drained.
+
+  In both cases the watcher reconciles the per-segment consumer groups as the
+  topology/assignment changes.
   """
 
   use Supervisor
 
-  alias Pulsar.ScalableTopology
+  alias Pulsar.ScalableWatcher
 
   require Logger
 
   @default_client :default
 
   @doc """
-  Starts a scalable consumer supervisor.
+  Starts a scalable consumer supervisor. Blocks until the first segment set has
+  been applied, so the initial consumers exist when this returns.
 
-  Mirrors `Pulsar.PartitionedConsumer.start_link/7`, but the segment set is
-  driven by the topic's DAG rather than a partition count. Blocks until the
-  first topology update has been applied, so the initial segment consumers exist
-  when this returns.
+  `opts`:
+    * `:scalable_type` - `:queue` (default) or `:stream`
+    * `:subscription_type` - per-segment subscription type for `:queue`
+      (default `:Shared`); ignored for `:stream` (which uses `:Failover`)
+    * other options are forwarded to the segment consumer groups
   """
-  def start_link(name, topic, subscription_name, subscription_type, callback_module, opts \\ []) do
+  def start_link(name, topic, subscription_name, callback_module, opts \\ []) do
     client = Keyword.get(opts, :client, @default_client)
     consumer_registry = Pulsar.Client.consumer_registry(client)
 
     case Supervisor.start_link(
            __MODULE__,
-           {name, topic, subscription_name, subscription_type, callback_module, opts},
+           {name, topic, subscription_name, callback_module, opts},
            name: {:via, Registry, {consumer_registry, name}}
          ) do
       {:ok, supervisor} = ok ->
-        await_initial_segments(supervisor, opts)
+        await_ready(supervisor, opts)
         ok
 
       other ->
@@ -52,7 +57,7 @@ defmodule Pulsar.ScalableConsumer do
   end
 
   @doc """
-  Stops a scalable consumer supervisor and all its child consumer groups.
+  Stops a scalable consumer supervisor and all its segment consumer groups.
   """
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
     Supervisor.stop(supervisor_pid, reason, timeout)
@@ -80,62 +85,46 @@ defmodule Pulsar.ScalableConsumer do
   end
 
   @impl true
-  def init({name, topic, subscription_name, subscription_type, callback_module, opts}) do
+  def init({name, topic, subscription_name, callback_module, opts}) do
     client = Keyword.get(opts, :client, @default_client)
+    {source, source_opts, segment_subscription_type} = source_config(opts, subscription_name, client)
 
-    Logger.info("Starting scalable consumer for #{topic}")
+    Logger.info("Starting scalable #{Keyword.get(opts, :scalable_type, :queue)} consumer for #{topic}")
 
-    build_child_spec = fn segment_id, consume_topic ->
+    build_child_spec = fn segment_id, segment_topic ->
       segment_child_spec(
         segment_id,
         name,
-        consume_topic,
+        segment_topic,
         subscription_name,
-        subscription_type,
+        segment_subscription_type,
         callback_module,
         opts
       )
     end
 
-    topology_spec = %{
-      id: ScalableTopology,
-      start:
-        {ScalableTopology, :start_link, [topic, [client: client, supervisor: self(), build_child_spec: build_child_spec]]},
+    watcher_opts =
+      [source: source, topic: topic, supervisor: self(), build_child_spec: build_child_spec] ++ source_opts
+
+    watcher_spec = %{
+      id: ScalableWatcher,
+      start: {ScalableWatcher, :start_link, [watcher_opts]},
       restart: :permanent,
       type: :worker
     }
 
-    Supervisor.init([topology_spec], strategy: :one_for_one)
+    Supervisor.init([watcher_spec], strategy: :one_for_one)
   end
 
-  # Blocks until the watcher applies its first DAG (which reconciles the initial
-  # segment children). Tolerates a timeout — children will still appear as
-  # updates arrive.
-  defp await_initial_segments(supervisor, opts) do
-    timeout = Keyword.get(opts, :timeout, 5_000)
+  defp source_config(opts, subscription_name, client) do
+    case Keyword.get(opts, :scalable_type, :queue) do
+      :stream ->
+        {ScalableWatcher.Assignment,
+         [client: client, subscription: subscription_name, consumer_name: Keyword.get(opts, :consumer_name)], :Failover}
 
-    case find_topology(supervisor) do
-      nil ->
-        :ok
-
-      pid ->
-        try do
-          ScalableTopology.await_dag(pid, timeout)
-        catch
-          :exit, _reason -> :ok
-        end
-
-        :ok
+      :queue ->
+        {ScalableWatcher.Topology, [client: client], Keyword.get(opts, :subscription_type, :Shared)}
     end
-  end
-
-  defp find_topology(supervisor) do
-    supervisor
-    |> Supervisor.which_children()
-    |> Enum.find_value(fn
-      {ScalableTopology, pid, _type, _modules} when is_pid(pid) -> pid
-      _ -> nil
-    end)
   end
 
   defp segment_child_spec(segment_id, name, topic, subscription_name, subscription_type, callback_module, opts) do
@@ -151,5 +140,32 @@ defmodule Pulsar.ScalableConsumer do
       restart: :permanent,
       type: :supervisor
     }
+  end
+
+  defp await_ready(supervisor, opts) do
+    timeout = Keyword.get(opts, :timeout, 5_000)
+
+    case find_watcher(supervisor) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          ScalableWatcher.await_ready(pid, timeout)
+        catch
+          :exit, _reason -> :ok
+        end
+
+        :ok
+    end
+  end
+
+  defp find_watcher(supervisor) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn
+      {ScalableWatcher, pid, _type, _modules} when is_pid(pid) -> pid
+      _ -> nil
+    end)
   end
 end
