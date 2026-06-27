@@ -327,6 +327,46 @@ defmodule Pulsar do
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
+    if scalable_topic?(topic) do
+      # Scalable topic (PIP-460/466/468), addressed by the topic:// scheme. The
+      # `:scalable_type` option (in opts) selects the consumer model - `:queue`
+      # (default) or `:stream`; `subscription_type` is forwarded for `:queue`.
+      child_spec = %{
+        id: name,
+        start: {
+          Pulsar.ScalableConsumer,
+          :start_link,
+          [name, topic, subscription_name, callback_module, opts]
+        },
+        restart: :permanent,
+        type: :supervisor
+      }
+
+      DynamicSupervisor.start_child(consumer_supervisor, child_spec)
+    else
+      start_classic_consumer(
+        topic,
+        subscription_name,
+        subscription_type,
+        callback_module,
+        name,
+        consumer_supervisor,
+        client,
+        opts
+      )
+    end
+  end
+
+  defp start_classic_consumer(
+         topic,
+         subscription_name,
+         subscription_type,
+         callback_module,
+         name,
+         consumer_supervisor,
+         client,
+         opts
+       ) do
     case check_partitioned_topic(topic, client) do
       {:ok, 0} ->
         # Regular topic - create single consumer group
@@ -451,6 +491,11 @@ defmodule Pulsar do
     cond do
       children == [] ->
         []
+
+      # ScalableConsumer (queue or stream) - has a ScalableWatcher worker driving
+      # the per-segment consumer groups.
+      scalable?(children) ->
+        Pulsar.ScalableConsumer.get_consumers(group_pid)
 
       # PartitionedConsumer - has ConsumerGroup supervisors as children
       # (alongside a partition discovery worker).
@@ -895,6 +940,12 @@ defmodule Pulsar do
   defp partitioned?(children) do
     Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
+
+  defp scalable?(children) do
+    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableWatcher end)
+  end
+
+  defp scalable_topic?(topic), do: String.starts_with?(topic, "topic://")
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
   defp check_partitioned_topic(_topic, _client, attempts \\ 10, delay_ms \\ 500)

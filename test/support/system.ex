@@ -161,6 +161,72 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
+  @doc """
+  Creates a native scalable topic (PIP-460/466/468) with `segments` initial
+  segments. `topic` is the bare `tenant/namespace/name` form (no scheme).
+  """
+  def create_scalable_topic(topic, segments \\ 1) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "scalable-topics",
+      "create",
+      "-s",
+      "#{segments}",
+      topic
+    ]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
+  @doc """
+  Splits a scalable topic segment into two halves: the parent is sealed and two
+  active child segments are added to the DAG.
+  """
+  def split_scalable_segment(topic, segment_id) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "scalable-topics",
+      "split-segment",
+      "-s",
+      "#{segment_id}",
+      topic
+    ]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
+  @doc """
+  Merges two adjacent scalable topic segments into one active child segment. The
+  merged parents are sealed (and kept in the DAG until they are GC'd).
+  """
+  def merge_scalable_segments(topic, segment_id_1, segment_id_2) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "scalable-topics",
+      "merge-segments",
+      "--segment-id-1=#{segment_id_1}",
+      "--segment-id-2=#{segment_id_2}",
+      topic
+    ]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
   def produce_messages(topic, messages, broker \\ broker()) do
     base_cmd = [
       "bin/pulsar-client",
