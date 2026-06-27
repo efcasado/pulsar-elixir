@@ -5,7 +5,7 @@ defmodule Pulsar.ScalableConsumer do
 
   This is the scalable-topic analogue of `Pulsar.PartitionedConsumer`. The
   segment set is driven by a single `Pulsar.ScalableWatcher` started in one of
-  two modes via `:scalable_type`:
+  two modes via `:consumer_type`:
 
     * `:queue` (default) — consume *every* segment of the DAG (Shared, individual
       acks). The analogue of how `Pulsar.PartitionDiscovery` grows a
@@ -33,7 +33,7 @@ defmodule Pulsar.ScalableConsumer do
   been applied, so the initial consumers exist when this returns.
 
   `opts`:
-    * `:scalable_type` - `:queue` (default) or `:stream`
+    * `:consumer_type` - `:queue` (default) or `:stream`
     * `:subscription_type` - per-segment subscription type for `:queue`
       (default `:Shared`); ignored for `:stream` (which uses `:Failover`)
     * other options are forwarded to the segment consumer groups
@@ -89,7 +89,7 @@ defmodule Pulsar.ScalableConsumer do
     client = Keyword.get(opts, :client, @default_client)
     {source, source_opts, segment_subscription_type} = source_config(opts, subscription_name, client)
 
-    Logger.info("Starting scalable #{Keyword.get(opts, :scalable_type, :queue)} consumer for #{topic}")
+    Logger.info("Starting scalable #{Keyword.get(opts, :consumer_type, :queue)} consumer for #{topic}")
 
     build_child_spec = fn segment_id, segment_topic ->
       segment_child_spec(
@@ -117,7 +117,7 @@ defmodule Pulsar.ScalableConsumer do
   end
 
   defp source_config(opts, subscription_name, client) do
-    case Keyword.get(opts, :scalable_type, :queue) do
+    case Keyword.get(opts, :consumer_type, :queue) do
       :stream ->
         {ScalableWatcher.Assignment,
          [client: client, subscription: subscription_name, consumer_name: Keyword.get(opts, :consumer_name)], :Failover}

@@ -41,6 +41,25 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
     :ok = Pulsar.stop_consumer(consumer)
   end
 
+  test "queue consumer consumes a legacy (non-scalable) topic" do
+    # `consumer_type: :queue` routes a regular `persistent://` topic to the
+    # scalable consumer. The broker resolves it to a synthetic single legacy
+    # segment backed by the persistent:// topic, which is consumed like any other.
+    topic = "persistent://" <> unique_topic("legacy-queue")
+    System.create_topic(topic)
+
+    messages = for i <- 1..5, do: {"key-#{i}", "message-#{i}"}
+    System.produce_messages(topic, messages)
+
+    {:ok, consumer} =
+      Pulsar.start_consumer(topic, "legacy-sub", @consumer_callback, subscription_options())
+
+    assert :ok = Utils.wait_for(fn -> total_consumed(consumer) == length(messages) end)
+    assert length(Pulsar.ScalableConsumer.get_segment_groups(consumer)) == 1
+
+    :ok = Pulsar.stop_consumer(consumer)
+  end
+
   test "grows consumers when a segment splits" do
     path = unique_topic("scalable-split")
     topic = "topic://" <> path
@@ -69,7 +88,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
   end
 
   test "stream consumer consumes all messages across its assigned segments" do
-    # `scalable_type: :stream` registers with the controller and consumes the
+    # `consumer_type: :stream` registers with the controller and consumes the
     # assigned subset of segments. A lone stream consumer is assigned all of them.
     path = unique_topic("stream-multi")
     topic = "topic://" <> path
@@ -160,6 +179,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
   defp subscription_options do
     [
       client: @client,
+      consumer_type: :queue,
       initial_position: :earliest,
       flow_initial: 1,
       flow_threshold: 0,
@@ -167,7 +187,7 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
     ]
   end
 
-  defp stream_options, do: Keyword.put(subscription_options(), :scalable_type, :stream)
+  defp stream_options, do: Keyword.put(subscription_options(), :consumer_type, :stream)
 
   # Sums consumed messages across every segment consumer. Tolerates the churn
   # while the topology reconciles: a group being (re)started can briefly surface

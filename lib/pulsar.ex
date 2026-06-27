@@ -327,34 +327,41 @@ defmodule Pulsar do
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
-    if scalable_topic?(topic) do
-      # Scalable topic (PIP-460/466/468), addressed by the topic:// scheme. The
-      # `:scalable_type` option (in opts) selects the consumer model - `:queue`
-      # (default) or `:stream`; `subscription_type` is forwarded for `:queue`.
-      child_spec = %{
-        id: name,
-        start: {
-          Pulsar.ScalableConsumer,
-          :start_link,
-          [name, topic, subscription_name, callback_module, opts]
-        },
-        restart: :permanent,
-        type: :supervisor
-      }
+    # `:consumer_type` selects the consumer model, independent of the topic name:
+    #   :classic (default) - regular/partitioned consumer
+    #   :queue             - scalable topic, fan out over all segments
+    #   :stream            - scalable topic, ordered, controller-assigned segments
+    case Keyword.get(opts, :consumer_type, :classic) do
+      :classic ->
+        start_classic_consumer(
+          topic,
+          subscription_name,
+          subscription_type,
+          callback_module,
+          name,
+          consumer_supervisor,
+          client,
+          opts
+        )
 
-      DynamicSupervisor.start_child(consumer_supervisor, child_spec)
-    else
-      start_classic_consumer(
-        topic,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        name,
-        consumer_supervisor,
-        client,
-        opts
-      )
+      consumer_type when consumer_type in [:queue, :stream] ->
+        start_scalable_consumer(topic, subscription_name, callback_module, name, consumer_supervisor, opts)
     end
+  end
+
+  defp start_scalable_consumer(topic, subscription_name, callback_module, name, consumer_supervisor, opts) do
+    child_spec = %{
+      id: name,
+      start: {
+        Pulsar.ScalableConsumer,
+        :start_link,
+        [name, topic, subscription_name, callback_module, opts]
+      },
+      restart: :permanent,
+      type: :supervisor
+    }
+
+    DynamicSupervisor.start_child(consumer_supervisor, child_spec)
   end
 
   defp start_classic_consumer(
@@ -944,8 +951,6 @@ defmodule Pulsar do
   defp scalable?(children) do
     Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableWatcher end)
   end
-
-  defp scalable_topic?(topic), do: String.starts_with?(topic, "topic://")
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
   defp check_partitioned_topic(_topic, _client, attempts \\ 10, delay_ms \\ 500)
