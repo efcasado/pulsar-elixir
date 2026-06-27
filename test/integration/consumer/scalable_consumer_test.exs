@@ -116,6 +116,47 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
     :ok = Pulsar.stop_consumer(consumer)
   end
 
+  # Producing each message shells out to pulsar-client (a JVM boot), so allow
+  # extra time over the default 60s test timeout.
+  @tag timeout: 120_000
+  test "stream consumers on one subscription split segments and preserve key affinity" do
+    # The stream analogue of a multi-consumer Key_Shared subscription: several
+    # consumers register on the same subscription and the controller distributes
+    # the key-range segments across them, each key staying with one consumer.
+    path = unique_topic("stream-parallel")
+    topic = "topic://" <> path
+    System.create_scalable_topic(path, _segments = 2)
+
+    {:ok, a} = Pulsar.start_consumer(topic, "parallel-sub", @consumer_callback, [name: "a-#{topic}"] ++ stream_options())
+    {:ok, b} = Pulsar.start_consumer(topic, "parallel-sub", @consumer_callback, [name: "b-#{topic}"] ++ stream_options())
+
+    # Once the second consumer joins, the controller rebalances the active
+    # segments so each consumer owns a disjoint, non-empty subset.
+    assert :ok =
+             Utils.wait_for(fn ->
+               a_segs = segment_ids(a)
+               b_segs = segment_ids(b)
+               a_segs != [] and b_segs != [] and Enum.sort(a_segs ++ b_segs) == [0, 1]
+             end)
+
+    # Produce after the split has settled so each key routes cleanly to its
+    # segment's owner (no mid-handover races).
+    messages = for k <- 1..5, n <- 1..2, do: {"key-#{k}", "key-#{k}/#{n}"}
+    System.produce_messages(topic, messages)
+
+    expected = Enum.sort(for {_key, payload} <- messages, do: payload)
+    assert :ok = Utils.wait_for(fn -> Enum.sort(consumed_payloads(a) ++ consumed_payloads(b)) == expected end)
+
+    # Each key was handled by exactly one consumer (the basis of in-order,
+    # parallel, per-key consumption).
+    a_keys = a |> consumed_payloads() |> MapSet.new(&key_of/1)
+    b_keys = b |> consumed_payloads() |> MapSet.new(&key_of/1)
+    assert MapSet.disjoint?(a_keys, b_keys)
+
+    :ok = Pulsar.stop_consumer(a)
+    :ok = Pulsar.stop_consumer(b)
+  end
+
   defp subscription_options do
     [
       client: @client,
@@ -143,6 +184,27 @@ defmodule Pulsar.Integration.Consumer.ScalableConsumerTest do
       end
     end)
   end
+
+  defp segment_ids(consumer) do
+    consumer |> Pulsar.ScalableConsumer.get_segment_groups() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+  end
+
+  # Collects the payloads consumed across every segment of one scalable consumer.
+  defp consumed_payloads(consumer) do
+    consumer
+    |> Pulsar.get_consumers()
+    |> Enum.filter(&is_pid/1)
+    |> Enum.flat_map(fn pid ->
+      try do
+        @consumer_callback.get_messages(pid)
+      catch
+        :exit, _reason -> []
+      end
+    end)
+    |> Enum.map(& &1.payload)
+  end
+
+  defp key_of(payload), do: payload |> String.split("/") |> hd()
 
   defp unique_topic(prefix), do: "public/default/#{prefix}-#{:erlang.unique_integer([:positive])}"
 end
