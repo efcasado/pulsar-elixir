@@ -40,6 +40,7 @@ defmodule Pulsar.Consumer do
     :topic,
     :subscription_name,
     :subscription_type,
+    :ack_type,
     :consumer_id,
     :consumer_name,
     :callback_module,
@@ -140,6 +141,7 @@ defmodule Pulsar.Consumer do
     {refill_threshold, genserver_opts} = Keyword.pop(genserver_opts, :flow_threshold, 50)
     {refill_amount, genserver_opts} = Keyword.pop(genserver_opts, :flow_refill, 50)
     {initial_position, genserver_opts} = Keyword.pop(genserver_opts, :initial_position, :latest)
+    {ack_type, genserver_opts} = Keyword.pop(genserver_opts, :ack_type, :Individual)
     {durable, genserver_opts} = Keyword.pop(genserver_opts, :durable, true)
     {force_create_topic, genserver_opts} = Keyword.pop(genserver_opts, :force_create_topic, true)
     {read_compacted, genserver_opts} = Keyword.pop(genserver_opts, :read_compacted, false)
@@ -174,6 +176,7 @@ defmodule Pulsar.Consumer do
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
+      ack_type: ack_type,
       callback_module: callback_module,
       init_args: init_args,
       flow_initial: initial_permits,
@@ -340,6 +343,7 @@ defmodule Pulsar.Consumer do
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
+      ack_type: ack_type,
       callback_module: callback_module,
       init_args: init_args,
       flow_initial: initial_permits,
@@ -371,6 +375,7 @@ defmodule Pulsar.Consumer do
       topic: topic,
       subscription_name: subscription_name,
       subscription_type: subscription_type,
+      ack_type: ack_type,
       callback_module: callback_module,
       flow_initial: initial_permits,
       flow_threshold: refill_threshold,
@@ -552,6 +557,13 @@ defmodule Pulsar.Consumer do
     {:stop, :broker_close_requested, state}
   end
 
+  # Reaching the end of a (terminated or sealed) topic is informational: there
+  # are simply no more messages to deliver. Keep running.
+  def handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state) do
+    Logger.debug("Reached end of topic for #{state.topic}")
+    {:noreply, state}
+  end
+
   def handle_info({:broker_message, message_data}, state) do
     {messages, new_state} =
       case message_data do
@@ -720,6 +732,33 @@ defmodule Pulsar.Consumer do
     }
   end
 
+  # Cumulative ack targets a single message id ("everything up to and including
+  # this"); individual acks the given ids. Cumulative is only valid on
+  # Exclusive/Failover subscriptions - the broker rejects it otherwise.
+  #
+  # The target is the greatest id by Pulsar's ordering (ledger, entry, batch),
+  # not the last list element - chunked messages and batched manual acks can pass
+  # ids in any order.
+  defp build_ack(%__MODULE__{ack_type: :Cumulative} = state, message_ids) do
+    %Binary.CommandAck{
+      consumer_id: state.consumer_id,
+      ack_type: :Cumulative,
+      message_id: [highest_message_id(message_ids)]
+    }
+  end
+
+  defp build_ack(state, message_ids) do
+    %Binary.CommandAck{
+      consumer_id: state.consumer_id,
+      ack_type: :Individual,
+      message_id: message_ids
+    }
+  end
+
+  defp highest_message_id(message_ids) do
+    Enum.max_by(message_ids, &{&1.ledgerId, &1.entryId, &1.batch_index})
+  end
+
   defp process_single_message(state, %Pulsar.Message{} = message, callback_state, nacked_acc) do
     # Call callback for ALL messages (including incomplete chunks)
     result = state.callback_module.handle_message(message, callback_state)
@@ -731,13 +770,7 @@ defmodule Pulsar.Consumer do
     case result do
       {:ok, new_callback_state} ->
         # ACK all message IDs (for chunked messages, this ACKs all chunks)
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: message_ids_list
-        }
-
-        :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+        :ok = Pulsar.Broker.send_command(state.broker_pid, build_ack(state, message_ids_list))
         {new_callback_state, nacked_acc}
 
       {:noreply, new_callback_state} ->
@@ -793,13 +826,7 @@ defmodule Pulsar.Consumer do
   end
 
   def handle_call({:ack, message_ids}, _from, state) when is_list(message_ids) do
-    ack_command = %Binary.CommandAck{
-      consumer_id: state.consumer_id,
-      ack_type: :Individual,
-      message_id: message_ids
-    }
-
-    :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+    :ok = Pulsar.Broker.send_command(state.broker_pid, build_ack(state, message_ids))
     {:reply, :ok, state}
   end
 

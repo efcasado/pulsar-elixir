@@ -327,6 +327,53 @@ defmodule Pulsar do
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
     name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
 
+    # `:consumer_type` selects the consumer model, independent of the topic name:
+    #   :classic (default) - regular/partitioned consumer
+    #   :queue             - scalable topic, fan out over all segments
+    #   :stream            - scalable topic, ordered, controller-assigned segments
+    case Keyword.get(opts, :consumer_type, :classic) do
+      :classic ->
+        start_classic_consumer(
+          topic,
+          subscription_name,
+          subscription_type,
+          callback_module,
+          name,
+          consumer_supervisor,
+          client,
+          opts
+        )
+
+      consumer_type when consumer_type in [:queue, :stream] ->
+        start_scalable_consumer(topic, subscription_name, callback_module, name, consumer_supervisor, opts)
+    end
+  end
+
+  defp start_scalable_consumer(topic, subscription_name, callback_module, name, consumer_supervisor, opts) do
+    child_spec = %{
+      id: name,
+      start: {
+        Pulsar.ScalableConsumer,
+        :start_link,
+        [name, topic, subscription_name, callback_module, opts]
+      },
+      restart: :permanent,
+      type: :supervisor
+    }
+
+    DynamicSupervisor.start_child(consumer_supervisor, child_spec)
+  end
+
+  defp start_classic_consumer(
+         topic,
+         subscription_name,
+         subscription_type,
+         callback_module,
+         name,
+         consumer_supervisor,
+         client,
+         opts
+       ) do
     case check_partitioned_topic(topic, client) do
       {:ok, 0} ->
         # Regular topic - create single consumer group
@@ -451,6 +498,11 @@ defmodule Pulsar do
     cond do
       children == [] ->
         []
+
+      # ScalableConsumer (queue or stream) - has a ScalableWatcher worker driving
+      # the per-segment consumer groups.
+      scalable?(children) ->
+        Pulsar.ScalableConsumer.get_consumers(group_pid)
 
       # PartitionedConsumer - has ConsumerGroup supervisors as children
       # (alongside a partition discovery worker).
@@ -894,6 +946,10 @@ defmodule Pulsar do
   # partition discovery worker that also runs under the partitioned supervisor.
   defp partitioned?(children) do
     Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
+  end
+
+  defp scalable?(children) do
+    Enum.any?(children, fn {id, _pid, _type, _modules} -> id == Pulsar.ScalableWatcher end)
   end
 
   @spec check_partitioned_topic(String.t(), atom()) :: {:ok, integer()} | {:error, term()}
