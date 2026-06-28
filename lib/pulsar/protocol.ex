@@ -146,6 +146,10 @@ defmodule Pulsar.Protocol do
 
   defp command_to_type(%Binary.CommandRedeliverUnacknowledgedMessages{}), do: :REDELIVER_UNACKNOWLEDGED_MESSAGES
 
+  defp command_to_type(%Binary.CommandScalableTopicLookup{}), do: :SCALABLE_TOPIC_LOOKUP
+  defp command_to_type(%Binary.CommandScalableTopicClose{}), do: :SCALABLE_TOPIC_CLOSE
+  defp command_to_type(%Binary.CommandScalableTopicSubscribe{}), do: :SCALABLE_TOPIC_SUBSCRIBE
+
   # defp command_to_type(command) do
   #   command
   #   |> Map.get(:__struct__)
@@ -190,6 +194,34 @@ defmodule Pulsar.Protocol do
 
   defp field_name_from_type(:REDELIVER_UNACKNOWLEDGED_MESSAGES) do
     :redeliverUnacknowledgedMessages
+  end
+
+  defp field_name_from_type(:REACHED_END_OF_TOPIC) do
+    :reachedEndOfTopic
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_LOOKUP) do
+    :scalableTopicLookup
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_CLOSE) do
+    :scalableTopicClose
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_UPDATE) do
+    :scalableTopicUpdate
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_SUBSCRIBE) do
+    :scalableTopicSubscribe
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_SUBSCRIBE_RESPONSE) do
+    :scalableTopicSubscribeResponse
+  end
+
+  defp field_name_from_type(:SCALABLE_TOPIC_ASSIGNMENT_UPDATE) do
+    :scalableTopicAssignmentUpdate
   end
 
   defp field_name_from_type(type) do

@@ -23,6 +23,7 @@ defmodule Pulsar.MixProject do
         main: "Pulsar",
         extras: [
           "README.md",
+          "docs/consumers.md",
           "docs/chunking.md",
           "docs/schemas.md",
           "docs/reader.md"
