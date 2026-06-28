@@ -71,6 +71,11 @@ config :pulsar,
   ]
 ```
 
+> [!TIP]
+> Consumers support both classic and scalable (Pulsar 5) topics, selected with the
+> `consumer_type` option. See the [Consumers guide](docs/consumers.md) for the difference
+> between classic, queue, and stream consumers.
+
 Sending a message using the configured producer can be done as follows:
 
 ```elixir
@@ -183,6 +188,9 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Consumer  | Seek                               | ✅        |
 | Consumer  | Subscription types                 | ✅        |
 | Consumer  | Subscription modes                 | ✅        |
+| Consumer  | Scalable topics (queue)            | ✅        |
+| Consumer  | Scalable topics (stream)           | ✅        |
+| Consumer  | Scalable topics (checkpoint)       | ❌        |
 | Consumer  | Retry letter topic                 | ❌        |
 | Consumer  | Dead letter topic                  | ✅        |
 | Consumer  | Compression                        | ✅        |

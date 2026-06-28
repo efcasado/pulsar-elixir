@@ -641,7 +641,6 @@ defmodule Pulsar.Consumer do
     {:stop, :broker_crashed, state}
   end
 
-  # Handle other info messages by delegating to callback module
   @impl true
   def handle_info(message, state) do
     case state.callback_module.handle_info(message, state.callback_state) do

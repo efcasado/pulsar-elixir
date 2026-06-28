@@ -303,8 +303,7 @@ defmodule Pulsar.Broker do
     # Fail all pending requests immediately to prevent timeouts
     broker = fail_all_pending_requests(broker, :connection_lost)
 
-    # Restart all consumers and producers by exiting their processes
-    # The supervision trees will automatically restart them
+    # Consumers and producers restart automatically via their supervision trees.
     restart_consumers_and_producers(broker)
 
     actions = [{{:timeout, :reconnect}, wait, nil}]

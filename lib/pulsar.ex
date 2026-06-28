@@ -32,14 +32,19 @@ defmodule Pulsar do
           │   │   └── C1 (with DLQ policy)
           │   │       └── DLQ-P1 (linked process)
           │   │
-          │   └── PartitionedConsumer: my-partitioned-topic
-          │       ├── ConsumerGroup partition-0
-          │       │   └── C2
-          │       ├── ConsumerGroup partition-1
-          │       │   └── C3
-          │       ├── ConsumerGroup partition-2
+          │   ├── PartitionedConsumer: my-partitioned-topic
+          │   │   ├── ConsumerGroup partition-0
+          │   │   │   └── C2
+          │   │   ├── ConsumerGroup partition-1
+          │   │   │   └── C3
+          │   │   └── PartitionDiscovery (polls for newly added partitions)
+          │   │
+          │   └── ScalableConsumer: my-scalable-topic
+          │       ├── ConsumerGroup segment-0
           │       │   └── C4
-          │       └── PartitionDiscovery (polls for newly added partitions)
+          │       ├── ConsumerGroup segment-1
+          │       │   └── C5
+          │       └── ScalableWatcher (reconciles segments as the topology changes)
           │
           └── ProducerSupervisor
               ├── ProducerGroup: my-topic
@@ -58,11 +63,13 @@ defmodule Pulsar do
 
   Both consumers and producers are managed through supervised processes:
 
-  **Consumers:**
-  - **Regular topics**: Consumer groups with configurable process count
-  - **Partitioned topics**: PartitionedConsumer supervisor managing consumer groups per partition
+  **Consumers:** (selected with the `:consumer_type` option)
+  - **Classic topics** (`:classic`, default): a consumer group per topic, or a
+    PartitionedConsumer managing one group per partition
+  - **Scalable topics** (`:queue` / `:stream`): a ScalableConsumer with a ScalableWatcher
+    that fans out one consumer group per segment and reconciles them as the topology changes
   - The `start_consumer/4` function returns a single PID that can be registered with a name,
-    regardless of partitioning or process count
+    regardless of topic kind or process count
 
   **Producers:**
   - **Regular topics**: Producer groups with configurable process count
