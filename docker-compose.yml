@@ -21,7 +21,7 @@ x-broker: &broker
 
 services:
   zookeeper:
-    image: apachepulsar/pulsar:4.2.2
+    image: apachepulsar/pulsar:4.2.3
     container_name: zookeeper
     restart: on-failure
     environment:
@@ -41,7 +41,7 @@ services:
       retries: 30
 
   pulsar-init:
-    image: apachepulsar/pulsar:4.2.2
+    image: apachepulsar/pulsar:4.2.3
     container_name: pulsar-init
     command:
       - bash
@@ -58,7 +58,7 @@ services:
         condition: service_healthy
 
   bookie:
-    image: apachepulsar/pulsar:4.2.2
+    image: apachepulsar/pulsar:4.2.3
     container_name: bookie
     restart: on-failure
     environment:
@@ -84,7 +84,7 @@ services:
 
   broker1:
     <<: *broker
-    image: apachepulsar/pulsar:4.2.2
+    image: apachepulsar/pulsar:4.2.3
     container_name: broker1
     hostname: broker1
     environment:
@@ -102,7 +102,7 @@ services:
 
   broker2:
     <<: *broker
-    image: apachepulsar/pulsar:4.2.2
+    image: apachepulsar/pulsar:4.2.3
     container_name: broker2
     hostname: broker2
     environment:
