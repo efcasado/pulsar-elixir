@@ -37,6 +37,8 @@ defmodule Pulsar.Consumer.Callback do
   - `handle_call/3` - Handle synchronous calls (default: `{:reply, {:error, :not_implemented}, state}`)
   - `handle_cast/2` - Handle asynchronous casts (default: `{:noreply, state}`)
   - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
+  - `became_active/1` - Called when this consumer becomes the active consumer of a `:Failover` subscription (default: `{:noreply, state}`)
+  - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:Failover` subscription (default: `{:noreply, state}`)
 
   ## Message Format
 
@@ -181,6 +183,14 @@ defmodule Pulsar.Consumer.Callback do
   - `:ok` - Cleanup completed successfully
   - Any other value is ignored
 
+  ## Failover Consumer Events
+
+  For `:Failover` subscriptions, `became_active/1` and `became_passive/1`
+  notify a consumer when the broker promotes it to (or demotes it from) the
+  active role. Useful for metrics/alerting or warming up state before a
+  takeover; not meaningful for other subscription types. A passive consumer
+  never receives messages, so there is nothing to pause or resume.
+
   ## Manual Acknowledgment
 
   When you return `{:noreply, state}` from `handle_message/2`, the message will NOT be automatically
@@ -222,7 +232,13 @@ defmodule Pulsar.Consumer.Callback do
               | {:noreply, state}
               | {:stop, state}
 
-  @optional_callbacks init: 1, terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2
+  @optional_callbacks init: 1,
+                      terminate: 2,
+                      handle_call: 3,
+                      handle_cast: 2,
+                      handle_info: 2,
+                      became_active: 1,
+                      became_passive: 1
   @callback terminate(reason, state) :: term()
   @callback handle_call(term(), GenServer.from(), state) ::
               {:reply, term(), state}
@@ -236,6 +252,14 @@ defmodule Pulsar.Consumer.Callback do
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
   @callback handle_info(term(), state) ::
+              {:noreply, state}
+              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
+              | {:stop, term(), state}
+  @callback became_active(state) ::
+              {:noreply, state}
+              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
+              | {:stop, term(), state}
+  @callback became_passive(state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
@@ -261,7 +285,21 @@ defmodule Pulsar.Consumer.Callback do
         {:noreply, state}
       end
 
-      defoverridable init: 1, terminate: 2, handle_call: 3, handle_cast: 2, handle_info: 2
+      def became_active(state) do
+        {:noreply, state}
+      end
+
+      def became_passive(state) do
+        {:noreply, state}
+      end
+
+      defoverridable init: 1,
+                     terminate: 2,
+                     handle_call: 3,
+                     handle_cast: 2,
+                     handle_info: 2,
+                     became_active: 1,
+                     became_passive: 1
     end
   end
 end

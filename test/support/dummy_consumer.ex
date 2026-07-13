@@ -9,7 +9,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
       send(notify_pid, {:consumer_ready, self()})
     end
 
-    {:ok, %{messages: [], count: 0, fail_all: fail_all}}
+    {:ok, %{messages: [], count: 0, fail_all: fail_all, is_active: false}}
   end
 
   def handle_message(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}, state) do
@@ -46,6 +46,22 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     GenServer.call(consumer_pid, :get_state)
   end
 
+  def active?(consumer_pid) do
+    GenServer.call(consumer_pid, :active?)
+  end
+
+  def became_active(state) do
+    {:noreply, %{state | is_active: true}}
+  end
+
+  def became_passive(state) do
+    {:noreply, %{state | is_active: false}}
+  end
+
+  def handle_call(:active?, _from, state) do
+    {:reply, state.is_active, state}
+  end
+
   def handle_call(:get_messages, _from, state) do
     {:reply, Enum.reverse(state.messages), state}
   end
@@ -59,6 +75,6 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   end
 
   def handle_cast(:clear_messages, state) do
-    {:noreply, %{messages: [], count: 0, fail_all: state.fail_all}}
+    {:noreply, %{state | messages: [], count: 0}}
   end
 end
