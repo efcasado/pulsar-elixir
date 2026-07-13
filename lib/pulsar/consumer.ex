@@ -552,6 +552,18 @@ defmodule Pulsar.Consumer do
     {:stop, :broker_close_requested, state}
   end
 
+  def handle_info({:broker_message, %Binary.CommandActiveConsumerChange{is_active: true}}, state) do
+    Logger.info("Consumer #{state.consumer_id} became the active consumer for subscription #{state.subscription_name}")
+
+    dispatch_active_state_change(state, :became_active)
+  end
+
+  def handle_info({:broker_message, %Binary.CommandActiveConsumerChange{is_active: false}}, state) do
+    Logger.info("Consumer #{state.consumer_id} became a passive consumer for subscription #{state.subscription_name}")
+
+    dispatch_active_state_change(state, :became_passive)
+  end
+
   def handle_info({:broker_message, message_data}, state) do
     {messages, new_state} =
       case message_data do
@@ -633,6 +645,19 @@ defmodule Pulsar.Consumer do
   @impl true
   def handle_info(message, state) do
     case state.callback_module.handle_info(message, state.callback_state) do
+      {:noreply, new_callback_state} ->
+        {:noreply, %{state | callback_state: new_callback_state}}
+
+      {:noreply, new_callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
+    end
+  end
+
+  defp dispatch_active_state_change(state, callback_fun) do
+    case apply(state.callback_module, callback_fun, [state.callback_state]) do
       {:noreply, new_callback_state} ->
         {:noreply, %{state | callback_state: new_callback_state}}
 

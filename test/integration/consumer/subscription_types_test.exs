@@ -141,6 +141,12 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
     assert (count1 == expected_count and count2 == 0) or
              (count1 == 0 and count2 == expected_count)
+
+    {active_consumer, passive_consumer} =
+      if count1 == expected_count, do: {consumer1, consumer2}, else: {consumer2, consumer1}
+
+    assert @consumer_callback.active?(active_consumer) == true
+    assert @consumer_callback.active?(passive_consumer) == false
   end
 
   test "exclusive subscription receives all messages", %{expected_count: expected_count} do
