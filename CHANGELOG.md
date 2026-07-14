@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.11.0](https://github.com/efcasado/pulsar-elixir/compare/v2.10.1...v2.11.0) (2026-07-13)
+
+
+### Features
+
+* add became_{active, passive}/1 callbacks for failover consumers ([#155](https://github.com/efcasado/pulsar-elixir/issues/155)) ([07584dd](https://github.com/efcasado/pulsar-elixir/commit/07584dd023d395b502c60a6c04692df34279668a))
+
+
+### Dependencies
+
+* bump actions/cache from 5 to 6 ([#150](https://github.com/efcasado/pulsar-elixir/issues/150)) ([2beb6f1](https://github.com/efcasado/pulsar-elixir/commit/2beb6f114ca0c202e6ad635970901e12c8efe2da))
+* bump apachepulsar/pulsar from 4.2.2 to 4.2.3 ([#154](https://github.com/efcasado/pulsar-elixir/issues/154)) ([7d063eb](https://github.com/efcasado/pulsar-elixir/commit/7d063eb6f2d10b96358a98b82c97cfe8d4c6729e))
+* bump nimble_lz4 from 1.1.0 to 1.2.0 ([#153](https://github.com/efcasado/pulsar-elixir/issues/153)) ([88aa5c2](https://github.com/efcasado/pulsar-elixir/commit/88aa5c290e5f9ce0207ff03297d1288b56d1812e))
+
 ## [2.10.1](https://github.com/efcasado/pulsar-elixir/compare/v2.10.0...v2.10.1) (2026-06-19)
 
 
