@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.11.1](https://github.com/efcasado/pulsar-elixir/compare/v2.11.0...v2.11.1) (2026-07-17)
+
+
+### Dependencies
+
+* bump castore from 1.0.19 to 1.0.20 ([#157](https://github.com/efcasado/pulsar-elixir/issues/157)) ([b60252d](https://github.com/efcasado/pulsar-elixir/commit/b60252d6edba7d12bbfe072443a1d3a09ee6f1ff))
+
 ## [2.11.0](https://github.com/efcasado/pulsar-elixir/compare/v2.10.1...v2.11.0) (2026-07-13)
 
 
