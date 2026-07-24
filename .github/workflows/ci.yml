@@ -84,7 +84,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [client, consumer, producer, reader]
+        include:
+          - suite: unit
+            args: --exclude integration
+          - suite: client
+            args: test/integration/client --max-cases 2
+          - suite: consumer
+            args: test/integration/consumer --max-cases 2
+          - suite: producer
+            args: test/integration/producer --max-cases 2
+          - suite: reader
+            args: test/integration/reader --max-cases 2
 
     steps:
     - name: Checkout code
@@ -131,7 +141,7 @@ jobs:
     - name: Run ${{ matrix.suite }} tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: mix coveralls.github test/integration/${{ matrix.suite }} --parallel --max-cases 2
+      run: mix coveralls.github ${{ matrix.args }} --parallel
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v3.0.0
