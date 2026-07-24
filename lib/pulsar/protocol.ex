@@ -30,6 +30,9 @@ defmodule Pulsar.Protocol do
                      {Map.fetch!(@oneof_by_tag, tag).type, type}
                    end)
 
+  @magic_crc32c 0x0E01
+  @magic_broker_entry_metadata 0x0E02
+
   def latest_version do
     %Binary.ProtocolVersion{}
     |> Map.keys()
@@ -80,7 +83,7 @@ defmodule Pulsar.Protocol do
     checksum = :crc32cer.nif(checksum_data)
 
     message_part = <<
-      0x0E01::16,
+      @magic_crc32c::16,
       checksum::32,
       metadata_size::32,
       metadata_encoded::binary,
@@ -98,11 +101,29 @@ defmodule Pulsar.Protocol do
     >>
   end
 
+  @doc """
+  Splits a stream of bytes into complete frames and decodes them.
+
+  Frames are length-prefixed, so reassembling one that spans TCP packets needs
+  no state beyond the leftover bytes returned alongside the commands.
+  """
+  @spec decode_stream(binary()) :: {[term()], binary()}
+  def decode_stream(buffer), do: decode_stream(buffer, [])
+
+  defp decode_stream(<<total_size::32, rest::binary>> = buffer, commands) when byte_size(rest) >= total_size do
+    frame_size = total_size + 4
+    <<frame::bytes-size(^frame_size), tail::binary>> = buffer
+
+    decode_stream(tail, [decode(frame) | commands])
+  end
+
+  defp decode_stream(buffer, commands), do: {Enum.reverse(commands), buffer}
+
   # Message command with broker entry metadata
   def decode(
-        <<_total_size::32, size::32, command::bytes-size(size), 0x0E02::16, broker_metadata_size::32,
-          broker_metadata::bytes-size(broker_metadata_size), 0x0E01::16, _checksum::32, metadata_size::32,
-          metadata::bytes-size(metadata_size), payload::binary>>
+        <<_total_size::32, size::32, command::bytes-size(size), @magic_broker_entry_metadata::16,
+          broker_metadata_size::32, broker_metadata::bytes-size(broker_metadata_size), @magic_crc32c::16, _checksum::32,
+          metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>
       ) do
     # Decode broker entry metadata
     broker_entry_metadata = Binary.BrokerEntryMetadata.decode(broker_metadata)
@@ -120,7 +141,7 @@ defmodule Pulsar.Protocol do
 
   # Message command without broker entry metadata (original format)
   def decode(
-        <<_total_size::32, size::32, command::bytes-size(size), 0x0E01::16, _checksum::32, metadata_size::32,
+        <<_total_size::32, size::32, command::bytes-size(size), @magic_crc32c::16, _checksum::32, metadata_size::32,
           metadata::bytes-size(metadata_size), payload::binary>>
       ) do
     # message command
