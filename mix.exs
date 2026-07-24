@@ -42,7 +42,9 @@ defmodule Pulsar.MixProject do
         "coveralls.post": :test,
         "coveralls.html": :test,
         "coveralls.cobertura": :test,
-        "coveralls.github": :test
+        "coveralls.github": :test,
+        "test.unit": :test,
+        "test.integration": :test
       ]
     ]
   end
@@ -83,7 +85,9 @@ defmodule Pulsar.MixProject do
 
   defp aliases do
     [
-      test: ["test"]
+      test: ["test"],
+      "test.unit": ["test --exclude integration"],
+      "test.integration": ["test --only integration"]
     ]
   end
 
