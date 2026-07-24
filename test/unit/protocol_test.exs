@@ -3,38 +3,10 @@ defmodule Pulsar.ProtocolTest do
 
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Protocol.Binary.Pulsar.Proto.BaseCommand
 
   @magic_message 0x0E01
   @magic_broker_entry 0x0E02
-
-  # Every command `Pulsar.Protocol.encode/1` knows how to frame, with its
-  # proto2 required fields populated.
-  @client_commands [
-    {:PING, :ping, %Binary.CommandPing{}},
-    {:PONG, :pong, %Binary.CommandPong{}},
-    {:CONNECT, :connect, %Binary.CommandConnect{client_version: "pulsar-elixir", protocol_version: 21}},
-    {:SUBSCRIBE, :subscribe,
-     %Binary.CommandSubscribe{
-       topic: "persistent://public/default/t",
-       subscription: "sub",
-       subType: :Shared,
-       consumer_id: 1,
-       request_id: 2
-     }},
-    {:PRODUCER, :producer,
-     %Binary.CommandProducer{topic: "persistent://public/default/t", producer_id: 1, request_id: 2}},
-    {:SEND, :send, %Binary.CommandSend{producer_id: 1, sequence_id: 2}},
-    {:FLOW, :flow, %Binary.CommandFlow{consumer_id: 1, messagePermits: 100}},
-    {:LOOKUP, :lookupTopic, %Binary.CommandLookupTopic{topic: "persistent://public/default/t", request_id: 1}},
-    {:PARTITIONED_METADATA, :partitionMetadata,
-     %Binary.CommandPartitionedTopicMetadata{topic: "persistent://public/default/t", request_id: 1}},
-    {:ACK, :ack, %Binary.CommandAck{consumer_id: 1, ack_type: :Individual}},
-    {:CLOSE_CONSUMER, :close_consumer, %Binary.CommandCloseConsumer{consumer_id: 1, request_id: 2}},
-    {:CLOSE_PRODUCER, :close_producer, %Binary.CommandCloseProducer{producer_id: 1, request_id: 2}},
-    {:SEEK, :seek, %Binary.CommandSeek{consumer_id: 1, request_id: 2}},
-    {:REDELIVER_UNACKNOWLEDGED_MESSAGES, :redeliverUnacknowledgedMessages,
-     %Binary.CommandRedeliverUnacknowledgedMessages{consumer_id: 1}}
-  ]
 
   describe "latest_version/0" do
     test "returns the highest protocol version declared in the schema" do
@@ -64,24 +36,28 @@ defmodule Pulsar.ProtocolTest do
       assert <<total_size::32, command_size::32, command::bytes-size(command_size)>> = frame
       assert total_size == command_size + 4
       assert byte_size(frame) == total_size + 4
-      assert %Binary.BaseCommand{type: :PING} = Binary.BaseCommand.decode(command)
+      assert %BaseCommand{type: :PING} = BaseCommand.decode(command)
     end
 
     test "total_size never counts its own 4 bytes" do
-      for {_type, _field, command} <- @client_commands do
-        frame = Protocol.encode(command)
+      for type <- schema_command_types() do
+        {_field, module} = schema_oneof_for(type)
+        frame = Protocol.encode(sample_command(module))
         <<total_size::32, _rest::binary>> = frame
 
         assert byte_size(frame) - 4 == total_size,
-               "total_size must describe everything after the size prefix, for #{inspect(command.__struct__)}"
+               "total_size must describe everything after the size prefix, for #{inspect(module)}"
       end
     end
 
     test "sets the BaseCommand type and populates the matching oneof field" do
-      for {type, field, command} <- @client_commands do
+      for type <- schema_command_types() do
+        {field, module} = schema_oneof_for(type)
+        command = sample_command(module)
+
         <<_total_size::32, command_size::32, encoded::bytes-size(command_size)>> = Protocol.encode(command)
 
-        base_command = Binary.BaseCommand.decode(encoded)
+        base_command = BaseCommand.decode(encoded)
 
         assert base_command.type == type
         assert Map.fetch!(base_command, field) == command
@@ -90,9 +66,22 @@ defmodule Pulsar.ProtocolTest do
   end
 
   describe "decode/1 of command-only frames" do
-    test "round-trips every command the client can send" do
-      for {_type, _field, command} <- @client_commands do
-        assert Protocol.decode(Protocol.encode(command)) == command
+    test "round-trips every command type declared in the schema" do
+      types = schema_command_types()
+
+      # Guards against the reflection silently yielding nothing, which would
+      # make the loop below vacuously true.
+      refute Enum.empty?(types)
+
+      for type <- types do
+        {_field, module} = schema_oneof_for(type)
+        command = sample_command(module)
+
+        # Pairing a command with its type and oneof field runs for every frame
+        # in both directions. Raising here kills the connection along with all
+        # of its consumers and producers.
+        assert Protocol.decode(Protocol.encode(command)) == command,
+               "expected #{type} to round-trip as a #{inspect(module)}"
       end
     end
 
@@ -120,7 +109,7 @@ defmodule Pulsar.ProtocolTest do
                metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>> = frame
 
       assert byte_size(frame) == total_size + 4
-      assert %Binary.BaseCommand{type: :SEND} = Binary.BaseCommand.decode(command)
+      assert %BaseCommand{type: :SEND} = BaseCommand.decode(command)
       assert Binary.MessageMetadata.decode(metadata) == ctx.metadata
       assert payload == ctx.payload
     end
@@ -242,17 +231,58 @@ defmodule Pulsar.ProtocolTest do
   ## Helpers
 
   defp command_frame(type, field, command) do
-    encoded =
-      %Binary.BaseCommand{type: type}
-      |> Map.put(field, command)
-      |> Binary.BaseCommand.encode()
+    %BaseCommand{type: type}
+    |> Map.put(field, command)
+    |> frame_base_command()
+  end
 
+  defp frame_base_command(base_command) do
+    encoded = BaseCommand.encode(base_command)
     size = byte_size(encoded)
+
     <<size + 4::32, size::32, encoded::binary>>
   end
 
+  # Every command type the generated schema knows about, independent of what
+  # Pulsar.Protocol chooses to map.
+  defp schema_command_types do
+    BaseCommand.Type.__message_props__().field_props
+    |> Map.values()
+    |> Enum.map(& &1.name_atom)
+  end
+
+  # The BaseCommand oneof entry for a command type, as {field_name, module}.
+  defp schema_oneof_for(type) do
+    tag = BaseCommand.Type.value(type)
+    props = Map.fetch!(BaseCommand.__message_props__().field_props, tag)
+
+    {props.name_atom, props.type}
+  end
+
+  # Builds a message with only its proto2 required fields populated, which is
+  # the minimum protobuf will encode without complaining.
+  defp sample_command(module) do
+    fields =
+      for {_tag, props} <- module.__message_props__().field_props,
+          props.required?,
+          into: %{},
+          do: {props.name_atom, sample_value(props)}
+
+    struct!(module, fields)
+  end
+
+  defp sample_value(%{enum?: true, type: {:enum, enum}}) do
+    enum.__message_props__().field_props |> Map.values() |> List.first() |> Map.fetch!(:name_atom)
+  end
+
+  defp sample_value(%{embedded?: true, type: module}), do: sample_command(module)
+  defp sample_value(%{type: type}) when type in [:string, :bytes], do: "x"
+  defp sample_value(%{type: :bool}), do: true
+  defp sample_value(%{type: type}) when type in [:double, :float], do: 1.0
+  defp sample_value(_props), do: 1
+
   defp message_frame(command, metadata, payload, opts \\ []) do
-    command_binary = Binary.BaseCommand.encode(%Binary.BaseCommand{type: :MESSAGE, message: command})
+    command_binary = BaseCommand.encode(%BaseCommand{type: :MESSAGE, message: command})
 
     command_size = byte_size(command_binary)
 

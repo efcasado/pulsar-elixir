@@ -9,6 +9,27 @@ defmodule Pulsar.Protocol do
   Helper module to simplify working with the Pulsar binary protocol.
   """
 
+  # A command's field in the BaseCommand oneof carries the same protobuf tag as
+  # its entry in the BaseCommand.Type enum, so both directions of the mapping
+  # come from the generated schema. Pairing by tag also covers the camelCase
+  # fields (:authChallenge, :reachedEndOfTopic, ...), which cannot be derived
+  # from the type name.
+  @type_by_tag Map.new(Binary.BaseCommand.Type.__message_props__().field_props, fn {tag, props} ->
+                 {tag, props.name_atom}
+               end)
+
+  @oneof_by_tag Map.new(Binary.BaseCommand.__message_props__().field_props, fn {tag, props} ->
+                  {tag, props}
+                end)
+
+  @field_by_type (for {tag, type} <- @type_by_tag, into: %{} do
+                    {type, Map.fetch!(@oneof_by_tag, tag).name_atom}
+                  end)
+
+  @type_by_module (for {tag, type} <- @type_by_tag, into: %{} do
+                     {Map.fetch!(@oneof_by_tag, tag).type, type}
+                   end)
+
   def latest_version do
     %Binary.ProtocolVersion{}
     |> Map.keys()
@@ -129,30 +150,9 @@ defmodule Pulsar.Protocol do
     other
   end
 
-  # only required for client-sent commands
-  defp command_to_type(%Binary.CommandConnect{}), do: :CONNECT
-  defp command_to_type(%Binary.CommandPing{}), do: :PING
-  defp command_to_type(%Binary.CommandPong{}), do: :PONG
-  defp command_to_type(%Binary.CommandSubscribe{}), do: :SUBSCRIBE
-  defp command_to_type(%Binary.CommandProducer{}), do: :PRODUCER
-  defp command_to_type(%Binary.CommandSend{}), do: :SEND
-  defp command_to_type(%Binary.CommandFlow{}), do: :FLOW
-  defp command_to_type(%Binary.CommandLookupTopic{}), do: :LOOKUP
-  defp command_to_type(%Binary.CommandPartitionedTopicMetadata{}), do: :PARTITIONED_METADATA
-  defp command_to_type(%Binary.CommandAck{}), do: :ACK
-  defp command_to_type(%Binary.CommandCloseConsumer{}), do: :CLOSE_CONSUMER
-  defp command_to_type(%Binary.CommandCloseProducer{}), do: :CLOSE_PRODUCER
-  defp command_to_type(%Binary.CommandSeek{}), do: :SEEK
-
-  defp command_to_type(%Binary.CommandRedeliverUnacknowledgedMessages{}), do: :REDELIVER_UNACKNOWLEDGED_MESSAGES
-
-  # defp command_to_type(command) do
-  #   command
-  #   |> Map.get(:__struct__)
-  #   |> Atom.to_string
-  #   |> String.split(".")
-  #   |> Enum.at(-1)
-  # end
+  defp command_to_type(%module{}) do
+    Map.fetch!(@type_by_module, module)
+  end
 
   defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     field_name = field_name_from_type(type)
@@ -160,43 +160,8 @@ defmodule Pulsar.Protocol do
     Map.fetch!(base_command, field_name)
   end
 
-  defp field_name_from_type(:LOOKUP) do
-    :lookupTopic
-  end
-
-  defp field_name_from_type(:LOOKUP_RESPONSE) do
-    :lookupTopicResponse
-  end
-
-  defp field_name_from_type(:PARTITIONED_METADATA) do
-    :partitionMetadata
-  end
-
-  defp field_name_from_type(:PARTITIONED_METADATA_RESPONSE) do
-    :partitionMetadataResponse
-  end
-
-  defp field_name_from_type(:ACK_RESPONSE) do
-    :ackResponse
-  end
-
-  defp field_name_from_type(:SEND_RECEIPT) do
-    :send_receipt
-  end
-
-  defp field_name_from_type(:SEND_ERROR) do
-    :send_error
-  end
-
-  defp field_name_from_type(:REDELIVER_UNACKNOWLEDGED_MESSAGES) do
-    :redeliverUnacknowledgedMessages
-  end
-
   defp field_name_from_type(type) do
-    type
-    |> Atom.to_string()
-    |> String.downcase()
-    |> String.to_existing_atom()
+    Map.fetch!(@field_by_type, type)
   end
 
   @spec to_key_value_list(map() | nil) :: [Binary.KeyValue.t()]
