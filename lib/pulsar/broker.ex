@@ -37,7 +37,6 @@ defmodule Pulsar.Broker do
     :conn_timeout,
     :auth,
     :buffer,
-    :pending_bytes,
     :requests,
     :actions,
     # Broker-specific state
@@ -56,12 +55,21 @@ defmodule Pulsar.Broker do
           conn_timeout: integer(),
           auth: list(),
           buffer: binary(),
-          pending_bytes: integer(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
           producers: %{integer() => {pid(), reference()}}
         }
+
+  # Scoped to a single TCP connection: a frame cut in half by a dropped socket
+  # must not be prepended to the first bytes read from the next one.
+  @connection_fields %{
+    socket: nil,
+    buffer: <<>>,
+    requests: %{},
+    consumers: %{},
+    producers: %{}
+  }
 
   ## Public API
 
@@ -256,7 +264,6 @@ defmodule Pulsar.Broker do
       auth: auth,
       actions: post_actions,
       buffer: <<>>,
-      pending_bytes: 0,
       requests: %{},
       consumers: %{},
       producers: %{},
@@ -279,21 +286,14 @@ defmodule Pulsar.Broker do
     close_socket(broker)
 
     # Fail all pending requests immediately to prevent timeouts
-    broker = fail_all_pending_requests(broker, :connection_lost)
+    fail_all_pending_requests(broker, :connection_lost)
 
     # Restart all consumers and producers by exiting their processes
     # The supervision trees will automatically restart them
     restart_consumers_and_producers(broker)
 
     actions = [{{:timeout, :reconnect}, wait, nil}]
-    # Clear consumers and producers since we've restarted them
-    cleared_broker = %{
-      broker
-      | socket: nil,
-        prev_backoff: wait,
-        consumers: %{},
-        producers: %{}
-    }
+    cleared_broker = %{reset_connection_state(broker) | prev_backoff: wait}
 
     {:keep_state, cleared_broker, actions}
   end
@@ -341,7 +341,8 @@ defmodule Pulsar.Broker do
       {:ok, socket} ->
         Logger.debug("Connection succeeded")
         actions = [{:next_event, :internal, :handshake}]
-        {:next_state, :connected, %{broker | socket: socket, prev_backoff: 0}, actions}
+        broker = %{reset_connection_state(broker) | socket: socket, prev_backoff: 0}
+        {:next_state, :connected, broker, actions}
 
       {:error, error} ->
         wait = next_backoff(broker)
@@ -866,8 +867,10 @@ defmodule Pulsar.Broker do
     Enum.each(broker.requests, fn {_request_id, {from, _timestamp}} ->
       :gen_statem.reply(from, {:error, reason})
     end)
+  end
 
-    %{broker | requests: %{}}
+  defp reset_connection_state(broker) do
+    struct!(broker, @connection_fields)
   end
 
   defp send_command_internal(command, broker) do
@@ -912,50 +915,9 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_data(data, broker) do
-    parse_data(data, broker.buffer, broker.pending_bytes, broker, [])
-  end
+    {commands, buffer} = Pulsar.Protocol.decode_stream(broker.buffer <> data)
 
-  defp parse_data(<<>>, buffer, pending_bytes, broker, commands) do
-    new_broker = %{broker | buffer: buffer, pending_bytes: pending_bytes}
-    {Enum.reverse(commands), new_broker}
-  end
-
-  defp parse_data(data, buffer, pending_bytes, broker, commands) when pending_bytes > 0 do
-    case data do
-      <<missing_chunk::bytes-size(^pending_bytes), rest::binary>> ->
-        command = Pulsar.Protocol.decode(buffer <> missing_chunk)
-        parse_data(rest, <<>>, 0, broker, [command | commands])
-
-      missing_chunk ->
-        new_buffer = buffer <> missing_chunk
-        new_pending = pending_bytes - byte_size(missing_chunk)
-        parse_data(<<>>, new_buffer, new_pending, broker, commands)
-    end
-  end
-
-  defp parse_data(data, buffer, 0, broker, commands) when byte_size(buffer) > 0 do
-    parse_data(buffer <> data, <<>>, 0, broker, commands)
-  end
-
-  defp parse_data(data, <<>>, 0, broker, commands) when byte_size(data) < 4 do
-    parse_data(<<>>, data, 0, broker, commands)
-  end
-
-  defp parse_data(<<total_size::32, _rest::binary>> = data, <<>>, 0, broker, commands)
-       when total_size + 4 > byte_size(data) do
-    new_pending = total_size + 4 - byte_size(data)
-    parse_data(<<>>, data, new_pending, broker, commands)
-  end
-
-  defp parse_data(
-         <<total_size::32, size::32, command_data::bytes-size(total_size - 4), rest::binary>>,
-         <<>>,
-         0,
-         broker,
-         commands
-       ) do
-    command = Pulsar.Protocol.decode(<<total_size::32, size::32, command_data::bytes>>)
-    parse_data(rest, <<>>, 0, broker, [command | commands])
+    {commands, %{broker | buffer: buffer}}
   end
 
   defp next_backoff(%__MODULE__{prev_backoff: 0}) do

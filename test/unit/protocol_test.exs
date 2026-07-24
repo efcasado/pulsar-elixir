@@ -77,9 +77,6 @@ defmodule Pulsar.ProtocolTest do
         {_field, module} = schema_oneof_for(type)
         command = sample_command(module)
 
-        # Pairing a command with its type and oneof field runs for every frame
-        # in both directions. Raising here kills the connection along with all
-        # of its consumers and producers.
         assert Protocol.decode(Protocol.encode(command)) == command,
                "expected #{type} to round-trip as a #{inspect(module)}"
       end
@@ -143,6 +140,82 @@ defmodule Pulsar.ProtocolTest do
       frame = Protocol.encode_message(ctx.command, ctx.metadata, payload)
 
       assert {_command, _metadata, ^payload, nil} = Protocol.decode(frame)
+    end
+  end
+
+  describe "decode_stream/1" do
+    setup do
+      %{ping: Protocol.encode(%Binary.CommandPing{}), pong: Protocol.encode(%Binary.CommandPong{})}
+    end
+
+    test "returns nothing for an empty buffer" do
+      assert Protocol.decode_stream(<<>>) == {[], <<>>}
+    end
+
+    test "buffers a fragment shorter than the length prefix", ctx do
+      fragment = binary_part(ctx.ping, 0, 3)
+
+      assert Protocol.decode_stream(fragment) == {[], fragment}
+    end
+
+    test "buffers a complete length prefix with no body", ctx do
+      header = binary_part(ctx.ping, 0, 4)
+
+      assert Protocol.decode_stream(header) == {[], header}
+    end
+
+    test "decodes a single complete frame", ctx do
+      assert {[%Binary.CommandPing{}], <<>>} = Protocol.decode_stream(ctx.ping)
+    end
+
+    test "decodes several frames from one buffer in order", ctx do
+      buffer = ctx.ping <> ctx.pong <> ctx.ping
+
+      assert {commands, <<>>} = Protocol.decode_stream(buffer)
+      assert [%Binary.CommandPing{}, %Binary.CommandPong{}, %Binary.CommandPing{}] = commands
+    end
+
+    test "returns the trailing bytes of an incomplete frame", ctx do
+      partial = binary_part(ctx.pong, 0, 5)
+
+      assert {[%Binary.CommandPing{}], ^partial} = Protocol.decode_stream(ctx.ping <> partial)
+    end
+
+    test "reassembles a frame delivered one byte at a time", ctx do
+      chunks = for <<byte <- ctx.ping>>, do: <<byte>>
+
+      assert {[%Binary.CommandPing{}], <<>>} = feed(chunks)
+    end
+
+    test "reassembles a frame split at every possible offset", ctx do
+      for offset <- 0..byte_size(ctx.ping) do
+        head = binary_part(ctx.ping, 0, offset)
+        tail = binary_part(ctx.ping, offset, byte_size(ctx.ping) - offset)
+
+        assert {[%Binary.CommandPing{}], <<>>} = feed([head, tail]),
+               "frame split at offset #{offset} did not reassemble"
+      end
+    end
+
+    test "keeps frame order when a chunk boundary falls mid-frame", ctx do
+      buffer = ctx.ping <> ctx.pong
+      split = byte_size(ctx.ping) + 3
+
+      chunks = [binary_part(buffer, 0, split), binary_part(buffer, split, byte_size(buffer) - split)]
+
+      assert {commands, <<>>} = feed(chunks)
+      assert [%Binary.CommandPing{}, %Binary.CommandPong{}] = commands
+    end
+
+    test "reassembles a large message frame split across many chunks" do
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
+      metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
+      payload = :binary.copy("x", 100_000)
+
+      frame = message_frame(command, metadata, payload)
+      chunks = chunk_every(frame, 1_400)
+
+      assert {[{^command, _metadata, ^payload, nil}], <<>>} = feed(chunks)
     end
   end
 
@@ -236,6 +309,22 @@ defmodule Pulsar.ProtocolTest do
     |> frame_base_command()
   end
 
+  defp feed(chunks) do
+    Enum.reduce(chunks, {[], <<>>}, fn chunk, {commands, buffer} ->
+      {new_commands, rest} = Protocol.decode_stream(buffer <> chunk)
+
+      {commands ++ new_commands, rest}
+    end)
+  end
+
+  defp chunk_every(binary, size) when byte_size(binary) <= size, do: [binary]
+
+  defp chunk_every(binary, size) do
+    <<head::bytes-size(^size), rest::binary>> = binary
+
+    [head | chunk_every(rest, size)]
+  end
+
   defp frame_base_command(base_command) do
     encoded = BaseCommand.encode(base_command)
     size = byte_size(encoded)
@@ -243,15 +332,12 @@ defmodule Pulsar.ProtocolTest do
     <<size + 4::32, size::32, encoded::binary>>
   end
 
-  # Every command type the generated schema knows about, independent of what
-  # Pulsar.Protocol chooses to map.
   defp schema_command_types do
     BaseCommand.Type.__message_props__().field_props
     |> Map.values()
     |> Enum.map(& &1.name_atom)
   end
 
-  # The BaseCommand oneof entry for a command type, as {field_name, module}.
   defp schema_oneof_for(type) do
     tag = BaseCommand.Type.value(type)
     props = Map.fetch!(BaseCommand.__message_props__().field_props, tag)
@@ -259,8 +345,7 @@ defmodule Pulsar.ProtocolTest do
     {props.name_atom, props.type}
   end
 
-  # Builds a message with only its proto2 required fields populated, which is
-  # the minimum protobuf will encode without complaining.
+  # Only the proto2 required fields: the minimum protobuf will encode.
   defp sample_command(module) do
     fields =
       for {_tag, props} <- module.__message_props__().field_props,
