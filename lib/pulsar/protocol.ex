@@ -29,6 +29,25 @@ defmodule Pulsar.Protocol do
   @magic_crc32c 0x0E01
   @magic_broker_entry_metadata 0x0E02
 
+  # Protobuf does not enforce proto2 required fields when decoding, so an absent
+  # one arrives as nil rather than an error. The structs decoded from a frame, and
+  # the types their own required fields point at, are checked against this.
+  @required_fields (for module <- [
+                          Binary.BaseCommand,
+                          Binary.BrokerEntryMetadata,
+                          Binary.MessageIdData,
+                          Binary.MessageMetadata
+                          | Map.keys(@type_by_module)
+                        ],
+                        into: %{} do
+                      required =
+                        for {_tag, props} <- module.__message_props__().field_props,
+                            props.required?,
+                            do: props.name_atom
+
+                      {module, required}
+                    end)
+
   @doc """
   The highest protocol version the vendored schema declares.
   """
@@ -228,9 +247,23 @@ defmodule Pulsar.Protocol do
   defp decode_message_metadata(binary), do: decode_protobuf(Binary.MessageMetadata, binary, :malformed_message_metadata)
 
   defp decode_protobuf(module, binary, reason) do
-    {:ok, module.decode(binary)}
+    decoded = module.decode(binary)
+
+    if missing_required?(decoded), do: {:error, reason}, else: {:ok, decoded}
   rescue
     _exception -> {:error, reason}
+  end
+
+  defp missing_required?(%module{} = decoded) do
+    @required_fields
+    |> Map.get(module, [])
+    |> Enum.any?(fn field ->
+      case Map.fetch!(decoded, field) do
+        nil -> true
+        %_{} = nested -> missing_required?(nested)
+        _value -> false
+      end
+    end)
   end
 
   defp command_to_type(%module{}) do
@@ -245,9 +278,15 @@ defmodule Pulsar.Protocol do
   # An unknown type is not an error to protobuf: it keeps the raw integer.
   defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
     case Map.fetch(@field_by_type, type) do
-      {:ok, field_name} -> {:ok, Map.fetch!(base_command, field_name)}
+      {:ok, field_name} -> validate_command(Map.fetch!(base_command, field_name))
       :error -> {:error, {:unsupported_command_type, type}}
     end
+  end
+
+  defp validate_command(nil), do: {:error, :malformed_command}
+
+  defp validate_command(command) do
+    if missing_required?(command), do: {:error, :malformed_command}, else: {:ok, command}
   end
 
   @spec to_key_value_list(map() | nil) :: [Binary.KeyValue.t()]
