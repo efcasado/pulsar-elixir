@@ -106,10 +106,10 @@ defmodule Pulsar.Protocol do
   Frames are length-prefixed, so reassembling one that spans TCP packets needs
   no state beyond the leftover bytes returned alongside the commands.
 
-  Halts at the first frame that fails to decode: a frame whose checksum does not
-  match, or that does not match the framing at all, means the position in the
-  stream can no longer be trusted either, so the caller must discard the
-  connection rather than keep parsing.
+  Halts at the first frame it cannot locate the end of, since the position in the
+  stream is then lost and the caller must discard the connection. A frame whose
+  contents are untrustworthy but whose boundaries are known is returned as
+  `{:invalid, command, bytes, validation_error}` and parsing continues.
 
   A frame claiming more than `max_frame_size` bytes is rejected on its length
   prefix alone, before its bytes are waited for, so a desynced or absurd length
@@ -133,6 +133,7 @@ defmodule Pulsar.Protocol do
 
     case decode(frame) do
       {:ok, command} -> decode_stream(tail, [command | commands], max_frame_size)
+      {:invalid, _command, _bytes, _reason} = invalid -> decode_stream(tail, [invalid | commands], max_frame_size)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -147,10 +148,15 @@ defmodule Pulsar.Protocol do
   are recognised by their leading magic number.
 
   Never raises: frames come from the network, and a raise here would take the
-  connection down along with its consumers and producers. Every way the bytes can
-  be wrong comes back as `{:error, reason}`.
+  connection down along with its consumers and producers.
+
+  A frame whose contents cannot be trusted, but whose command says which consumer
+  it was headed for, is returned as `{:invalid, command, bytes, validation_error}`
+  so the consumer can hand it to its callback and acknowledge it. `{:error, _}` is
+  reserved for frames that leave the stream unusable.
   """
-  @spec decode(binary()) :: {:ok, term()} | {:error, term()}
+  @spec decode(binary()) ::
+          {:ok, term()} | {:invalid, struct(), binary(), atom()} | {:error, term()}
   def decode(frame)
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size), rest::binary>>) do
@@ -160,9 +166,9 @@ defmodule Pulsar.Protocol do
   def decode(_frame), do: {:error, :malformed_frame}
 
   defp decode_sections(command, <<>>) do
-    case decode_base_command(command) do
-      {:ok, base_command} -> command_from_type(base_command)
-      {:error, reason} -> {:error, reason}
+    with {:ok, base_command} <- decode_base_command(command),
+         {:ok, decoded_command} <- command_from_type(base_command) do
+      command_only(decoded_command)
     end
   end
 
@@ -174,6 +180,10 @@ defmodule Pulsar.Protocol do
   end
 
   defp decode_sections(command, rest), do: decode_message(command, rest, nil)
+  # Every other command is complete on its own, but a MESSAGE is an envelope: one
+  # that stops at the command has lost what it was carrying.
+  defp command_only(%Binary.CommandMessage{} = command), do: {:invalid, command, <<>>, :malformed_frame}
+  defp command_only(command), do: {:ok, command}
 
   # The checksummed region is everything following the checksum field, which is
   # also exactly the metadata size, metadata and payload. The broker entry
@@ -182,7 +192,7 @@ defmodule Pulsar.Protocol do
     if :crc32cer.nif(checksummed) == checksum do
       decode_message_parts(command, checksummed, broker_metadata)
     else
-      {:error, :checksum_mismatch}
+      invalid(command, checksummed, :checksum_mismatch)
     end
   end
 
@@ -193,18 +203,37 @@ defmodule Pulsar.Protocol do
 
   defp decode_message_parts(
          command,
-         <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>,
+         <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>> = bytes,
          broker_metadata
        ) do
     with {:ok, base_command} <- decode_base_command(command),
-         {:ok, decoded_command} <- command_from_type(base_command),
-         {:ok, decoded_metadata} <- decode_message_metadata(metadata),
-         {:ok, broker_entry_metadata} <- decode_broker_entry_metadata(broker_metadata) do
-      {:ok, {decoded_command, decoded_metadata, payload, broker_entry_metadata}}
+         {:ok, decoded_command} <- command_from_type(base_command) do
+      case {decode_message_metadata(metadata), decode_broker_entry_metadata(broker_metadata)} do
+        {{:ok, decoded_metadata}, {:ok, broker_entry_metadata}} ->
+          {:ok, {decoded_command, decoded_metadata, payload, broker_entry_metadata}}
+
+        {{:error, reason}, _} ->
+          flag_invalid(decoded_command, bytes, reason)
+
+        {_, {:error, reason}} ->
+          flag_invalid(decoded_command, bytes, reason)
+      end
     end
   end
 
-  defp decode_message_parts(_command, _checksummed, _broker_metadata), do: {:error, :malformed_frame}
+  defp decode_message_parts(command, bytes, _broker_metadata), do: invalid(command, bytes, :malformed_frame)
+
+  # The command region is never covered by the checksum, so it still names the
+  # consumer even when nothing after it can be trusted.
+  defp invalid(command, bytes, reason) do
+    with {:ok, base_command} <- decode_base_command(command),
+         {:ok, decoded_command} <- command_from_type(base_command) do
+      flag_invalid(decoded_command, bytes, reason)
+    end
+  end
+
+  defp flag_invalid(%Binary.CommandMessage{} = command, bytes, reason), do: {:invalid, command, bytes, reason}
+  defp flag_invalid(_command, _bytes, reason), do: {:error, reason}
 
   defp decode_base_command(binary), do: decode_protobuf(Binary.BaseCommand, binary, :malformed_command)
 

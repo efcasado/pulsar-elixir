@@ -736,6 +736,26 @@ defmodule Pulsar.Broker do
     end
   end
 
+  defp handle_command({:invalid, %Binary.CommandMessage{consumer_id: consumer_id} = command, bytes, reason}, broker) do
+    case Map.get(broker.consumers, consumer_id) do
+      nil ->
+        Logger.warning("Received #{reason} for unknown consumer #{consumer_id}")
+        :keep_state_and_data
+
+      {consumer_pid, _monitor_ref} ->
+        Logger.warning("Message for consumer #{consumer_id} failed validation: #{reason}")
+
+        :telemetry.execute(
+          [:pulsar, :consumer, :message, :invalid],
+          %{count: 1},
+          %{consumer_id: consumer_id, reason: reason}
+        )
+
+        send(consumer_pid, {:broker_message, {:invalid, command, bytes, reason}})
+        :keep_state_and_data
+    end
+  end
+
   # Handle broker-initiated closures - crash the consumer/producer and let supervisor restart
   defp handle_command(%Binary.CommandCloseConsumer{consumer_id: consumer_id} = command, broker) do
     case Map.get(broker.consumers, consumer_id) do

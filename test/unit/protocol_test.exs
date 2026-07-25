@@ -73,13 +73,21 @@ defmodule Pulsar.ProtocolTest do
       # make the loop below vacuously true.
       refute Enum.empty?(types)
 
-      for type <- types do
+      # MESSAGE is an envelope rather than a standalone command, so a frame holding
+      # only the command is covered separately below.
+      for type <- types -- [:MESSAGE] do
         {_field, module} = schema_oneof_for(type)
         command = sample_command(module)
 
         assert Protocol.decode(Protocol.encode(command)) == {:ok, command},
                "expected #{type} to round-trip as a #{inspect(module)}"
       end
+    end
+
+    test "flags a MESSAGE frame that stops at the command" do
+      command = %Binary.CommandMessage{consumer_id: 7, message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 2}}
+
+      assert {:invalid, ^command, <<>>, :malformed_frame} = Protocol.decode(Protocol.encode(command))
     end
 
     test "decodes a broker-sent command frame" do
@@ -207,14 +215,20 @@ defmodule Pulsar.ProtocolTest do
       assert [%Binary.CommandPing{}, %Binary.CommandPong{}] = commands
     end
 
-    test "halts at a corrupt frame and discards the frames behind it", ctx do
+    test "carries on past a corrupt frame, keeping the frames around it", ctx do
       command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
       metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
 
       frame = message_frame(command, metadata, "payload")
       corrupted = binary_part(frame, 0, byte_size(frame) - 7) <> "corrupt"
 
-      assert Protocol.decode_stream(ctx.ping <> corrupted <> ctx.pong) == {:error, :checksum_mismatch}
+      assert {:ok, commands, <<>>} = Protocol.decode_stream(ctx.ping <> corrupted <> ctx.pong)
+
+      assert [
+               %Binary.CommandPing{},
+               {:invalid, ^command, _bytes, :checksum_mismatch},
+               %Binary.CommandPong{}
+             ] = commands
     end
 
     test "halts when a frame does not match the framing at all", ctx do
@@ -326,16 +340,18 @@ defmodule Pulsar.ProtocolTest do
 
   describe "decode/1 on damaged input" do
     setup do
-      command = %Binary.CommandSend{producer_id: 1, sequence_id: 1}
+      command = %Binary.CommandMessage{consumer_id: 3, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
       metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
 
-      %{frame: Protocol.encode_message(command, metadata, "aaaa")}
+      %{command: command, frame: message_frame(command, metadata, "aaaa")}
     end
 
-    test "rejects a frame whose payload does not match its checksum", ctx do
+    test "reports a frame whose payload does not match its checksum", ctx do
       corrupted = binary_part(ctx.frame, 0, byte_size(ctx.frame) - 4) <> "bbbb"
 
-      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+      assert {:invalid, command, bytes, :checksum_mismatch} = Protocol.decode(corrupted)
+      assert command == ctx.command
+      assert bytes == binary_part(corrupted, byte_size(ctx.frame) - byte_size(bytes), byte_size(bytes))
     end
 
     test "rejects a frame whose metadata does not match its checksum", ctx do
@@ -345,7 +361,7 @@ defmodule Pulsar.ProtocolTest do
       <<head::bytes-size(^offset), byte, tail::binary>> = ctx.frame
       corrupted = <<head::binary, Bitwise.bxor(byte, 0xFF), tail::binary>>
 
-      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+      assert {:invalid, _command, _bytes, :checksum_mismatch} = Protocol.decode(corrupted)
     end
 
     test "accepts a frame that is bit-for-bit intact", ctx do
@@ -372,7 +388,14 @@ defmodule Pulsar.ProtocolTest do
         <<total_size::32, command_size::32, command::binary, @magic_message::16, :crc32cer.nif(checksummed)::32,
           checksummed::binary>>
 
-      assert Protocol.decode(corrupted) == {:error, :malformed_frame}
+      assert {:invalid, _command, _bytes, :malformed_frame} = Protocol.decode(corrupted)
+    end
+
+    test "rejects rather than flags a non-message frame trailed by unparseable bytes" do
+      command = BaseCommand.encode(%BaseCommand{type: :SUCCESS, success: %Binary.CommandSuccess{request_id: 1}})
+      frame = raw_message_frame(command, <<255, 255, 255, 255>>, "payload")
+
+      assert Protocol.decode(frame) == {:error, :malformed_message_metadata}
     end
 
     test "rejects a command type the vendored schema does not know" do
@@ -403,7 +426,7 @@ defmodule Pulsar.ProtocolTest do
 
       frame = raw_message_frame(command, <<255, 255, 255, 255>>, "payload")
 
-      assert Protocol.decode(frame) == {:error, :malformed_message_metadata}
+      assert {:invalid, _command, _bytes, :malformed_message_metadata} = Protocol.decode(frame)
     end
 
     test "reports a bad checksum before touching the broker entry metadata" do
@@ -419,7 +442,7 @@ defmodule Pulsar.ProtocolTest do
         |> Kernel.<>("bbbb")
         |> corrupt_broker_entry_metadata()
 
-      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+      assert {:invalid, _command, _bytes, :checksum_mismatch} = Protocol.decode(corrupted)
     end
 
     test "never raises, whatever the bytes are", ctx do
@@ -437,7 +460,8 @@ defmodule Pulsar.ProtocolTest do
             kind, value -> {:caught, kind, value}
           end
 
-        assert match?({:ok, _}, result) or match?({:error, _}, result),
+        assert match?({:ok, _}, result) or match?({:error, _}, result) or
+                 match?({:invalid, _, _, _}, result),
                "decode/1 must not raise, got #{inspect(result)} for #{inspect(frame, limit: 8)}"
       end
     end
