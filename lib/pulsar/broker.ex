@@ -56,7 +56,7 @@ defmodule Pulsar.Broker do
           conn_timeout: integer(),
           auth: list(),
           max_frame_size: pos_integer(),
-          buffer: binary(),
+          buffer: Pulsar.Protocol.buffer(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
           consumers: %{integer() => {pid(), reference()}},
@@ -971,7 +971,7 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_data(data, broker) do
-    case Pulsar.Protocol.decode_stream(broker.buffer <> data, broker.max_frame_size) do
+    case Pulsar.Protocol.decode_stream(broker.buffer, data, broker.max_frame_size) do
       {:ok, commands, buffer} -> {:ok, commands, %{broker | buffer: buffer}}
       {:error, reason} -> {:error, reason}
     end

@@ -151,48 +151,52 @@ defmodule Pulsar.ProtocolTest do
     end
   end
 
-  describe "decode_stream/2" do
+  describe "decode_stream/3" do
     setup do
       %{ping: Protocol.encode(%Binary.CommandPing{}), pong: Protocol.encode(%Binary.CommandPong{})}
     end
 
     test "returns nothing for an empty buffer" do
-      assert Protocol.decode_stream(<<>>) == {:ok, [], <<>>}
+      assert {:ok, [], buffer} = decode_stream(<<>>)
+      assert buffered(buffer) == <<>>
     end
 
     test "buffers a fragment shorter than the length prefix", ctx do
       fragment = binary_part(ctx.ping, 0, 3)
 
-      assert Protocol.decode_stream(fragment) == {:ok, [], fragment}
+      assert {:ok, [], buffer} = decode_stream(fragment)
+      assert buffered(buffer) == fragment
     end
 
     test "buffers a complete length prefix with no body", ctx do
       header = binary_part(ctx.ping, 0, 4)
 
-      assert Protocol.decode_stream(header) == {:ok, [], header}
+      assert {:ok, [], buffer} = decode_stream(header)
+      assert buffered(buffer) == header
     end
 
     test "decodes a single complete frame", ctx do
-      assert {:ok, [%Binary.CommandPing{}], <<>>} = Protocol.decode_stream(ctx.ping)
+      assert {:ok, [%Binary.CommandPing{}], _empty} = decode_stream(ctx.ping)
     end
 
     test "decodes several frames from one buffer in order", ctx do
       buffer = ctx.ping <> ctx.pong <> ctx.ping
 
-      assert {:ok, commands, <<>>} = Protocol.decode_stream(buffer)
+      assert {:ok, commands, _empty} = decode_stream(buffer)
       assert [%Binary.CommandPing{}, %Binary.CommandPong{}, %Binary.CommandPing{}] = commands
     end
 
     test "returns the trailing bytes of an incomplete frame", ctx do
       partial = binary_part(ctx.pong, 0, 5)
 
-      assert {:ok, [%Binary.CommandPing{}], ^partial} = Protocol.decode_stream(ctx.ping <> partial)
+      assert {:ok, [%Binary.CommandPing{}], buffer} = decode_stream(ctx.ping <> partial)
+      assert buffered(buffer) == partial
     end
 
     test "reassembles a frame delivered one byte at a time", ctx do
       chunks = for <<byte <- ctx.ping>>, do: <<byte>>
 
-      assert {:ok, [%Binary.CommandPing{}], <<>>} = feed(chunks)
+      assert {:ok, [%Binary.CommandPing{}], _empty} = feed(chunks)
     end
 
     test "reassembles a frame split at every possible offset", ctx do
@@ -200,7 +204,7 @@ defmodule Pulsar.ProtocolTest do
         head = binary_part(ctx.ping, 0, offset)
         tail = binary_part(ctx.ping, offset, byte_size(ctx.ping) - offset)
 
-        assert {:ok, [%Binary.CommandPing{}], <<>>} = feed([head, tail]),
+        assert {:ok, [%Binary.CommandPing{}], _empty} = feed([head, tail]),
                "frame split at offset #{offset} did not reassemble"
       end
     end
@@ -211,7 +215,7 @@ defmodule Pulsar.ProtocolTest do
 
       chunks = [binary_part(buffer, 0, split), binary_part(buffer, split, byte_size(buffer) - split)]
 
-      assert {:ok, commands, <<>>} = feed(chunks)
+      assert {:ok, commands, _empty} = feed(chunks)
       assert [%Binary.CommandPing{}, %Binary.CommandPong{}] = commands
     end
 
@@ -222,7 +226,7 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, "payload")
       corrupted = binary_part(frame, 0, byte_size(frame) - 7) <> "corrupt"
 
-      assert {:ok, commands, <<>>} = Protocol.decode_stream(ctx.ping <> corrupted <> ctx.pong)
+      assert {:ok, commands, _empty} = decode_stream(ctx.ping <> corrupted <> ctx.pong)
 
       assert [
                %Binary.CommandPing{},
@@ -234,7 +238,7 @@ defmodule Pulsar.ProtocolTest do
     test "halts when a frame does not match the framing at all", ctx do
       garbage = <<0::32, 0::32>>
 
-      assert Protocol.decode_stream(ctx.ping <> garbage) == {:error, :malformed_frame}
+      assert decode_stream(ctx.ping <> garbage) == {:error, :malformed_frame}
     end
 
     test "rejects an oversized frame on its length prefix alone" do
@@ -242,30 +246,32 @@ defmodule Pulsar.ProtocolTest do
       oversized = <<max - 3::32>>
 
       assert byte_size(oversized) == 4
-      assert Protocol.decode_stream(oversized) == {:error, {:frame_too_large, max + 1}}
+      assert decode_stream(oversized) == {:error, {:frame_too_large, max + 1}}
     end
 
     test "accepts a length prefix at exactly the maximum frame size" do
       prefix = <<Pulsar.Config.max_frame_size() - 4::32>>
 
-      assert Protocol.decode_stream(prefix) == {:ok, [], prefix}
+      assert {:ok, [], buffer} = decode_stream(prefix)
+      assert buffered(buffer) == prefix
     end
 
     test "rejects a length prefix claiming the largest value the field can hold" do
-      assert Protocol.decode_stream(<<0xFFFFFFFF::32, 0::32>>) ==
+      assert decode_stream(<<0xFFFFFFFF::32, 0::32>>) ==
                {:error, {:frame_too_large, 0xFFFFFFFF + 4}}
     end
 
     test "rejects an oversized frame before the frames behind it are decoded", ctx do
       max = Pulsar.Config.max_frame_size()
 
-      assert Protocol.decode_stream(ctx.ping <> <<max::32>>) == {:error, {:frame_too_large, max + 4}}
+      assert decode_stream(ctx.ping <> <<max::32>>) == {:error, {:frame_too_large, max + 4}}
     end
 
     test "takes the limit from the caller, not from global config", ctx do
-      assert Protocol.decode_stream(ctx.ping, byte_size(ctx.ping)) == {:ok, [%Binary.CommandPing{}], <<>>}
+      assert {:ok, [%Binary.CommandPing{}], buffer} = decode_stream(ctx.ping, byte_size(ctx.ping))
+      assert buffered(buffer) == <<>>
 
-      assert Protocol.decode_stream(ctx.ping, byte_size(ctx.ping) - 1) ==
+      assert decode_stream(ctx.ping, byte_size(ctx.ping) - 1) ==
                {:error, {:frame_too_large, byte_size(ctx.ping)}}
     end
 
@@ -277,7 +283,7 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, payload)
       chunks = chunk_every(frame, 1_400)
 
-      assert {:ok, [{^command, _metadata, ^payload, nil}], <<>>} = feed(chunks)
+      assert {:ok, [{^command, _metadata, ^payload, nil}], _empty} = feed(chunks)
     end
   end
 
@@ -527,9 +533,16 @@ defmodule Pulsar.ProtocolTest do
     |> frame_base_command()
   end
 
+  defp decode_stream(data, max_frame_size \\ Pulsar.Config.max_frame_size()) do
+    Protocol.decode_stream(<<>>, data, max_frame_size)
+  end
+
+  defp buffered({head, pending, _size}), do: :erlang.iolist_to_binary([head | pending])
+  defp buffered(binary) when is_binary(binary), do: binary
+
   defp feed(chunks) do
     Enum.reduce_while(chunks, {:ok, [], <<>>}, fn chunk, {:ok, commands, buffer} ->
-      case Protocol.decode_stream(buffer <> chunk) do
+      case Protocol.decode_stream(buffer, chunk, Pulsar.Config.max_frame_size()) do
         {:ok, new_commands, rest} -> {:cont, {:ok, commands ++ new_commands, rest}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
