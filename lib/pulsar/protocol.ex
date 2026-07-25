@@ -3,8 +3,6 @@ defmodule Pulsar.Protocol do
   @moduledoc false
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
-  require Logger
-
   @doc """
   Helper module to simplify working with the Pulsar binary protocol.
   """
@@ -130,8 +128,9 @@ defmodule Pulsar.Protocol do
   @doc """
   Decodes a single complete frame.
 
-  Returns `{:ok, command}`, or `{:error, reason}` if the frame does not match the
-  framing or its payload fails the CRC32C check the broker sent it with.
+  Never raises: frames come from the network, and a raise here would take the
+  connection down along with its consumers and producers. Every way the bytes can
+  be wrong comes back as `{:error, reason}`.
   """
   @spec decode(binary()) :: {:ok, term()} | {:error, term()}
   def decode(frame)
@@ -142,7 +141,7 @@ defmodule Pulsar.Protocol do
           broker_metadata_size::32, broker_metadata::bytes-size(broker_metadata_size), @magic_crc32c::16, checksum::32,
           checksummed::binary>>
       ) do
-    decode_message(command, checksummed, checksum, Binary.BrokerEntryMetadata.decode(broker_metadata))
+    decode_message(command, checksummed, checksum, broker_metadata)
   end
 
   # Message command without broker entry metadata (original format)
@@ -153,16 +152,20 @@ defmodule Pulsar.Protocol do
   end
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
-    {:ok, command |> Binary.BaseCommand.decode() |> do_decode()}
+    case decode_base_command(command) do
+      {:ok, base_command} -> command_from_type(base_command)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   def decode(_frame), do: {:error, :malformed_frame}
 
   # The checksummed region is everything following the checksum field, which is
-  # also exactly the metadata size, metadata and payload.
-  defp decode_message(command, checksummed, checksum, broker_entry_metadata) do
+  # also exactly the metadata size, metadata and payload. The broker entry
+  # metadata lies outside it, so it is left undecoded until the checksum passes.
+  defp decode_message(command, checksummed, checksum, broker_metadata) do
     if :crc32cer.nif(checksummed) == checksum do
-      decode_message_parts(command, checksummed, broker_entry_metadata)
+      decode_message_parts(command, checksummed, broker_metadata)
     else
       {:error, :checksum_mismatch}
     end
@@ -171,36 +174,48 @@ defmodule Pulsar.Protocol do
   defp decode_message_parts(
          command,
          <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>,
-         broker_entry_metadata
+         broker_metadata
        ) do
-    command = command |> Binary.BaseCommand.decode() |> do_decode()
-
-    {:ok, {command, Binary.MessageMetadata.decode(metadata), payload, broker_entry_metadata}}
+    with {:ok, base_command} <- decode_base_command(command),
+         {:ok, decoded_command} <- command_from_type(base_command),
+         {:ok, decoded_metadata} <- decode_message_metadata(metadata),
+         {:ok, broker_entry_metadata} <- decode_broker_entry_metadata(broker_metadata) do
+      {:ok, {decoded_command, decoded_metadata, payload, broker_entry_metadata}}
+    end
   end
 
-  defp decode_message_parts(_command, _checksummed, _broker_entry_metadata), do: {:error, :malformed_frame}
+  defp decode_message_parts(_command, _checksummed, _broker_metadata), do: {:error, :malformed_frame}
 
-  defp do_decode(%Binary.BaseCommand{} = base_command) do
-    command_from_type(base_command)
-  end
+  defp decode_base_command(binary), do: decode_protobuf(Binary.BaseCommand, binary, :malformed_command)
 
-  defp do_decode(other) do
-    Logger.warning("Unhandled command #{inspect(other)}")
-    other
+  defp decode_broker_entry_metadata(nil), do: {:ok, nil}
+
+  defp decode_broker_entry_metadata(binary),
+    do: decode_protobuf(Binary.BrokerEntryMetadata, binary, :malformed_broker_entry_metadata)
+
+  defp decode_message_metadata(binary), do: decode_protobuf(Binary.MessageMetadata, binary, :malformed_message_metadata)
+
+  defp decode_protobuf(module, binary, reason) do
+    {:ok, module.decode(binary)}
+  rescue
+    _exception -> {:error, reason}
   end
 
   defp command_to_type(%module{}) do
     Map.fetch!(@type_by_module, module)
   end
 
-  defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
-    field_name = field_name_from_type(type)
-
-    Map.fetch!(base_command, field_name)
-  end
-
+  # Encode path only: the type came from a command struct, so the field exists.
   defp field_name_from_type(type) do
     Map.fetch!(@field_by_type, type)
+  end
+
+  # An unknown type is not an error to protobuf: it keeps the raw integer.
+  defp command_from_type(%Binary.BaseCommand{type: type} = base_command) do
+    case Map.fetch(@field_by_type, type) do
+      {:ok, field_name} -> {:ok, Map.fetch!(base_command, field_name)}
+      :error -> {:error, {:unsupported_command_type, type}}
+    end
   end
 
   @spec to_key_value_list(map() | nil) :: [Binary.KeyValue.t()]
