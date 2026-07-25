@@ -357,7 +357,21 @@ defmodule Pulsar.ProtocolTest do
 
       assert {:invalid, command, bytes, :checksum_mismatch} = Protocol.decode(corrupted)
       assert command == ctx.command
-      assert bytes == binary_part(corrupted, byte_size(ctx.frame) - byte_size(bytes), byte_size(bytes))
+      # The framing still locates the payload; only its contents are wrong.
+      assert bytes == "bbbb"
+    end
+
+    test "keeps the whole message section when the framing cannot locate a payload", ctx do
+      <<total_size::32, command_size::32, command::bytes-size(command_size), @magic_message::16, _checksum::32,
+        _rest::binary>> = ctx.frame
+
+      # A metadata size past the end of the section leaves nothing to slice.
+      section = <<0xFFFFFFFF::32, "nonsense">>
+
+      corrupted =
+        <<total_size::32, command_size::32, command::binary, @magic_message::16, 0::32, section::binary>>
+
+      assert {:invalid, _command, ^section, :checksum_mismatch} = Protocol.decode(corrupted)
     end
 
     test "rejects a frame whose metadata does not match its checksum", ctx do
