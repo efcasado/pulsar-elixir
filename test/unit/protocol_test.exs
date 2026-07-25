@@ -77,7 +77,7 @@ defmodule Pulsar.ProtocolTest do
         {_field, module} = schema_oneof_for(type)
         command = sample_command(module)
 
-        assert Protocol.decode(Protocol.encode(command)) == command,
+        assert Protocol.decode(Protocol.encode(command)) == {:ok, command},
                "expected #{type} to round-trip as a #{inspect(module)}"
       end
     end
@@ -86,7 +86,7 @@ defmodule Pulsar.ProtocolTest do
       success = %Binary.CommandSuccess{request_id: 42}
       frame = command_frame(:SUCCESS, :success, success)
 
-      assert Protocol.decode(frame) == success
+      assert Protocol.decode(frame) == {:ok, success}
     end
   end
 
@@ -123,7 +123,7 @@ defmodule Pulsar.ProtocolTest do
     test "round-trips through decode/1", ctx do
       frame = Protocol.encode_message(ctx.command, ctx.metadata, ctx.payload)
 
-      assert {command, metadata, payload, nil} = Protocol.decode(frame)
+      assert {:ok, {command, metadata, payload, nil}} = Protocol.decode(frame)
       assert command == ctx.command
       assert metadata == ctx.metadata
       assert payload == ctx.payload
@@ -132,14 +132,14 @@ defmodule Pulsar.ProtocolTest do
     test "handles an empty payload", ctx do
       frame = Protocol.encode_message(ctx.command, ctx.metadata, "")
 
-      assert {_command, _metadata, "", nil} = Protocol.decode(frame)
+      assert {:ok, {_command, _metadata, "", nil}} = Protocol.decode(frame)
     end
 
     test "handles a payload large enough to need multi-byte varints", ctx do
       payload = :binary.copy("x", 100_000)
       frame = Protocol.encode_message(ctx.command, ctx.metadata, payload)
 
-      assert {_command, _metadata, ^payload, nil} = Protocol.decode(frame)
+      assert {:ok, {_command, _metadata, ^payload, nil}} = Protocol.decode(frame)
     end
   end
 
@@ -149,42 +149,42 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "returns nothing for an empty buffer" do
-      assert Protocol.decode_stream(<<>>) == {[], <<>>}
+      assert Protocol.decode_stream(<<>>) == {:ok, [], <<>>}
     end
 
     test "buffers a fragment shorter than the length prefix", ctx do
       fragment = binary_part(ctx.ping, 0, 3)
 
-      assert Protocol.decode_stream(fragment) == {[], fragment}
+      assert Protocol.decode_stream(fragment) == {:ok, [], fragment}
     end
 
     test "buffers a complete length prefix with no body", ctx do
       header = binary_part(ctx.ping, 0, 4)
 
-      assert Protocol.decode_stream(header) == {[], header}
+      assert Protocol.decode_stream(header) == {:ok, [], header}
     end
 
     test "decodes a single complete frame", ctx do
-      assert {[%Binary.CommandPing{}], <<>>} = Protocol.decode_stream(ctx.ping)
+      assert {:ok, [%Binary.CommandPing{}], <<>>} = Protocol.decode_stream(ctx.ping)
     end
 
     test "decodes several frames from one buffer in order", ctx do
       buffer = ctx.ping <> ctx.pong <> ctx.ping
 
-      assert {commands, <<>>} = Protocol.decode_stream(buffer)
+      assert {:ok, commands, <<>>} = Protocol.decode_stream(buffer)
       assert [%Binary.CommandPing{}, %Binary.CommandPong{}, %Binary.CommandPing{}] = commands
     end
 
     test "returns the trailing bytes of an incomplete frame", ctx do
       partial = binary_part(ctx.pong, 0, 5)
 
-      assert {[%Binary.CommandPing{}], ^partial} = Protocol.decode_stream(ctx.ping <> partial)
+      assert {:ok, [%Binary.CommandPing{}], ^partial} = Protocol.decode_stream(ctx.ping <> partial)
     end
 
     test "reassembles a frame delivered one byte at a time", ctx do
       chunks = for <<byte <- ctx.ping>>, do: <<byte>>
 
-      assert {[%Binary.CommandPing{}], <<>>} = feed(chunks)
+      assert {:ok, [%Binary.CommandPing{}], <<>>} = feed(chunks)
     end
 
     test "reassembles a frame split at every possible offset", ctx do
@@ -192,7 +192,7 @@ defmodule Pulsar.ProtocolTest do
         head = binary_part(ctx.ping, 0, offset)
         tail = binary_part(ctx.ping, offset, byte_size(ctx.ping) - offset)
 
-        assert {[%Binary.CommandPing{}], <<>>} = feed([head, tail]),
+        assert {:ok, [%Binary.CommandPing{}], <<>>} = feed([head, tail]),
                "frame split at offset #{offset} did not reassemble"
       end
     end
@@ -203,8 +203,26 @@ defmodule Pulsar.ProtocolTest do
 
       chunks = [binary_part(buffer, 0, split), binary_part(buffer, split, byte_size(buffer) - split)]
 
-      assert {commands, <<>>} = feed(chunks)
+      assert {:ok, commands, <<>>} = feed(chunks)
       assert [%Binary.CommandPing{}, %Binary.CommandPong{}] = commands
+    end
+
+    test "halts at a corrupt frame and discards the frames behind it", ctx do
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
+      metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
+
+      frame = message_frame(command, metadata, "payload")
+      corrupted = binary_part(frame, 0, byte_size(frame) - 7) <> "corrupt"
+
+      # The good frame ahead of it is dropped too: once the stream is suspect,
+      # the caller discards the connection rather than trusting a partial batch.
+      assert Protocol.decode_stream(ctx.ping <> corrupted <> ctx.pong) == {:error, :checksum_mismatch}
+    end
+
+    test "halts when a frame does not match the framing at all", ctx do
+      garbage = <<0::32, 0::32>>
+
+      assert Protocol.decode_stream(ctx.ping <> garbage) == {:error, :malformed_frame}
     end
 
     test "reassembles a large message frame split across many chunks" do
@@ -215,7 +233,7 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, payload)
       chunks = chunk_every(frame, 1_400)
 
-      assert {[{^command, _metadata, ^payload, nil}], <<>>} = feed(chunks)
+      assert {:ok, [{^command, _metadata, ^payload, nil}], <<>>} = feed(chunks)
     end
   end
 
@@ -226,7 +244,7 @@ defmodule Pulsar.ProtocolTest do
 
       frame = message_frame(command, metadata, "payload")
 
-      assert {^command, decoded_metadata, "payload", nil} = Protocol.decode(frame)
+      assert {:ok, {^command, decoded_metadata, "payload", nil}} = Protocol.decode(frame)
       assert decoded_metadata == metadata
     end
 
@@ -237,7 +255,7 @@ defmodule Pulsar.ProtocolTest do
 
       frame = message_frame(command, metadata, "payload", broker_entry_metadata: broker_entry)
 
-      assert {^command, decoded_metadata, "payload", decoded_broker_entry} = Protocol.decode(frame)
+      assert {:ok, {^command, decoded_metadata, "payload", decoded_broker_entry}} = Protocol.decode(frame)
       assert decoded_metadata == metadata
       assert decoded_broker_entry == broker_entry
     end
@@ -249,32 +267,56 @@ defmodule Pulsar.ProtocolTest do
 
       frame = message_frame(command, metadata, payload)
 
-      assert {_command, _metadata, ^payload, nil} = Protocol.decode(frame)
+      assert {:ok, {_command, _metadata, ^payload, nil}} = Protocol.decode(frame)
     end
   end
 
-  describe "decode/1 current behaviour on damaged input" do
-    # These document what the codec does today. They are expected to change
-    # when checksum verification and tagged error returns land.
-
-    test "does not verify the checksum: a corrupted payload decodes as valid" do
+  describe "decode/1 on damaged input" do
+    setup do
       command = %Binary.CommandSend{producer_id: 1, sequence_id: 1}
       metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
 
-      frame = Protocol.encode_message(command, metadata, "aaaa")
-      corrupted = binary_part(frame, 0, byte_size(frame) - 4) <> "bbbb"
-
-      assert {_command, _metadata, "bbbb", nil} = Protocol.decode(corrupted)
+      %{frame: Protocol.encode_message(command, metadata, "aaaa")}
     end
 
-    test "raises when handed a truncated frame" do
+    test "rejects a frame whose payload does not match its checksum", ctx do
+      corrupted = binary_part(ctx.frame, 0, byte_size(ctx.frame) - 4) <> "bbbb"
+
+      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+    end
+
+    test "rejects a frame whose metadata does not match its checksum", ctx do
+      <<head::bytes-size(20), byte, tail::binary>> = ctx.frame
+      corrupted = <<head::binary, Bitwise.bxor(byte, 0xFF), tail::binary>>
+
+      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+    end
+
+    test "accepts a frame that is bit-for-bit intact", ctx do
+      assert {:ok, {_command, _metadata, "aaaa", nil}} = Protocol.decode(ctx.frame)
+    end
+
+    test "rejects a truncated frame" do
       <<partial::bytes-size(6), _rest::binary>> = Protocol.encode(%Binary.CommandPing{})
 
-      assert_raise FunctionClauseError, fn -> Protocol.decode(partial) end
+      assert Protocol.decode(partial) == {:error, :malformed_frame}
     end
 
-    test "raises when handed an empty binary" do
-      assert_raise FunctionClauseError, fn -> Protocol.decode(<<>>) end
+    test "rejects an empty binary" do
+      assert Protocol.decode(<<>>) == {:error, :malformed_frame}
+    end
+
+    test "rejects a frame claiming a metadata size larger than its payload", ctx do
+      <<total_size::32, command_size::32, command::bytes-size(command_size), @magic_message::16, _checksum::32,
+        _metadata_size::32, rest::binary>> = ctx.frame
+
+      checksummed = <<0xFFFF::32, rest::binary>>
+
+      corrupted =
+        <<total_size::32, command_size::32, command::binary, @magic_message::16, :crc32cer.nif(checksummed)::32,
+          checksummed::binary>>
+
+      assert Protocol.decode(corrupted) == {:error, :malformed_frame}
     end
   end
 
@@ -310,10 +352,11 @@ defmodule Pulsar.ProtocolTest do
   end
 
   defp feed(chunks) do
-    Enum.reduce(chunks, {[], <<>>}, fn chunk, {commands, buffer} ->
-      {new_commands, rest} = Protocol.decode_stream(buffer <> chunk)
-
-      {commands ++ new_commands, rest}
+    Enum.reduce_while(chunks, {:ok, [], <<>>}, fn chunk, {:ok, commands, buffer} ->
+      case Protocol.decode_stream(buffer <> chunk) do
+        {:ok, new_commands, rest} -> {:cont, {:ok, commands ++ new_commands, rest}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
     end)
   end
 

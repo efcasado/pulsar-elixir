@@ -106,61 +106,79 @@ defmodule Pulsar.Protocol do
 
   Frames are length-prefixed, so reassembling one that spans TCP packets needs
   no state beyond the leftover bytes returned alongside the commands.
+
+  Halts at the first frame that fails to decode: a frame whose checksum does not
+  match, or that does not match the framing at all, means the position in the
+  stream can no longer be trusted either, so the caller must discard the
+  connection rather than keep parsing.
   """
-  @spec decode_stream(binary()) :: {[term()], binary()}
+  @spec decode_stream(binary()) :: {:ok, [term()], binary()} | {:error, term()}
   def decode_stream(buffer), do: decode_stream(buffer, [])
 
   defp decode_stream(<<total_size::32, rest::binary>> = buffer, commands) when byte_size(rest) >= total_size do
     frame_size = total_size + 4
     <<frame::bytes-size(^frame_size), tail::binary>> = buffer
 
-    decode_stream(tail, [decode(frame) | commands])
+    case decode(frame) do
+      {:ok, command} -> decode_stream(tail, [command | commands])
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  defp decode_stream(buffer, commands), do: {Enum.reverse(commands), buffer}
+  defp decode_stream(buffer, commands), do: {:ok, Enum.reverse(commands), buffer}
+
+  @doc """
+  Decodes a single complete frame.
+
+  Returns `{:ok, command}`, or `{:error, reason}` if the frame does not match the
+  framing or its payload fails the CRC32C check the broker sent it with.
+  """
+  @spec decode(binary()) :: {:ok, term()} | {:error, term()}
+  def decode(frame)
 
   # Message command with broker entry metadata
   def decode(
         <<_total_size::32, size::32, command::bytes-size(size), @magic_broker_entry_metadata::16,
-          broker_metadata_size::32, broker_metadata::bytes-size(broker_metadata_size), @magic_crc32c::16, _checksum::32,
-          metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>
+          broker_metadata_size::32, broker_metadata::bytes-size(broker_metadata_size), @magic_crc32c::16, checksum::32,
+          checksummed::binary>>
       ) do
-    # Decode broker entry metadata
-    broker_entry_metadata = Binary.BrokerEntryMetadata.decode(broker_metadata)
-
-    # Decode message metadata
-    message_metadata = Binary.MessageMetadata.decode(metadata)
-
-    command =
-      command
-      |> Binary.BaseCommand.decode()
-      |> do_decode()
-
-    {command, message_metadata, payload, broker_entry_metadata}
+    decode_message(command, checksummed, checksum, Binary.BrokerEntryMetadata.decode(broker_metadata))
   end
 
   # Message command without broker entry metadata (original format)
   def decode(
-        <<_total_size::32, size::32, command::bytes-size(size), @magic_crc32c::16, _checksum::32, metadata_size::32,
-          metadata::bytes-size(metadata_size), payload::binary>>
+        <<_total_size::32, size::32, command::bytes-size(size), @magic_crc32c::16, checksum::32, checksummed::binary>>
       ) do
-    # message command
-    metadata = Binary.MessageMetadata.decode(metadata)
-
-    command =
-      command
-      |> Binary.BaseCommand.decode()
-      |> do_decode()
-
-    {command, metadata, payload, nil}
+    decode_message(command, checksummed, checksum, nil)
   end
 
   def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
-    # single command
-    command
-    |> Binary.BaseCommand.decode()
-    |> do_decode()
+    {:ok, command |> Binary.BaseCommand.decode() |> do_decode()}
   end
+
+  def decode(_frame), do: {:error, :malformed_frame}
+
+  # The checksummed region is everything following the checksum field, which is
+  # also exactly the metadata size, metadata and payload.
+  defp decode_message(command, checksummed, checksum, broker_entry_metadata) do
+    if :crc32cer.nif(checksummed) == checksum do
+      decode_message_parts(command, checksummed, broker_entry_metadata)
+    else
+      {:error, :checksum_mismatch}
+    end
+  end
+
+  defp decode_message_parts(
+         command,
+         <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>,
+         broker_entry_metadata
+       ) do
+    command = command |> Binary.BaseCommand.decode() |> do_decode()
+
+    {:ok, {command, Binary.MessageMetadata.decode(metadata), payload, broker_entry_metadata}}
+  end
+
+  defp decode_message_parts(_command, _checksummed, _broker_entry_metadata), do: {:error, :malformed_frame}
 
   defp do_decode(%Binary.BaseCommand{} = base_command) do
     command_from_type(base_command)
