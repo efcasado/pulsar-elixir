@@ -407,7 +407,7 @@ defmodule Pulsar.Broker do
     {:next_state, :disconnected, broker}
   end
 
-  def connected(:info, {protocol, _socket, data}, broker) when protocol in [:tcp, :ssl] do
+  def connected(:info, {protocol, socket, data}, %__MODULE__{socket: socket} = broker) when protocol in [:tcp, :ssl] do
     case handle_data(data, broker) do
       {:ok, commands, new_broker} ->
         actions = Enum.map(commands, &{:next_event, :internal, {:command, &1}})
@@ -426,6 +426,23 @@ defmodule Pulsar.Broker do
 
         {:next_state, :disconnected, broker}
     end
+  end
+
+  # Bytes from a socket this broker has stopped reading belong to a connection that
+  # is already gone, and must not reach the current parse buffer.
+  def connected(:info, {protocol, _stale_socket, _data}, _broker) when protocol in [:tcp, :ssl] do
+    Logger.debug("Discarding data from a stale socket")
+    :keep_state_and_data
+  end
+
+  def connected(:info, {event, _stale_socket}, _broker) when event in [:tcp_closed, :ssl_closed] do
+    Logger.debug("Discarding #{event} from a stale socket")
+    :keep_state_and_data
+  end
+
+  def connected(:info, {event, _stale_socket, _reason}, _broker) when event in [:tcp_error, :ssl_error] do
+    Logger.debug("Discarding #{event} from a stale socket")
+    :keep_state_and_data
   end
 
   def connected({:timeout, :ping}, _content, broker) do
