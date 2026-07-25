@@ -128,6 +128,10 @@ defmodule Pulsar.Protocol do
   @doc """
   Decodes a single complete frame.
 
+  A frame carries a command, optionally followed by broker entry metadata, a
+  CRC32C checksum, and the message metadata and payload. Both optional sections
+  are recognised by their leading magic number.
+
   Never raises: frames come from the network, and a raise here would take the
   connection down along with its consumers and producers. Every way the bytes can
   be wrong comes back as `{:error, reason}`.
@@ -135,40 +139,44 @@ defmodule Pulsar.Protocol do
   @spec decode(binary()) :: {:ok, term()} | {:error, term()}
   def decode(frame)
 
-  # Message command with broker entry metadata
-  def decode(
-        <<_total_size::32, size::32, command::bytes-size(size), @magic_broker_entry_metadata::16,
-          broker_metadata_size::32, broker_metadata::bytes-size(broker_metadata_size), @magic_crc32c::16, checksum::32,
-          checksummed::binary>>
-      ) do
-    decode_message(command, checksummed, checksum, broker_metadata)
+  def decode(<<_total_size::32, size::32, command::bytes-size(size), rest::binary>>) do
+    decode_sections(command, rest)
   end
 
-  # Message command without broker entry metadata (original format)
-  def decode(
-        <<_total_size::32, size::32, command::bytes-size(size), @magic_crc32c::16, checksum::32, checksummed::binary>>
-      ) do
-    decode_message(command, checksummed, checksum, nil)
-  end
+  def decode(_frame), do: {:error, :malformed_frame}
 
-  def decode(<<_total_size::32, size::32, command::bytes-size(size)>>) do
+  # Nothing follows the command.
+  defp decode_sections(command, <<>>) do
     case decode_base_command(command) do
       {:ok, base_command} -> command_from_type(base_command)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  def decode(_frame), do: {:error, :malformed_frame}
+  defp decode_sections(
+         command,
+         <<@magic_broker_entry_metadata::16, size::32, broker_metadata::bytes-size(size), rest::binary>>
+       ) do
+    decode_message(command, rest, broker_metadata)
+  end
+
+  defp decode_sections(command, rest), do: decode_message(command, rest, nil)
 
   # The checksummed region is everything following the checksum field, which is
   # also exactly the metadata size, metadata and payload. The broker entry
   # metadata lies outside it, so it is left undecoded until the checksum passes.
-  defp decode_message(command, checksummed, checksum, broker_metadata) do
+  defp decode_message(command, <<@magic_crc32c::16, checksum::32, checksummed::binary>>, broker_metadata) do
     if :crc32cer.nif(checksummed) == checksum do
       decode_message_parts(command, checksummed, broker_metadata)
     else
       {:error, :checksum_mismatch}
     end
+  end
+
+  # The checksum is optional in the protocol and absent from frames written
+  # before it existed, so there is nothing to verify against.
+  defp decode_message(command, rest, broker_metadata) do
+    decode_message_parts(command, rest, broker_metadata)
   end
 
   defp decode_message_parts(
