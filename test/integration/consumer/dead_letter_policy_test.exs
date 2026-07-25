@@ -1,6 +1,7 @@
 defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
@@ -31,6 +32,47 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     on_exit(fn ->
       Pulsar.Client.stop(@client)
     end)
+  end
+
+  test "an invalid message reaches the DLQ carrying its payload and is acknowledged" do
+    topic = "persistent://public/default/dlq-invalid-topic"
+    subscription = "invalid"
+    dlq_topic = topic <> "-" <> subscription <> "-DLQ"
+
+    {:ok, consumer_group} =
+      Pulsar.start_consumer(topic, subscription, DummyConsumer,
+        client: @client,
+        redelivery_interval: 100,
+        dead_letter_policy: [max_redelivery: 1, topic: dlq_topic]
+      )
+
+    [consumer] = Pulsar.get_consumers(consumer_group)
+
+    {:ok, dlq_group} =
+      Pulsar.start_consumer(dlq_topic, "dlq-consumer", DummyConsumer,
+        client: @client,
+        initial_position: :earliest
+      )
+
+    [dlq_consumer] = Pulsar.get_consumers(dlq_group)
+
+    command = %Proto.CommandMessage{
+      consumer_id: 1,
+      message_id: %Proto.MessageIdData{ledgerId: 1, entryId: 1},
+      redelivery_count: 5
+    }
+
+    send(consumer, {:broker_message, {:invalid, command, "corrupt-payload", :checksum_mismatch}})
+
+    Utils.wait_for(fn -> DummyConsumer.count_messages(dlq_consumer) > 0 end)
+
+    assert [dlq_message] = DummyConsumer.get_messages(dlq_consumer)
+    assert dlq_message.payload == "corrupt-payload"
+
+    # The acknowledgement carries a validation error the broker has to accept; had
+    # it not, the connection would have gone and taken the consumer with it.
+    assert Process.alive?(consumer)
+    assert Pulsar.Consumer.topic(consumer) == topic
   end
 
   test "dead letter policy with max_redelivery sends messages to DLQ after threshold" do

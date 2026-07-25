@@ -567,6 +567,9 @@ defmodule Pulsar.Consumer do
   def handle_info({:broker_message, message_data}, state) do
     {messages, new_state} =
       case message_data do
+        {:invalid, command, bytes, validation_error} ->
+          {[build_invalid_message(command, bytes, validation_error)], state}
+
         {command, metadata, payload, broker_metadata} ->
           payload = maybe_uncompress(metadata, payload)
 
@@ -700,7 +703,8 @@ defmodule Pulsar.Consumer do
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
               ack_type: :Individual,
-              message_id: message_ids_list
+              message_id: message_ids_list,
+              validation_error: validation_error(message)
             }
 
             :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
@@ -759,7 +763,8 @@ defmodule Pulsar.Consumer do
         ack_command = %Binary.CommandAck{
           consumer_id: state.consumer_id,
           ack_type: :Individual,
-          message_id: message_ids_list
+          message_id: message_ids_list,
+          validation_error: validation_error(message)
         }
 
         :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
@@ -1110,6 +1115,28 @@ defmodule Pulsar.Consumer do
         chunk_metadata: nil
       }
     end)
+  end
+
+  # Pulsar's validation errors all describe damaged message contents, with nothing
+  # for a frame that was malformed around them, so every reason is reported as the
+  # nearest available. Pulsar.Message.validation_error carries the exact one.
+  defp validation_error(message) do
+    if Pulsar.Message.valid?(message), do: nil, else: :ChecksumMismatch
+  end
+
+  # A chunk's uuid lives in the metadata that failed validation, so a corrupt chunk
+  # cannot be tied back to its siblings; those expire as an incomplete message.
+  defp build_invalid_message(command, bytes, validation_error) do
+    %Pulsar.Message{
+      command: command,
+      metadata: nil,
+      payload: bytes,
+      single_metadata: nil,
+      broker_metadata: nil,
+      message_id_to_ack: command.message_id,
+      chunk_metadata: nil,
+      validation_error: validation_error
+    }
   end
 
   # Constructs Pulsar.Message struct from complete chunked message

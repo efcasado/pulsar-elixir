@@ -11,8 +11,9 @@ defmodule Pulsar.Message do
     Type: `struct() | [struct()]`
 
   - `metadata` - For non-chunked messages: single metadata struct. For chunked messages: list of
-    metadata from all chunks.
-    Type: `struct() | [struct()]`
+    metadata from all chunks. `nil` for invalid messages, whose metadata is either
+    unreadable or not trustworthy.
+    Type: `struct() | [struct()] | nil`
 
   - `payload` - The actual message payload as a binary. For chunked messages, this is the
     assembled complete payload.
@@ -32,6 +33,11 @@ defmodule Pulsar.Message do
   - `chunk_metadata` - Metadata about chunked messages (nil for non-chunked messages).
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
     For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
+
+  - `validation_error` - `nil` for messages that arrived intact. Otherwise why the
+    frame could not be trusted, in which case `payload` holds the raw unverified
+    bytes and `metadata` is `nil`. See `valid?/1`.
+    Type: `atom() | nil`
 
   ## Usage
 
@@ -73,12 +79,13 @@ defmodule Pulsar.Message do
 
   @type t :: %__MODULE__{
           command: struct() | [struct()],
-          metadata: struct() | [struct()],
+          metadata: struct() | [struct()] | nil,
           payload: binary(),
           single_metadata: struct() | nil | [struct()],
           broker_metadata: term() | [term()],
           message_id_to_ack: term() | [term()],
-          chunk_metadata: map() | nil
+          chunk_metadata: map() | nil,
+          validation_error: atom() | nil
         }
 
   defstruct [
@@ -88,7 +95,8 @@ defmodule Pulsar.Message do
     :single_metadata,
     :broker_metadata,
     :message_id_to_ack,
-    :chunk_metadata
+    :chunk_metadata,
+    :validation_error
   ]
 
   @doc """
@@ -137,6 +145,15 @@ defmodule Pulsar.Message do
     length(ids)
   end
 
+  # An invalid frame's batch count was in the metadata that failed validation, and
+  # CommandMessage does not carry it, so 1 is the most that can be assumed. A
+  # corrupt batch therefore under-counts what the broker charged for it: enough of
+  # them and outstanding permits never reach the refill threshold, and the consumer
+  # stops being sent messages. The reference client credits 1 for the same reason.
+  #
+  # https://github.com/apache/pulsar/blob/v4.2.3/pulsar-client/src/main/java/org/apache/pulsar/client/impl/ConsumerImpl.java#L2165-L2179
+  def num_broker_messages(%__MODULE__{validation_error: error}) when not is_nil(error), do: 1
+
   def num_broker_messages(%__MODULE__{}), do: 1
 
   @doc """
@@ -176,4 +193,28 @@ defmodule Pulsar.Message do
   @spec complete?(t()) :: boolean()
   def complete?(%__MODULE__{chunk_metadata: %{complete: complete}}), do: complete
   def complete?(%__MODULE__{}), do: true
+
+  @doc """
+  Returns `true` if the message arrived intact, `false` if it did not.
+
+  An invalid message failed its CRC32C check or carried metadata that could not be
+  read, so its `payload` is the raw unverified bytes and its `metadata` is `nil`.
+  It is delivered so the callback can record or divert it; the payload must not be
+  treated as data. `validation_error` says what went wrong.
+
+  ## Examples
+
+      def handle_message(%Pulsar.Message{} = message, state) do
+        if Pulsar.Message.valid?(message) do
+          process(message.payload)
+          {:ok, state}
+        else
+          Logger.error("dropping corrupt message: \#{message.validation_error}")
+          {:ok, state}
+        end
+      end
+  """
+  @spec valid?(t()) :: boolean()
+  def valid?(%__MODULE__{validation_error: nil}), do: true
+  def valid?(%__MODULE__{}), do: false
 end
