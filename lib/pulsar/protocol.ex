@@ -232,7 +232,7 @@ defmodule Pulsar.Protocol do
     if :crc32cer.nif(checksummed) == checksum do
       decode_message_parts(command, checksummed, broker_metadata)
     else
-      invalid(command, checksummed, :checksum_mismatch)
+      invalid(command, payload_of(checksummed), :checksum_mismatch)
     end
   end
 
@@ -243,7 +243,7 @@ defmodule Pulsar.Protocol do
 
   defp decode_message_parts(
          command,
-         <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>> = bytes,
+         <<metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>>,
          broker_metadata
        ) do
     with {:ok, base_command} <- decode_base_command(command),
@@ -253,15 +253,21 @@ defmodule Pulsar.Protocol do
           {:ok, {decoded_command, decoded_metadata, payload, broker_entry_metadata}}
 
         {{:error, reason}, _} ->
-          flag_invalid(decoded_command, bytes, reason)
+          flag_invalid(decoded_command, payload, reason)
 
         {_, {:error, reason}} ->
-          flag_invalid(decoded_command, bytes, reason)
+          flag_invalid(decoded_command, payload, reason)
       end
     end
   end
 
   defp decode_message_parts(command, bytes, _broker_metadata), do: invalid(command, bytes, :malformed_frame)
+
+  # A failed checksum says the contents are wrong, not that the framing is, so the
+  # payload can still be picked out of them. Where even that does not hold, the
+  # whole unverified region is the best on offer.
+  defp payload_of(<<metadata_size::32, _metadata::bytes-size(metadata_size), payload::binary>>), do: payload
+  defp payload_of(bytes), do: bytes
 
   # The command region is never covered by the checksum, so it still names the
   # consumer even when nothing after it can be trusted.

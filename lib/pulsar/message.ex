@@ -35,8 +35,8 @@ defmodule Pulsar.Message do
     For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
 
   - `validation_error` - `nil` for messages that arrived intact. Otherwise why the
-    frame could not be trusted, in which case `payload` holds the raw unverified
-    bytes and `metadata` is `nil`. See `valid?/1`.
+    frame could not be trusted, in which case `payload` holds unverified bytes and
+    `metadata` is `nil`. See `valid?/1`.
     Type: `atom() | nil`
 
   ## Usage
@@ -198,8 +198,9 @@ defmodule Pulsar.Message do
   Returns `true` if the message arrived intact, `false` if it did not.
 
   An invalid message failed its CRC32C check or carried metadata that could not be
-  read, so its `payload` is the raw unverified bytes and its `metadata` is `nil`.
-  It is delivered so the callback can record or divert it; the payload must not be
+  read, so its `metadata` is `nil` and its `payload` is unverified: the bytes the
+  framing points at, or the whole message section when even that does not hold. It
+  is delivered so the callback can record or divert it, but the payload must not be
   treated as data. `validation_error` says what went wrong.
 
   ## Examples
