@@ -1,12 +1,9 @@
 defmodule Pulsar.Protocol do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
   @moduledoc false
+
   alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-
-  @doc """
-  Helper module to simplify working with the Pulsar binary protocol.
-  """
 
   # A command's field in the BaseCommand oneof carries the same protobuf tag as
   # its entry in the BaseCommand.Type enum, so both directions of the mapping
@@ -32,6 +29,10 @@ defmodule Pulsar.Protocol do
   @magic_crc32c 0x0E01
   @magic_broker_entry_metadata 0x0E02
 
+  @doc """
+  The highest protocol version the vendored schema declares.
+  """
+  @spec latest_version() :: pos_integer()
   def latest_version do
     %Binary.ProtocolVersion{}
     |> Map.keys()
@@ -44,60 +45,42 @@ defmodule Pulsar.Protocol do
     |> Enum.at(-1)
   end
 
-  def encode(command) do
-    type = command_to_type(command)
+  @doc """
+  Frames a command for the wire.
 
-    field_name = field_name_from_type(type)
+  A `CommandSend` also carries message metadata and a payload, which are framed
+  after the command and covered by a CRC32C checksum.
+  """
+  @spec encode(struct()) :: binary()
+  def encode(command), do: frame(encode_base_command(command), <<>>)
 
-    encoded =
-      %Binary.BaseCommand{}
-      |> Map.put(:type, type)
-      |> Map.put(field_name, command)
-      |> Binary.BaseCommand.encode()
-
-    size = byte_size(encoded)
-    <<size + 4::32, size::32, encoded::binary>>
+  @spec encode(struct(), struct(), binary()) :: binary()
+  def encode(command_send, message_metadata, payload) do
+    frame(encode_base_command(command_send), message_part(message_metadata, payload))
   end
 
-  @doc """
-  Encodes a CommandSend with message metadata and payload.
-  Returns the complete binary frame ready to send to the broker.
-  """
-  def encode_message(command_send, message_metadata, payload) do
-    type = command_to_type(command_send)
-    field_name = field_name_from_type(type)
+  defp encode_base_command(command) do
+    type = command_to_type(command)
 
-    command_binary =
-      %Binary.BaseCommand{}
-      |> Map.put(:type, type)
-      |> Map.put(field_name, command_send)
-      |> Binary.BaseCommand.encode()
+    %Binary.BaseCommand{}
+    |> Map.put(:type, type)
+    |> Map.put(field_name_from_type(type), command)
+    |> Binary.BaseCommand.encode()
+  end
 
-    command_size = byte_size(command_binary)
+  # The counterpart of decode_message/3: the checksum covers the metadata size,
+  # metadata and payload, and nothing else.
+  defp message_part(message_metadata, payload) do
+    metadata = Binary.MessageMetadata.encode(message_metadata)
+    checksummed = <<byte_size(metadata)::32, metadata::binary, payload::binary>>
 
-    metadata_encoded = Binary.MessageMetadata.encode(message_metadata)
-    metadata_size = byte_size(metadata_encoded)
+    <<@magic_crc32c::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
+  end
 
-    checksum_data = <<metadata_size::32, metadata_encoded::binary, payload::binary>>
-    checksum = :crc32cer.nif(checksum_data)
+  defp frame(command, rest) do
+    command_size = byte_size(command)
 
-    message_part = <<
-      @magic_crc32c::16,
-      checksum::32,
-      metadata_size::32,
-      metadata_encoded::binary,
-      payload::binary
-    >>
-
-    message_part_size = byte_size(message_part)
-    total_size = 4 + command_size + message_part_size
-
-    <<
-      total_size::32,
-      command_size::32,
-      command_binary::binary,
-      message_part::binary
-    >>
+    <<4 + command_size + byte_size(rest)::32, command_size::32, command::binary, rest::binary>>
   end
 
   @doc """
