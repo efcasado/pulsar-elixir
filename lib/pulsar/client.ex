@@ -42,6 +42,7 @@ defmodule Pulsar.Client do
   @supported_broker_opts [
     :auth,
     :conn_timeout,
+    :max_frame_size,
     :socket_opts
   ]
 
@@ -56,6 +57,9 @@ defmodule Pulsar.Client do
   - `:host` - Required. Bootstrap broker URL
   - `:auth` - Optional. Authentication configuration
   - `:conn_timeout` - Optional. Connection timeout (default: 5000)
+  - `:max_frame_size` - Optional. Largest frame accepted from this cluster, in
+    bytes (default: `Pulsar.Config.max_frame_size/0`). Raise it to match a broker
+    configured with a larger `maxMessageSize`.
   - `:socket_opts` - Optional. Socket options
   """
   def start_link(opts) do

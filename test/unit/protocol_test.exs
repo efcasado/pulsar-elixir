@@ -143,7 +143,7 @@ defmodule Pulsar.ProtocolTest do
     end
   end
 
-  describe "decode_stream/1" do
+  describe "decode_stream/2" do
     setup do
       %{ping: Protocol.encode(%Binary.CommandPing{}), pong: Protocol.encode(%Binary.CommandPong{})}
     end
@@ -214,8 +214,6 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, "payload")
       corrupted = binary_part(frame, 0, byte_size(frame) - 7) <> "corrupt"
 
-      # The good frame ahead of it is dropped too: once the stream is suspect,
-      # the caller discards the connection rather than trusting a partial batch.
       assert Protocol.decode_stream(ctx.ping <> corrupted <> ctx.pong) == {:error, :checksum_mismatch}
     end
 
@@ -223,6 +221,38 @@ defmodule Pulsar.ProtocolTest do
       garbage = <<0::32, 0::32>>
 
       assert Protocol.decode_stream(ctx.ping <> garbage) == {:error, :malformed_frame}
+    end
+
+    test "rejects an oversized frame on its length prefix alone" do
+      max = Pulsar.Config.max_frame_size()
+      oversized = <<max - 3::32>>
+
+      assert byte_size(oversized) == 4
+      assert Protocol.decode_stream(oversized) == {:error, {:frame_too_large, max + 1}}
+    end
+
+    test "accepts a length prefix at exactly the maximum frame size" do
+      prefix = <<Pulsar.Config.max_frame_size() - 4::32>>
+
+      assert Protocol.decode_stream(prefix) == {:ok, [], prefix}
+    end
+
+    test "rejects a length prefix claiming the largest value the field can hold" do
+      assert Protocol.decode_stream(<<0xFFFFFFFF::32, 0::32>>) ==
+               {:error, {:frame_too_large, 0xFFFFFFFF + 4}}
+    end
+
+    test "rejects an oversized frame before the frames behind it are decoded", ctx do
+      max = Pulsar.Config.max_frame_size()
+
+      assert Protocol.decode_stream(ctx.ping <> <<max::32>>) == {:error, {:frame_too_large, max + 4}}
+    end
+
+    test "takes the limit from the caller, not from global config", ctx do
+      assert Protocol.decode_stream(ctx.ping, byte_size(ctx.ping)) == {:ok, [%Binary.CommandPing{}], <<>>}
+
+      assert Protocol.decode_stream(ctx.ping, byte_size(ctx.ping) - 1) ==
+               {:error, {:frame_too_large, byte_size(ctx.ping)}}
     end
 
     test "reassembles a large message frame split across many chunks" do
@@ -309,7 +339,6 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "rejects a frame whose metadata does not match its checksum", ctx do
-      # 4 total_size + 4 command_size + command + 2 magic + 4 checksum + 4 metadata_size
       <<_total_size::32, command_size::32, _rest::binary>> = ctx.frame
       offset = 18 + command_size
 
@@ -384,8 +413,6 @@ defmodule Pulsar.ProtocolTest do
 
       frame = message_frame(command, metadata, "payload", broker_entry_metadata: broker_entry)
 
-      # Both the payload and the broker entry metadata are corrupt; decoding the
-      # latter would raise, so the checksum has to be reported first.
       corrupted =
         frame
         |> binary_part(0, byte_size(frame) - 4)
@@ -468,14 +495,12 @@ defmodule Pulsar.ProtocolTest do
     base_command |> BaseCommand.encode() |> command_only_frame()
   end
 
-  # Takes raw bytes, so the command region can be one protobuf rejects.
   defp command_only_frame(command) do
     size = byte_size(command)
 
     <<size + 4::32, size::32, command::binary>>
   end
 
-  # As message_frame/4, but takes already-encoded metadata so it can be invalid.
   defp raw_message_frame(command, metadata, payload) do
     command_size = byte_size(command)
     checksummed = <<byte_size(metadata)::32, metadata::binary, payload::binary>>
@@ -519,7 +544,6 @@ defmodule Pulsar.ProtocolTest do
     {props.name_atom, props.type}
   end
 
-  # Only the proto2 required fields: the minimum protobuf will encode.
   defp sample_command(module) do
     fields =
       for {_tag, props} <- module.__message_props__().field_props,

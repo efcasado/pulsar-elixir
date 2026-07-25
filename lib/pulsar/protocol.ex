@@ -1,6 +1,7 @@
 defmodule Pulsar.Protocol do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
   @moduledoc false
+  alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   @doc """
@@ -109,21 +110,34 @@ defmodule Pulsar.Protocol do
   match, or that does not match the framing at all, means the position in the
   stream can no longer be trusted either, so the caller must discard the
   connection rather than keep parsing.
-  """
-  @spec decode_stream(binary()) :: {:ok, [term()], binary()} | {:error, term()}
-  def decode_stream(buffer), do: decode_stream(buffer, [])
 
-  defp decode_stream(<<total_size::32, rest::binary>> = buffer, commands) when byte_size(rest) >= total_size do
+  A frame claiming more than `max_frame_size` bytes is rejected on its length
+  prefix alone, before its bytes are waited for, so a desynced or absurd length
+  cannot buffer without bound. It defaults to `Pulsar.Config.max_frame_size/0`;
+  `Pulsar.Broker` passes the limit of the client it belongs to, since each client
+  may face a cluster with its own `maxMessageSize`.
+  """
+  @spec decode_stream(binary(), pos_integer()) :: {:ok, [term()], binary()} | {:error, term()}
+  def decode_stream(buffer, max_frame_size \\ Config.max_frame_size()) do
+    decode_stream(buffer, [], max_frame_size)
+  end
+
+  defp decode_stream(<<total_size::32, _rest::binary>>, _commands, max_frame_size) when total_size + 4 > max_frame_size do
+    {:error, {:frame_too_large, total_size + 4}}
+  end
+
+  defp decode_stream(<<total_size::32, rest::binary>> = buffer, commands, max_frame_size)
+       when byte_size(rest) >= total_size do
     frame_size = total_size + 4
     <<frame::bytes-size(^frame_size), tail::binary>> = buffer
 
     case decode(frame) do
-      {:ok, command} -> decode_stream(tail, [command | commands])
+      {:ok, command} -> decode_stream(tail, [command | commands], max_frame_size)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp decode_stream(buffer, commands), do: {:ok, Enum.reverse(commands), buffer}
+  defp decode_stream(buffer, commands, _max_frame_size), do: {:ok, Enum.reverse(commands), buffer}
 
   @doc """
   Decodes a single complete frame.
@@ -145,7 +159,6 @@ defmodule Pulsar.Protocol do
 
   def decode(_frame), do: {:error, :malformed_frame}
 
-  # Nothing follows the command.
   defp decode_sections(command, <<>>) do
     case decode_base_command(command) do
       {:ok, base_command} -> command_from_type(base_command)
@@ -173,8 +186,7 @@ defmodule Pulsar.Protocol do
     end
   end
 
-  # The checksum is optional in the protocol and absent from frames written
-  # before it existed, so there is nothing to verify against.
+  # No magic number, so no checksum to verify against.
   defp decode_message(command, rest, broker_metadata) do
     decode_message_parts(command, rest, broker_metadata)
   end

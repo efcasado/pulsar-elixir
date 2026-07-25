@@ -7,6 +7,14 @@ defmodule Pulsar.Config do
   @default_cleanup_interval 30_000
   @default_client_version "Pulsar Elixir Client"
   @default_max_backoff 60_000
+
+  # DEFAULT_MAX_MESSAGE_SIZE + MESSAGE_SIZE_FRAME_PADDING, the cap the Java client
+  # gives its frame decoder. Raise this to match a broker configured with a larger
+  # maxMessageSize.
+  #
+  # https://github.com/apache/pulsar/blob/v4.2.3/pulsar-common/src/main/java/org/apache/pulsar/common/protocol/Commands.java#L123-L124
+  # https://github.com/apache/pulsar/blob/v4.2.3/pulsar-common/src/main/java/org/apache/pulsar/common/protocol/FrameDecoderUtil.java#L63-L65
+  @default_max_frame_size 5 * 1024 * 1024 + 10 * 1024
   @default_partition_discovery_interval_ms 60_000
   @default_ping_interval 60_000
   @default_request_timeout 60_000
@@ -23,6 +31,10 @@ defmodule Pulsar.Config do
 
   def max_backoff do
     Application.get_env(:pulsar, :max_backoff, @default_max_backoff)
+  end
+
+  def max_frame_size do
+    Application.get_env(:pulsar, :max_frame_size, @default_max_frame_size)
   end
 
   def partition_discovery_interval do
