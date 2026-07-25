@@ -260,6 +260,29 @@ defmodule Pulsar.ProtocolTest do
       assert decoded_broker_entry == broker_entry
     end
 
+    test "decodes every combination of the two optional sections" do
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
+      metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
+      broker_entry = %Binary.BrokerEntryMetadata{broker_timestamp: 1_700_000_000_000, index: 99}
+
+      combinations = [
+        {"checksum, broker entry metadata", [checksum: true, broker_entry_metadata: broker_entry], broker_entry},
+        {"checksum, no broker entry metadata", [checksum: true], nil},
+        {"no checksum, broker entry metadata", [checksum: false, broker_entry_metadata: broker_entry], broker_entry},
+        {"no checksum, no broker entry metadata", [checksum: false], nil}
+      ]
+
+      for {label, opts, expected_broker_entry} <- combinations do
+        frame = message_frame(command, metadata, "payload", opts)
+
+        assert {:ok, {^command, decoded_metadata, "payload", decoded_broker_entry}} = Protocol.decode(frame),
+               "failed to decode a frame with #{label}"
+
+        assert decoded_metadata == metadata
+        assert decoded_broker_entry == expected_broker_entry
+      end
+    end
+
     test "treats a payload containing the message magic as opaque bytes" do
       command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
       metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
@@ -524,10 +547,14 @@ defmodule Pulsar.ProtocolTest do
 
     metadata_encoded = Binary.MessageMetadata.encode(metadata)
     metadata_size = byte_size(metadata_encoded)
-    checksum = :crc32cer.nif(<<metadata_size::32, metadata_encoded::binary, payload::binary>>)
+    checksummed = <<metadata_size::32, metadata_encoded::binary, payload::binary>>
 
     message_part =
-      <<@magic_message::16, checksum::32, metadata_size::32, metadata_encoded::binary, payload::binary>>
+      if Keyword.get(opts, :checksum, true) do
+        <<@magic_message::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
+      else
+        checksummed
+      end
 
     message_part =
       case Keyword.get(opts, :broker_entry_metadata) do
