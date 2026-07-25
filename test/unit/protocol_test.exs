@@ -98,7 +98,7 @@ defmodule Pulsar.ProtocolTest do
     end
   end
 
-  describe "encode_message/3" do
+  describe "encode/3" do
     setup do
       %{
         command: %Binary.CommandSend{producer_id: 7, sequence_id: 3},
@@ -108,7 +108,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "lays out command, magic, checksum, metadata and payload", ctx do
-      frame = Protocol.encode_message(ctx.command, ctx.metadata, ctx.payload)
+      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
 
       assert <<total_size::32, command_size::32, command::bytes-size(command_size), @magic_message::16, _checksum::32,
                metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>> = frame
@@ -120,7 +120,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "checksum covers the metadata size, metadata and payload", ctx do
-      frame = Protocol.encode_message(ctx.command, ctx.metadata, ctx.payload)
+      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
 
       <<_total_size::32, command_size::32, _command::bytes-size(command_size), @magic_message::16, checksum::32,
         checksummed::binary>> = frame
@@ -129,7 +129,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "round-trips through decode/1", ctx do
-      frame = Protocol.encode_message(ctx.command, ctx.metadata, ctx.payload)
+      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
 
       assert {:ok, {command, metadata, payload, nil}} = Protocol.decode(frame)
       assert command == ctx.command
@@ -138,14 +138,14 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "handles an empty payload", ctx do
-      frame = Protocol.encode_message(ctx.command, ctx.metadata, "")
+      frame = Protocol.encode(ctx.command, ctx.metadata, "")
 
       assert {:ok, {_command, _metadata, "", nil}} = Protocol.decode(frame)
     end
 
     test "handles a payload large enough to need multi-byte varints", ctx do
       payload = :binary.copy("x", 100_000)
-      frame = Protocol.encode_message(ctx.command, ctx.metadata, payload)
+      frame = Protocol.encode(ctx.command, ctx.metadata, payload)
 
       assert {:ok, {_command, _metadata, ^payload, nil}} = Protocol.decode(frame)
     end
