@@ -286,7 +286,11 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "rejects a frame whose metadata does not match its checksum", ctx do
-      <<head::bytes-size(20), byte, tail::binary>> = ctx.frame
+      # 4 total_size + 4 command_size + command + 2 magic + 4 checksum + 4 metadata_size
+      <<_total_size::32, command_size::32, _rest::binary>> = ctx.frame
+      offset = 18 + command_size
+
+      <<head::bytes-size(^offset), byte, tail::binary>> = ctx.frame
       corrupted = <<head::binary, Bitwise.bxor(byte, 0xFF), tail::binary>>
 
       assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
@@ -317,6 +321,75 @@ defmodule Pulsar.ProtocolTest do
           checksummed::binary>>
 
       assert Protocol.decode(corrupted) == {:error, :malformed_frame}
+    end
+
+    test "rejects a command type the vendored schema does not know" do
+      unknown_type = 99
+      command = <<8, unknown_type>>
+
+      assert Protocol.decode(command_only_frame(command)) == {:error, {:unsupported_command_type, unknown_type}}
+    end
+
+    test "rejects a frame whose command is missing its required type" do
+      assert Protocol.decode(command_only_frame(<<>>)) == {:error, {:unsupported_command_type, nil}}
+    end
+
+    test "rejects a frame whose command bytes protobuf cannot read" do
+      assert Protocol.decode(command_only_frame(<<255, 255, 255, 255>>)) == {:error, :malformed_command}
+    end
+
+    test "does not leak unexpected protobuf decoder exceptions" do
+      assert Protocol.decode(command_only_frame(<<0xF5, 0x0E>>)) == {:error, :malformed_command}
+    end
+
+    test "rejects a message frame whose metadata bytes protobuf cannot read" do
+      command =
+        BaseCommand.encode(%BaseCommand{
+          type: :MESSAGE,
+          message: %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
+        })
+
+      frame = raw_message_frame(command, <<255, 255, 255, 255>>, "payload")
+
+      assert Protocol.decode(frame) == {:error, :malformed_message_metadata}
+    end
+
+    test "reports a bad checksum before touching the broker entry metadata" do
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 5, entryId: 6}}
+      metadata = %Binary.MessageMetadata{producer_name: "p", sequence_id: 1, publish_time: 1}
+      broker_entry = %Binary.BrokerEntryMetadata{broker_timestamp: 1, index: 1}
+
+      frame = message_frame(command, metadata, "payload", broker_entry_metadata: broker_entry)
+
+      # Both the payload and the broker entry metadata are corrupt; decoding the
+      # latter would raise, so the checksum has to be reported first.
+      corrupted =
+        frame
+        |> binary_part(0, byte_size(frame) - 4)
+        |> Kernel.<>("bbbb")
+        |> corrupt_broker_entry_metadata()
+
+      assert Protocol.decode(corrupted) == {:error, :checksum_mismatch}
+    end
+
+    test "never raises, whatever the bytes are", ctx do
+      frames =
+        [<<>>, <<0>>, <<0::32>>, <<4::32, 0::32>>, <<0xFFFFFFFF::32, 0::32>>, ctx.frame] ++
+          truncations(ctx.frame) ++ bit_flips(ctx.frame)
+
+      for frame <- frames do
+        result =
+          try do
+            Protocol.decode(frame)
+          rescue
+            error -> {:raised, error}
+          catch
+            kind, value -> {:caught, kind, value}
+          end
+
+        assert match?({:ok, _}, result) or match?({:error, _}, result),
+               "decode/1 must not raise, got #{inspect(result)} for #{inspect(frame, limit: 8)}"
+      end
     end
   end
 
@@ -369,10 +442,45 @@ defmodule Pulsar.ProtocolTest do
   end
 
   defp frame_base_command(base_command) do
-    encoded = BaseCommand.encode(base_command)
-    size = byte_size(encoded)
+    base_command |> BaseCommand.encode() |> command_only_frame()
+  end
 
-    <<size + 4::32, size::32, encoded::binary>>
+  # Takes raw bytes, so the command region can be one protobuf rejects.
+  defp command_only_frame(command) do
+    size = byte_size(command)
+
+    <<size + 4::32, size::32, command::binary>>
+  end
+
+  # As message_frame/4, but takes already-encoded metadata so it can be invalid.
+  defp raw_message_frame(command, metadata, payload) do
+    command_size = byte_size(command)
+    checksummed = <<byte_size(metadata)::32, metadata::binary, payload::binary>>
+    message_part = <<@magic_message::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
+
+    <<4 + command_size + byte_size(message_part)::32, command_size::32, command::binary, message_part::binary>>
+  end
+
+  defp corrupt_broker_entry_metadata(
+         <<total_size::32, command_size::32, command::bytes-size(command_size), @magic_broker_entry::16, size::32,
+           _broker_metadata::bytes-size(size), rest::binary>>
+       ) do
+    garbage = :binary.copy(<<255>>, size)
+
+    <<total_size::32, command_size::32, command::binary, @magic_broker_entry::16, size::32, garbage::binary,
+      rest::binary>>
+  end
+
+  defp truncations(frame) do
+    for length <- 0..(byte_size(frame) - 1), do: binary_part(frame, 0, length)
+  end
+
+  defp bit_flips(frame) do
+    for offset <- 0..(byte_size(frame) - 1) do
+      <<head::bytes-size(^offset), byte, tail::binary>> = frame
+
+      <<head::binary, Bitwise.bxor(byte, 0xFF), tail::binary>>
+    end
   end
 
   defp schema_command_types do
