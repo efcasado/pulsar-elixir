@@ -36,6 +36,7 @@ defmodule Pulsar.Broker do
     :socket_opts,
     :conn_timeout,
     :auth,
+    :max_frame_size,
     :buffer,
     :requests,
     :actions,
@@ -54,6 +55,7 @@ defmodule Pulsar.Broker do
           socket_opts: list(),
           conn_timeout: integer(),
           auth: list(),
+          max_frame_size: pos_integer(),
           buffer: binary(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
@@ -90,7 +92,8 @@ defmodule Pulsar.Broker do
       Keyword.get(opts, :socket_opts, verify: :verify_peer, cacertfile: CAStore.file_path()),
       Keyword.get(opts, :conn_timeout, 1_000),
       Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: []),
-      Keyword.get(opts, :actions, [])
+      Keyword.get(opts, :actions, []),
+      Keyword.get(opts, :max_frame_size, Config.max_frame_size())
     ]
 
     start_opts = Keyword.take(opts, [:name])
@@ -243,7 +246,7 @@ defmodule Pulsar.Broker do
   end
 
   @impl true
-  def init([name, uri, socket_opts, conn_timeout, auth, post_actions]) do
+  def init([name, uri, socket_opts, conn_timeout, auth, post_actions, max_frame_size]) do
     uri = URI.parse(uri)
     host = Map.get(uri, :host, "localhost")
     port = Map.get(uri, :port, default_port(uri.scheme))
@@ -263,6 +266,7 @@ defmodule Pulsar.Broker do
       conn_timeout: conn_timeout,
       auth: auth,
       actions: post_actions,
+      max_frame_size: max_frame_size,
       buffer: <<>>,
       requests: %{},
       consumers: %{},
@@ -930,7 +934,7 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_data(data, broker) do
-    case Pulsar.Protocol.decode_stream(broker.buffer <> data) do
+    case Pulsar.Protocol.decode_stream(broker.buffer <> data, broker.max_frame_size) do
       {:ok, commands, buffer} -> {:ok, commands, %{broker | buffer: buffer}}
       {:error, reason} -> {:error, reason}
     end
