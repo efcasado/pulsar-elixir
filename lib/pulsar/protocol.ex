@@ -26,6 +26,14 @@ defmodule Pulsar.Protocol do
                      {Map.fetch!(@oneof_by_tag, tag).type, type}
                    end)
 
+  @typedoc """
+  Bytes read from a connection that do not yet amount to a whole frame.
+
+  Packets are held apart until they add up to one, so that reassembling a frame
+  spanning many packets copies it once rather than once per packet.
+  """
+  @type buffer :: {binary(), iodata(), non_neg_integer()} | binary()
+
   @magic_crc32c 0x0E01
   @magic_broker_entry_metadata 0x0E02
 
@@ -119,28 +127,58 @@ defmodule Pulsar.Protocol do
   `Pulsar.Broker` passes the limit of the client it belongs to, since each client
   may face a cluster with its own `maxMessageSize`.
   """
-  @spec decode_stream(binary(), pos_integer()) :: {:ok, [term()], binary()} | {:error, term()}
-  def decode_stream(buffer, max_frame_size \\ Config.max_frame_size()) do
-    decode_stream(buffer, [], max_frame_size)
+  @spec decode_stream(buffer(), binary(), pos_integer()) ::
+          {:ok, [term()], buffer()} | {:error, term()}
+  def decode_stream(buffer, data, max_frame_size \\ Config.max_frame_size())
+
+  def decode_stream(head, data, max_frame_size) when is_binary(head) do
+    decode_stream({head, [], 0}, data, max_frame_size)
   end
 
-  defp decode_stream(<<total_size::32, _rest::binary>>, _commands, max_frame_size) when total_size + 4 > max_frame_size do
+  def decode_stream({head, pending, pending_size}, data, max_frame_size) do
+    parse(head, [pending, data], pending_size + byte_size(data), [], max_frame_size)
+  end
+
+  # Too little to read a length prefix. The head is at most three bytes here, so
+  # merging it with what is pending costs nothing.
+  defp parse(head, pending, pending_size, commands, max_frame_size) when byte_size(head) < 4 and pending_size > 0 do
+    parse(merge(head, pending), [], 0, commands, max_frame_size)
+  end
+
+  defp parse(<<total_size::32, _rest::binary>>, _pending, _pending_size, _commands, max_frame_size)
+       when total_size + 4 > max_frame_size do
     {:error, {:frame_too_large, total_size + 4}}
   end
 
-  defp decode_stream(<<total_size::32, rest::binary>> = buffer, commands, max_frame_size)
+  defp parse(<<total_size::32, rest::binary>> = head, pending, pending_size, commands, max_frame_size)
        when byte_size(rest) >= total_size do
     frame_size = total_size + 4
-    <<frame::bytes-size(^frame_size), tail::binary>> = buffer
+    <<frame::bytes-size(^frame_size), tail::binary>> = head
 
     case decode(frame) do
-      {:ok, command} -> decode_stream(tail, [command | commands], max_frame_size)
-      {:invalid, _command, _bytes, _reason} = invalid -> decode_stream(tail, [invalid | commands], max_frame_size)
-      {:error, reason} -> {:error, reason}
+      {:ok, command} ->
+        parse(tail, pending, pending_size, [command | commands], max_frame_size)
+
+      {:invalid, _command, _bytes, _reason} = invalid ->
+        parse(tail, pending, pending_size, [invalid | commands], max_frame_size)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp decode_stream(buffer, commands, _max_frame_size), do: {:ok, Enum.reverse(commands), buffer}
+  # The packets held back add up to a whole frame, so this is the one point at
+  # which flattening them buys something.
+  defp parse(<<total_size::32, _rest::binary>> = head, pending, pending_size, commands, max_frame_size)
+       when byte_size(head) + pending_size >= total_size + 4 do
+    parse(merge(head, pending), [], 0, commands, max_frame_size)
+  end
+
+  defp parse(head, pending, pending_size, commands, _max_frame_size) do
+    {:ok, Enum.reverse(commands), {head, pending, pending_size}}
+  end
+
+  defp merge(head, pending), do: :erlang.iolist_to_binary([head | pending])
 
   @doc """
   Decodes a single complete frame.

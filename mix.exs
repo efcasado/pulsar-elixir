@@ -70,6 +70,7 @@ defmodule Pulsar.MixProject do
       {:snappyer, "~> 1.2"},
       {:telemetry, "~> 1.0"},
       {:uniq, "~> 0.6.2"},
+      {:benchee, "~> 1.5", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.0", only: :dev, runtime: false},
@@ -85,6 +86,7 @@ defmodule Pulsar.MixProject do
 
   defp aliases do
     [
+      bench: ["run bench/decode_stream.exs"],
       test: ["test"],
       "test.unit": ["test --exclude integration"],
       "test.integration": ["test --only integration"]
