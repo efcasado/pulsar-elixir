@@ -406,7 +406,36 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "rejects a frame whose command is missing its required type" do
-      assert Protocol.decode(command_only_frame(<<>>)) == {:error, {:unsupported_command_type, nil}}
+      assert Protocol.decode(command_only_frame(<<>>)) == {:error, :malformed_command}
+    end
+
+    test "rejects a known command type without its matching command" do
+      frame = frame_base_command(%BaseCommand{type: :PING})
+
+      assert Protocol.decode(frame) == {:error, :malformed_command}
+    end
+
+    test "rejects a command whose own required fields are absent" do
+      # type: MESSAGE, message: CommandMessage{consumer_id: 1} with no message_id,
+      # hand-encoded because BaseCommand.encode/1 refuses to build it.
+      command = <<8, 9, 74, 2, 8, 1>>
+
+      assert %BaseCommand{type: :MESSAGE, message: %Binary.CommandMessage{message_id: nil}} =
+               BaseCommand.decode(command)
+
+      assert Protocol.decode(command_only_frame(command)) == {:error, :malformed_command}
+    end
+
+    test "flags a message frame whose metadata is missing its required fields" do
+      command =
+        BaseCommand.encode(%BaseCommand{
+          type: :MESSAGE,
+          message: %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
+        })
+
+      frame = raw_message_frame(command, <<>>, "payload")
+
+      assert {:invalid, _command, _bytes, :malformed_message_metadata} = Protocol.decode(frame)
     end
 
     test "rejects a frame whose command bytes protobuf cannot read" do
