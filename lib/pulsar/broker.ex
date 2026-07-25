@@ -404,9 +404,24 @@ defmodule Pulsar.Broker do
   end
 
   def connected(:info, {protocol, _socket, data}, broker) when protocol in [:tcp, :ssl] do
-    {commands, new_broker} = handle_data(data, broker)
-    actions = Enum.map(commands, &{:next_event, :internal, {:command, &1}})
-    {:keep_state, new_broker, actions}
+    case handle_data(data, broker) do
+      {:ok, commands, new_broker} ->
+        actions = Enum.map(commands, &{:next_event, :internal, {:command, &1}})
+        {:keep_state, new_broker, actions}
+
+      {:error, reason} ->
+        # The stream cannot be resynchronised, so drop the connection and let the
+        # reconnect path re-establish it from a known state.
+        Logger.error("Discarding connection: #{inspect(reason)}")
+
+        :telemetry.execute(
+          [:pulsar, :connection, :frame_error],
+          %{count: 1},
+          %{reason: reason, broker: broker.name}
+        )
+
+        {:next_state, :disconnected, broker}
+    end
   end
 
   def connected({:timeout, :ping}, _content, broker) do
@@ -915,9 +930,10 @@ defmodule Pulsar.Broker do
   end
 
   defp handle_data(data, broker) do
-    {commands, buffer} = Pulsar.Protocol.decode_stream(broker.buffer <> data)
-
-    {commands, %{broker | buffer: buffer}}
+    case Pulsar.Protocol.decode_stream(broker.buffer <> data) do
+      {:ok, commands, buffer} -> {:ok, commands, %{broker | buffer: buffer}}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp next_backoff(%__MODULE__{prev_backoff: 0}) do
