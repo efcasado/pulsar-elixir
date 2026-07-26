@@ -207,8 +207,9 @@ defmodule Pulsar.Integration.AccessModesTest do
     # collect_events/2 drains what has arrived so far, so the results are accumulated
     # until the fencing shows up. Asserting an exact count would instead measure how
     # often the fenced producer retried before we looked.
+    # Waits on a broker reconnect, so the window is generous.
     all_events =
-      Enum.reduce_while(1..50, [], fn _attempt, collected ->
+      Enum.reduce_while(1..150, [], fn _attempt, collected ->
         collected =
           collected ++
             Utils.collect_events([:pulsar, :producer, :opened, :stop],
