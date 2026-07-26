@@ -48,6 +48,30 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
   setup [:telemetry_listen]
 
+  test ":name names the group, and each consumer is named after it on the broker" do
+    {:ok, group} =
+      Pulsar.start_consumer(
+        "persistent://public/default/consumer-naming",
+        "naming",
+        @consumer_callback,
+        client: @client,
+        name: "naming-group",
+        consumer_count: 2
+      )
+
+    on_exit(fn -> Pulsar.stop_consumer(group) end)
+
+    assert {:ok, ^group} = Pulsar.lookup_consumer("naming-group", client: @client)
+
+    names =
+      group
+      |> Pulsar.get_consumers()
+      |> Enum.map(fn pid -> :sys.get_state(pid).consumer_name end)
+      |> Enum.sort()
+
+    assert names == ["naming-group-consumer-1", "naming-group-consumer-2"]
+  end
+
   test "initial_position latest skips existing messages", %{expected_count: _expected_count} do
     {:ok, latest_group} =
       Pulsar.start_consumer(

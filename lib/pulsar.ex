@@ -325,7 +325,7 @@ defmodule Pulsar do
     client = Keyword.get(opts, :client, @default_client)
     consumer_supervisor = Pulsar.Client.consumer_supervisor(client)
     subscription_type = Keyword.get(opts, :subscription_type, :Shared)
-    name = Keyword.get(opts, :name, topic <> "-" <> subscription_name)
+    {name, opts} = Keyword.pop(opts, :name, topic <> "-" <> subscription_name)
 
     case check_partitioned_topic(topic, client) do
       {:ok, 0} ->
