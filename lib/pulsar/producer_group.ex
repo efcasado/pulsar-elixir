@@ -1,34 +1,8 @@
 defmodule Pulsar.ProducerGroup do
-  @moduledoc """
-  A supervisor that manages a group of producer processes for a single topic.
+  @moduledoc false
 
-  ## Examples
-
-      # Start a producer group with default settings (1 producer)
-      {:ok, group_pid} = ProducerGroup.start_link(
-        "my-topic-producer",
-        "persistent://public/default/my-topic"
-      )
-
-      # Start a producer group with 3 producers
-      {:ok, group_pid} = ProducerGroup.start_link(
-        "my-topic-producer",
-        "persistent://public/default/my-topic",
-        producer_count: 3
-      )
-
-      # Start with batching enabled
-      {:ok, group_pid} = ProducerGroup.start_link(
-        "my-topic-producer",
-        "persistent://public/default/my-topic",
-        batch_enabled: true,
-        batch_size: 100,
-        flush_interval: 10
-      )
-
-      # Get all producer PIDs from the group
-      producer_pids = ProducerGroup.get_producers(group_pid)
-  """
+  # Supervises the producer processes for one topic. Started by Pulsar.start_producer/2,
+  # which owns the option surface.
 
   use Supervisor
 
