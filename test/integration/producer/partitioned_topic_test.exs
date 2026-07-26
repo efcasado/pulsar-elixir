@@ -30,7 +30,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
   test "creates producer groups for each partition" do
     {:ok, producer_pid} =
-      Pulsar.start_producer(@topic,
+      Pulsar.Producer.start(@topic,
         client: @client,
         name: "partitioned-producer-test-1"
       )
@@ -43,7 +43,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     assert Enum.count(partition_groups) == 3
     assert Enum.count(all_producers) == 3
 
-    :ok = Pulsar.stop_producer(producer_pid)
+    :ok = Pulsar.Producer.stop(producer_pid)
   end
 
   test "messages with same key consumed from same partition" do
@@ -52,7 +52,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     producer_name = "partitioned-producer-test-#{test_id}"
 
     {:ok, producer_pid} =
-      Pulsar.start_producer(@topic,
+      Pulsar.Producer.start(@topic,
         client: @client,
         name: producer_name
       )
@@ -60,7 +60,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = wait_for_producers_ready(producer_pid)
 
     {:ok, consumer_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         subscription,
         DummyConsumer,
@@ -75,7 +75,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
 
     for msg <- messages do
-      {:ok, _} = Pulsar.send(producer_pid, msg, partition_key: partition_key)
+      {:ok, _} = Pulsar.Producer.send(producer_pid, msg, partition_key: partition_key)
     end
 
     Utils.wait_for(fn ->
@@ -101,8 +101,8 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
              |> Enum.map(fn msg -> msg.command.message_id.partition end)
              |> Enum.uniq()
 
-    :ok = Pulsar.stop_producer(producer_pid)
-    :ok = Pulsar.stop_consumer(consumer_pid)
+    :ok = Pulsar.Producer.stop(producer_pid)
+    :ok = Pulsar.Consumer.stop(consumer_pid)
   end
 
   test "messages without partition_key are distributed randomly across partitions" do
@@ -111,7 +111,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     producer_name = "partitioned-producer-random-test-#{test_id}"
 
     {:ok, producer_pid} =
-      Pulsar.start_producer(@topic,
+      Pulsar.Producer.start(@topic,
         client: @client,
         name: producer_name
       )
@@ -119,7 +119,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = wait_for_producers_ready(producer_pid)
 
     {:ok, consumer_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         subscription,
         DummyConsumer,
@@ -133,7 +133,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     messages =
       for i <- 1..30 do
         msg = "random-msg-#{i}-#{test_id}"
-        {:ok, _} = Pulsar.send(producer_pid, msg)
+        {:ok, _} = Pulsar.Producer.send(producer_pid, msg)
         msg
       end
 
@@ -154,8 +154,8 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     partition_counts = Enum.frequencies(partitions)
     assert Enum.all?(partition_counts, fn {_partition, count} -> count >= 1 end)
 
-    :ok = Pulsar.stop_producer(producer_pid)
-    :ok = Pulsar.stop_consumer(consumer_pid)
+    :ok = Pulsar.Producer.stop(producer_pid)
+    :ok = Pulsar.Consumer.stop(consumer_pid)
   end
 
   test "discovers partitions added to the topic" do
@@ -165,7 +165,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     System.create_topic(topic, 3)
 
     {:ok, producer_pid} =
-      Pulsar.start_producer(topic,
+      Pulsar.Producer.start(topic,
         client: @client,
         name: "partition-discovery-producer-#{test_id}",
         partition_discovery_interval_ms: @discovery_interval_ms
@@ -179,7 +179,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     # producer group for each one, without restarting the existing groups.
     assert wait_for_partition_count(producer_pid, 6) == :ok
 
-    :ok = Pulsar.stop_producer(producer_pid)
+    :ok = Pulsar.Producer.stop(producer_pid)
   end
 
   defp wait_for_producers_ready(partitioned_producer_pid) do

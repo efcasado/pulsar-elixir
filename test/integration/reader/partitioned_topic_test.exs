@@ -21,14 +21,14 @@ defmodule Pulsar.Integration.Reader.PartitionedTopicTest do
     :ok = System.create_topic(@topic, @partitions)
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_partitioned_test_producer
       )
 
     for i <- 1..@num_messages do
-      Pulsar.send(:reader_partitioned_test_producer, "Message #{i}", client: @client)
+      Pulsar.Producer.send(:reader_partitioned_test_producer, "Message #{i}", client: @client)
     end
 
     on_exit(fn ->

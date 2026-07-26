@@ -9,32 +9,33 @@ defmodule Pulsar.Client do
 
   ## Usage
 
-  ### Single Client (Implicit)
-
-  When using `Pulsar.start/1`, a default client is automatically created:
-
-      # config.exs
-      config :pulsar,
-        host: "pulsar://localhost:6650",
-        consumers: [...]
-
-      # Uses implicit :default client
-      {:ok, consumer} = Pulsar.start_consumer(topic, subscription, MyCallback)
-
-  ### Multiple Clients (Explicit)
-
-  You can start multiple clients in your supervision tree:
+  A client belongs in the host application's supervision tree, ahead of anything that
+  uses it:
 
       children = [
-        {Pulsar.Client, name: :analytics_client, host: "pulsar://analytics:6650"},
-        {Pulsar.Client, name: :events_client, host: "pulsar://events:6650"}
+        {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+        {Pulsar.Consumer, topic: topic, subscription_name: "sub", callback_module: MyCallback}
       ]
 
-      # Explicit client usage
-      {:ok, consumer} = Pulsar.start_consumer(
-        topic, subscription, MyCallback,
-        client: :analytics_client
-      )
+      Supervisor.start_link(children, strategy: :rest_for_one)
+
+  Several clients can coexist, each with its own connections and registries:
+
+      children = [
+        {Pulsar.Client, name: :analytics, host: "pulsar://analytics:6650"},
+        {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
+      ]
+
+  Consumers and producers pick one with `:client`, defaulting to `:default`:
+
+      {Pulsar.Consumer,
+       topic: topic,
+       subscription_name: "sub",
+       callback_module: MyCallback,
+       client: :analytics}
+
+  Clients can also be started at runtime with `Pulsar.start_client/1`, which supervises
+  them under `:pulsar` rather than under the caller.
   """
 
   use Supervisor
@@ -78,8 +79,11 @@ defmodule Pulsar.Client do
   @schema [
             name: [
               type: :atom,
-              required: true,
-              doc: "Name the client is registered under."
+              default: :default,
+              doc: """
+              Name the client is registered under, and the name consumers and producers
+              select it by. Defaults to `:default`, which is also their default `:client`.
+              """
             ],
             host: [
               type: :string,
@@ -91,6 +95,16 @@ defmodule Pulsar.Client do
   @supported_broker_opts Keyword.keys(@broker_opts)
 
   ## Public API
+
+  # Several clients can sit in one supervision tree, so the id cannot be the module.
+  @doc false
+  def child_spec(opts) do
+    %{
+      id: Keyword.get(opts, :name, :default),
+      start: {__MODULE__, :start_link, [opts]},
+      type: :supervisor
+    }
+  end
 
   @doc """
   Starts a client with the given options.
@@ -119,6 +133,17 @@ defmodule Pulsar.Client do
       error ->
         error
     end
+  end
+
+  @doc """
+  Starts a client under `:pulsar`'s own supervisor rather than the caller's.
+
+  For clients created at runtime. Prefer `{Pulsar.Client, opts}` in a supervision tree
+  otherwise, so that the client's lifetime is tied to the code depending on it.
+  """
+  @spec start(keyword()) :: DynamicSupervisor.on_start_child()
+  def start(opts) do
+    DynamicSupervisor.start_child(Pulsar.Supervisor, {__MODULE__, opts})
   end
 
   @impl true

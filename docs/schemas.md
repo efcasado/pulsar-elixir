@@ -24,7 +24,7 @@
 ### Producers
 
 ```elixir
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "topic",
   schema: [
     type: :Json,              # required
@@ -36,13 +36,13 @@
 
 # You must encode payloads manually
 user = %{id: 1, name: "Alice"}
-Pulsar.send(producer, Jason.encode!(user))
+Pulsar.Producer.send(producer, Jason.encode!(user))
 ```
 
 ### Consumers
 
 ```elixir
-{:ok, consumer} = Pulsar.start_consumer(
+{:ok, consumer} = Pulsar.Consumer.start(
   "topic",
   "subscription",
   MyCallback,
@@ -56,25 +56,23 @@ def handle_message(%Pulsar.Message{payload: payload}, state) do
 end
 ```
 
-### Configuration (config.exs)
+### Supervision tree
 
 ```elixir
-config :pulsar,
-  host: "pulsar://localhost:6650",
-  producers: [
-    {:user_producer, [
-      topic: "users",
-      schema: [type: :Json, definition: user_schema_def]
-    ]}
-  ],
-  consumers: [
-    {:user_consumer, [
-      topic: "users",
-      subscription_name: "my-sub",
-      callback_module: MyCallback,
-      schema: [type: :Json, definition: user_schema_def]
-    ]}
-  ]
+children = [
+  {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+  {Pulsar.Producer,
+   topic: "users",
+   name: :user_producer,
+   schema: [type: :Json, definition: user_schema_def]},
+  {Pulsar.Consumer,
+   topic: "users",
+   subscription_name: "my-sub",
+   callback_module: MyCallback,
+   schema: [type: :Json, definition: user_schema_def]}
+]
+
+Supervisor.start_link(children, strategy: :rest_for_one)
 ```
 
 **Schema options:**
@@ -87,8 +85,8 @@ config :pulsar,
 
 **String schema:**
 ```elixir
-{:ok, producer} = Pulsar.start_producer("logs", schema: [type: :String])
-Pulsar.send(producer, "Application started")
+{:ok, producer} = Pulsar.Producer.start("logs", schema: [type: :String])
+Pulsar.Producer.send(producer, "Application started")
 ```
 
 **JSON schema** (uses Avro record format):
@@ -102,12 +100,12 @@ schema_def = %{
   ]
 }
 
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "users",
   schema: [type: :Json, definition: schema_def]
 )
 
-Pulsar.send(producer, Jason.encode!(%{id: 1, name: "Alice"}))
+Pulsar.Producer.send(producer, Jason.encode!(%{id: 1, name: "Alice"}))
 ```
 
 ## Compatibility & Evolution
@@ -116,10 +114,10 @@ The broker enforces compatibility when registering schemas:
 
 ```elixir
 # Producer with String schema
-{:ok, p1} = Pulsar.start_producer("topic", schema: [type: :String])
+{:ok, p1} = Pulsar.Producer.start("topic", schema: [type: :String])
 
 # Different schema type - REJECTED by broker
-{:ok, p2} = Pulsar.start_producer("topic", schema: [type: :Int32])
+{:ok, p2} = Pulsar.Producer.start("topic", schema: [type: :Int32])
 # Process terminates with {:IncompatibleSchema, ...}
 ```
 

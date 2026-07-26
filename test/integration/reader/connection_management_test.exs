@@ -18,7 +18,7 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_connection_management_test_producer
@@ -26,7 +26,7 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
 
     for i <- 1..@num_messages do
       payload = "Message #{i}"
-      Pulsar.send(:reader_connection_management_test_producer, payload, client: @client)
+      Pulsar.Producer.send(:reader_connection_management_test_producer, payload, client: @client)
     end
 
     on_exit(fn ->

@@ -21,7 +21,7 @@ defmodule Pulsar.Reader do
   Using an external client (recommended for production):
 
       # In your application supervision tree
-      {:ok, _pid} = Pulsar.start(host: "pulsar://localhost:6650")
+      children = [{Pulsar.Client, name: :default, host: "pulsar://localhost:6650"}]
 
       # Later, in your code
       Pulsar.Reader.stream("persistent://public/default/my-topic",
@@ -288,7 +288,7 @@ defmodule Pulsar.Reader do
       |> maybe_put(:start_message_id, start_message_id)
       |> maybe_put(:start_timestamp, start_timestamp)
 
-    case Pulsar.start_consumer(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
+    case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
       {:ok, consumer_group_pid} ->
         {:ok, build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout)}
 
@@ -356,7 +356,7 @@ defmodule Pulsar.Reader do
   defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
-    case Pulsar.stop_consumer(state.consumer_group_pid) do
+    case Consumer.stop(state.consumer_group_pid) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
@@ -422,7 +422,7 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_consumers_ready(consumer_group_pid, reader_ref) do
-    expected_count = length(Pulsar.get_consumers(consumer_group_pid))
+    expected_count = length(Consumer.workers(consumer_group_pid))
     collect_ready_messages(expected_count, [], 5_000, reader_ref)
   end
 

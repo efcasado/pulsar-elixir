@@ -7,6 +7,25 @@ defmodule Pulsar.Consumer.Options do
   # default here: they have to stay absent so the process that reads them can still
   # consult Pulsar.Config.
   @schema [
+    partitions: [
+      type: :non_neg_integer,
+      doc: false
+    ],
+    topic: [
+      type: :string,
+      required: true,
+      doc: "Topic to subscribe to."
+    ],
+    subscription_name: [
+      type: :string,
+      required: true,
+      doc: "Name of the subscription."
+    ],
+    callback_module: [
+      type: :atom,
+      required: true,
+      doc: "Module implementing `Pulsar.Consumer.Callback`."
+    ],
     client: [
       type: :atom,
       default: :default,

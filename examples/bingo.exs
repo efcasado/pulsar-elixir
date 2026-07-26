@@ -57,26 +57,19 @@ defmodule Main do
     [number | other_numbers] = Enum.shuffle(numbers)
 
     IO.puts("#{inspect(self())} calling number: #{number}")
-    Pulsar.send(producer, Integer.to_string(number))
+    Pulsar.Producer.send(producer, Integer.to_string(number))
 
     call_numbers(Enum.shuffle(other_numbers), producer)
   end
 
   def run do
-    deps = Application.spec(:pulsar, :applications)
-    Enum.each(deps, &Application.ensure_all_started/1)
+    children =
+      [
+        {Pulsar.Client, name: :default, host: @broker},
+        {Pulsar.Producer, topic: @topic, name: :game_master}
+      ] ++ consumers(@num_players, @card_size, @topic)
 
-    config = [
-      host: @broker,
-      producers: [
-        game_master: [
-          topic: @topic
-        ]
-      ],
-      consumers: consumers(@num_players, @card_size, @topic)
-    ]
-
-    {:ok, _pid} = Pulsar.start(config)
+    {:ok, _pid} = Supervisor.start_link(children, strategy: :rest_for_one)
 
     spawn(fn -> call_numbers(1..99, :game_master) end)
 
@@ -88,15 +81,14 @@ defmodule Main do
       name = "player-#{player_number}"
       atom_name = String.to_atom(name)
 
-      {atom_name,
-       [
-         topic: topic,
-         subscription_name: name,
-         subscription_type: :Exclusive,
-         callback_module: BingoPlayer,
-         durable: false,
-         init_args: [self(), card_size]
-       ]}
+      {Pulsar.Consumer,
+       name: atom_name,
+       topic: topic,
+       subscription_name: name,
+       subscription_type: :Exclusive,
+       callback_module: BingoPlayer,
+       durable: false,
+       init_args: [self(), card_size]}
     end)
   end
 

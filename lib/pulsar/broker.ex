@@ -20,7 +20,7 @@ defmodule Pulsar.Broker do
   @behaviour :gen_statem
 
   alias Pulsar.Config
-  alias Pulsar.Producer
+  alias Pulsar.Producer.Worker, as: Producer
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -183,7 +183,7 @@ defmodule Pulsar.Broker do
   end
 
   def get_consumers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url, opts) do
+    case Pulsar.Client.lookup_broker(broker_url, opts) do
       {:ok, broker_pid} -> get_consumers(broker_pid)
       {:error, :not_found} -> %{}
     end
@@ -203,7 +203,7 @@ defmodule Pulsar.Broker do
   end
 
   def get_producers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url, opts) do
+    case Pulsar.Client.lookup_broker(broker_url, opts) do
       {:ok, broker_pid} -> get_producers(broker_pid)
       {:error, :not_found} -> %{}
     end
@@ -232,7 +232,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
       if Process.alive?(consumer_pid) do
         Logger.debug("Gracefully stopping consumer #{consumer_id}")
-        Pulsar.Consumer.stop(consumer_pid)
+        Pulsar.Consumer.Worker.stop(consumer_pid)
       end
     end)
 

@@ -34,7 +34,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     large_message = "This is a test message that will be chunked."
 
     {:ok, producer} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_simple_producer,
@@ -43,7 +43,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-simple",
         @consumer_callback,
@@ -55,7 +55,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert byte_size(large_message) == 44
 
-    {:ok, _msg_id} = Pulsar.send(producer, large_message)
+    {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == 1
@@ -75,7 +75,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     p2_large_message = "This is a test message that will be chunked from producer 2."
 
     {:ok, producer1} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_interleaved_producer1,
@@ -84,7 +84,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, producer2} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_interleaved_producer2,
@@ -93,7 +93,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-interleaved",
         @consumer_callback,
@@ -103,8 +103,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     [consumer] = Utils.wait_for_consumer_ready(1)
 
-    task1 = Task.async(fn -> Pulsar.send(producer1, p1_large_message) end)
-    task2 = Task.async(fn -> Pulsar.send(producer2, p2_large_message) end)
+    task1 = Task.async(fn -> Pulsar.Producer.send(producer1, p1_large_message) end)
+    task2 = Task.async(fn -> Pulsar.Producer.send(producer2, p2_large_message) end)
 
     Task.await(task1)
     Task.await(task2)
@@ -125,7 +125,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     large_message = "This is a test message that will be chunked."
 
     {:ok, producer} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_mixed_producer,
@@ -134,7 +134,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-mixed",
         @consumer_callback,
@@ -144,9 +144,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     [consumer] = Utils.wait_for_consumer_ready(1)
 
-    {:ok, _} = Pulsar.send(producer, small_message)
-    {:ok, _} = Pulsar.send(producer, large_message)
-    {:ok, _} = Pulsar.send(producer, small_message)
+    {:ok, _} = Pulsar.Producer.send(producer, small_message)
+    {:ok, _} = Pulsar.Producer.send(producer, large_message)
+    {:ok, _} = Pulsar.Producer.send(producer, small_message)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == 3
@@ -164,7 +164,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     very_large_message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_disabled_producer,
@@ -173,14 +173,14 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert byte_size(very_large_message) == 6_291_456
 
-    assert {:error, _reason} = Pulsar.send(producer, very_large_message)
+    assert {:error, _reason} = Pulsar.Producer.send(producer, very_large_message)
   end
 
   test "producer with chunking enabled can send and receive messages larger than 5MB" do
     very_large_message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_enabled_5mb_producer,
@@ -188,7 +188,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-5mb",
         @consumer_callback,
@@ -200,7 +200,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert byte_size(very_large_message) == 6_291_456
 
-    {:ok, chunked_msg_id} = Pulsar.send(producer, very_large_message)
+    {:ok, chunked_msg_id} = Pulsar.Producer.send(producer, very_large_message)
     assert is_map(chunked_msg_id)
     assert chunked_msg_id.uuid
     assert chunked_msg_id.num_chunks == 2
@@ -226,7 +226,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     alias Pulsar.Consumer.ChunkedMessageContext
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-expire",
         @consumer_callback,
@@ -299,7 +299,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     alias Pulsar.Consumer.ChunkedMessageContext
 
     {:ok, producer} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :chunking_evict_producer,
@@ -308,7 +308,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "chunking-evict",
         @consumer_callback,
@@ -396,7 +396,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert map_size(state.chunked_message_contexts) == 2
 
     large_message = "This is a real message that will be chunked and trigger eviction"
-    {:ok, _msg_id} = Pulsar.send(producer, large_message)
+    {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
     assert_receive {:telemetry_event,
                     %{

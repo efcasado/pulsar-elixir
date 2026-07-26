@@ -18,7 +18,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_common_test_producer
@@ -26,7 +26,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
 
     for i <- 1..@num_messages do
       payload = "Message #{i}"
-      Pulsar.send(:reader_common_test_producer, payload, client: @client)
+      Pulsar.Producer.send(:reader_common_test_producer, payload, client: @client)
     end
 
     on_exit(fn ->
@@ -106,7 +106,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
     unique_topic = "persistent://public/default/reader-empty-#{:erlang.unique_integer([:positive])}"
 
     {:ok, _producer} =
-      Pulsar.start_producer(unique_topic,
+      Pulsar.Producer.start(unique_topic,
         client: @client,
         name: :"empty_producer_#{:erlang.unique_integer([:positive])}"
       )

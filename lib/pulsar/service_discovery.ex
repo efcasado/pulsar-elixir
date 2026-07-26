@@ -34,6 +34,35 @@ defmodule Pulsar.ServiceDiscovery do
     )
   end
 
+  @doc """
+  Same as `partition_count/2`, retrying while the cluster is not answering yet.
+
+  A client's bootstrap broker connects asynchronously, so the first lookup after a
+  client starts routinely arrives before there is a connection to ask.
+  """
+  @spec partition_count_with_retry(String.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def partition_count_with_retry(topic, opts \\ []) do
+    attempts = Keyword.get(opts, :attempts, 10)
+    delay_ms = Keyword.get(opts, :delay_ms, 500)
+
+    retry_partition_count(topic, Keyword.take(opts, [:client]), attempts, delay_ms)
+  end
+
+  defp retry_partition_count(_topic, _opts, 0, _delay_ms), do: {:error, :partition_check_failed}
+
+  defp retry_partition_count(topic, opts, attempts, delay_ms) do
+    case partition_count(topic, opts) do
+      {:ok, partitions} ->
+        {:ok, partitions}
+
+      {:error, reason} ->
+        Logger.warning("Error checking partitioned topic metadata for #{topic}: #{inspect(reason)}")
+        Process.sleep(delay_ms)
+        retry_partition_count(topic, opts, attempts - 1, delay_ms)
+    end
+  end
+
   defp do_partition_count(broker, topic) do
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
       {:ok, %{response: :Success, partitions: partitions}} ->

@@ -40,14 +40,14 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   test "partitioned consumers", %{expected_count: expected_count} do
     {:ok, partitioned_consumer_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "partitioned-consumers",
         @consumer_callback,
         subscription_options(2)
       )
 
-    consumers = Pulsar.get_consumers(partitioned_consumer_pid)
+    consumers = Pulsar.Consumer.workers(partitioned_consumer_pid)
 
     Utils.wait_for(fn ->
       consumers
@@ -83,7 +83,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     opts = Keyword.put(subscription_options(1), :partition_discovery_interval_ms, @discovery_interval_ms)
 
     {:ok, partitioned_consumer_pid} =
-      Pulsar.start_consumer(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
+      Pulsar.Consumer.start(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
 
     assert wait_for_partition_count(partitioned_consumer_pid, 3) == :ok
 
@@ -93,7 +93,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     # consumer group for each one, without restarting the existing groups.
     assert wait_for_partition_count(partitioned_consumer_pid, 6) == :ok
 
-    :ok = Pulsar.stop_consumer(partitioned_consumer_pid)
+    :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
 
   defp subscription_options(count) do

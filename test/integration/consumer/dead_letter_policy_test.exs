@@ -21,13 +21,13 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :test_producer
       )
 
-    Enum.each(@messages, &({:ok, _message_id} = Pulsar.send(:test_producer, &1, client: @client)))
+    Enum.each(@messages, &({:ok, _message_id} = Pulsar.Producer.send(:test_producer, &1, client: @client)))
 
     on_exit(fn ->
       Pulsar.Client.stop(@client)
@@ -40,21 +40,21 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     dlq_topic = topic <> "-" <> subscription <> "-DLQ"
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(topic, subscription, DummyConsumer,
+      Pulsar.Consumer.start(topic, subscription, DummyConsumer,
         client: @client,
         redelivery_interval: 100,
         dead_letter_policy: [max_redelivery: 1, topic: dlq_topic]
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Pulsar.Consumer.workers(consumer_group)
 
     {:ok, dlq_group} =
-      Pulsar.start_consumer(dlq_topic, "dlq-consumer", DummyConsumer,
+      Pulsar.Consumer.start(dlq_topic, "dlq-consumer", DummyConsumer,
         client: @client,
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Pulsar.get_consumers(dlq_group)
+    [dlq_consumer] = Pulsar.Consumer.workers(dlq_group)
 
     command = %Proto.CommandMessage{
       consumer_id: 1,
@@ -82,7 +82,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     max_redelivery = 3
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         subscription,
         DummyConsumer,
@@ -97,10 +97,10 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] = Pulsar.get_consumers(consumer_group)
+    [failing_consumer] = Pulsar.Consumer.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         dlq_topic,
         "dlq-consumer",
         DummyConsumer,
@@ -109,7 +109,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Pulsar.get_consumers(dlq_consumer_group)
+    [dlq_consumer] = Pulsar.Consumer.workers(dlq_consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)
@@ -136,7 +136,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         subscription,
         DummyConsumer,
@@ -147,7 +147,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         redelivery_interval: 100
       )
 
-    [failing_consumer] = Pulsar.get_consumers(consumer_group)
+    [failing_consumer] = Pulsar.Consumer.workers(consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(failing_consumer) >= length(@messages) * 2
@@ -166,7 +166,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         subscription,
         DummyConsumer,
@@ -180,10 +180,10 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [_failing_consumer] = Pulsar.get_consumers(consumer_group)
+    [_failing_consumer] = Pulsar.Consumer.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         expected_dlq_topic,
         "dlq-default-monitor",
         DummyConsumer,
@@ -192,7 +192,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Pulsar.get_consumers(dlq_consumer_group)
+    [dlq_consumer] = Pulsar.Consumer.workers(dlq_consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)

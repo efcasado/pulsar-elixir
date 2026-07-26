@@ -101,7 +101,7 @@ defmodule Pulsar.ConsumerGroup do
       %{
         id: consumer_id,
         start: {
-          Pulsar.Consumer,
+          Pulsar.Consumer.Worker,
           :start_link,
           [topic, subscription_name, subscription_type, callback_module, [name: consumer_id] ++ opts]
         },

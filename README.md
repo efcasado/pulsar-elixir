@@ -52,29 +52,30 @@ defmodule MyPulsarConsumer do
 end
 ```
 
-You can start producing and consuming messages with the following configuration:
+Start a client, a consumer and a producer from your own supervision tree:
 
 ```elixir
-config :pulsar,
-  host: "pulsar://localhost:6650",
-  consumers: [
-    my_consumer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic",
-        subscription_name: "my-subscription",
-        callback_module: MyPulsarConsumer
-    ]
-  ],
-  producers: [
-    my_producer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic"
-    ]
-  ]
+children = [
+  {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+  {Pulsar.Consumer,
+   topic: "persistent://my-tenant/my-namespace/my-topic",
+   subscription_name: "my-subscription",
+   callback_module: MyPulsarConsumer},
+  {Pulsar.Producer,
+   topic: "persistent://my-tenant/my-namespace/my-topic",
+   name: :my_producer}
+]
+
+Supervisor.start_link(children, strategy: :rest_for_one)
 ```
+
+`:rest_for_one` matters: consumers and producers resolve brokers through registries
+their client owns, so they have to be restarted when the client is.
 
 Sending a message using the configured producer can be done as follows:
 
 ```elixir
-Pulsar.send(:my_producer, "Hello, Pulsar!")
+Pulsar.Producer.send(:my_producer, "Hello, Pulsar!")
 ```
 
 By default, brokers, consumers and producers are started within the scope of the
@@ -151,7 +152,7 @@ The `examples` directory includes a number of examples that demonstrate the use 
 For example:
 
 ```
-mix run --no-start examples/bingo.exs
+mix run examples/bingo.exs
 ```
 
 

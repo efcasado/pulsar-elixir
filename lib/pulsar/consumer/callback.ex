@@ -151,7 +151,7 @@ defmodule Pulsar.Consumer.Callback do
   to increase throughput:
 
       # Start 3 consumers for shared processing
-      {:ok, consumer_pids} = Pulsar.start_consumer(
+      {:ok, consumer_pids} = Pulsar.Consumer.start(
         topic,
         subscription,
         :Key_Shared,

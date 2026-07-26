@@ -151,7 +151,7 @@ defmodule Pulsar.Test.Support.Utils do
   """
   def wait_for_producer_ready(group_pid) do
     wait_for(fn ->
-      case Pulsar.get_producers(group_pid) do
+      case Pulsar.Producer.workers(group_pid) do
         [p | _] -> :sys.get_state(p).ready == true
         _ -> false
       end

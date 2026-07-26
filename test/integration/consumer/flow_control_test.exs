@@ -29,14 +29,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :flow_control_producer
       )
 
     for {key, payload} <- @messages do
-      Pulsar.send(:flow_control_producer, payload, partition_key: key, client: @client)
+      Pulsar.Producer.send(:flow_control_producer, payload, partition_key: key, client: @client)
     end
 
     on_exit(fn ->
@@ -53,14 +53,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "tiny-permits",
         @consumer_callback,
         subscription_options(1, 1, 0, 1)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Pulsar.Consumer.workers(consumer_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -79,14 +79,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "threshold-test",
         @consumer_callback,
         subscription_options(1, 5, 3, 4)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Pulsar.Consumer.workers(consumer_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -104,14 +104,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
 
   test "manual flow control with zero initial permits", %{expected_count: expected_count} do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "manual-flow",
         @consumer_callback,
         subscription_options(1, 0, 0, 0)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Pulsar.Consumer.workers(consumer_group)
 
     # Initially, no messages should be received
     Process.sleep(500)

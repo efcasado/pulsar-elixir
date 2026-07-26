@@ -18,7 +18,7 @@ application layer.
 When a producer is configured with chunking enabled:
 
 ```elixir
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "my-topic",
   chunking_enabled: true,
   max_message_size: 1024  # Split messages larger than 1KB
@@ -187,7 +187,7 @@ num_permits = Pulsar.Message.num_broker_messages(message)
 
 ```elixir
 # Producer sends large message
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "large-files",
   chunking_enabled: true,
   max_message_size: 1024 * 1024  # 1MB chunks
@@ -195,7 +195,7 @@ num_permits = Pulsar.Message.num_broker_messages(message)
 
 # Send 5MB file
 large_payload = File.read!("large_file.dat")  # 5MB
-{:ok, _msg_id} = Pulsar.send(producer, large_payload)
+{:ok, _msg_id} = Pulsar.Producer.send(producer, large_payload)
 # Producer automatically splits into 5 chunks
 
 # Consumer receives and assembles

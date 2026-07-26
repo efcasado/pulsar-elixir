@@ -27,14 +27,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :subscription_types_producer
       )
 
     for {key, payload} <- @messages do
-      Pulsar.send(:subscription_types_producer, payload, partition_key: key, client: @client)
+      Pulsar.Producer.send(:subscription_types_producer, payload, partition_key: key, client: @client)
     end
 
     on_exit(fn ->
@@ -46,7 +46,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do
     {:ok, _shared_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "shared",
         @consumer_callback,
@@ -77,7 +77,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "key_shared subscription partitions by key", %{expected_count: expected_count} do
     {:ok, _key_shared_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "key-shared",
         @consumer_callback,
@@ -120,7 +120,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "failover subscription uses single active consumer", %{expected_count: expected_count} do
     {:ok, _failover_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "failover",
         @consumer_callback,
@@ -151,7 +151,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "exclusive subscription receives all messages", %{expected_count: expected_count} do
     {:ok, _exclusive_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "exclusive",
         @consumer_callback,
@@ -170,7 +170,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "exclusive subscription fails with multiple consumers" do
     {:ok, exclusive_multi_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "exclusive-multi",
         @consumer_callback,

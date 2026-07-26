@@ -21,7 +21,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
       )
 
     {:ok, group_pid} =
-      Pulsar.start_producer(@topic,
+      Pulsar.Producer.start(@topic,
         client: @client,
         name: "message-options-producer"
       )
@@ -29,7 +29,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     Utils.wait_for_producer_ready(group_pid)
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(@topic, "message-options-sub", @consumer_callback,
+      Pulsar.Consumer.start(@topic, "message-options-sub", @consumer_callback,
         client: @client,
         init_args: [notify_pid: self()]
       )
@@ -45,7 +45,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
   test "send message with partition key", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "payload with key", partition_key: "user-123", client: @client)
+             Pulsar.Producer.send(producer, "payload with key", partition_key: "user-123", client: @client)
 
     message = wait_for_message(consumer, "payload with key")
     assert message.metadata.partition_key == "user-123"
@@ -53,7 +53,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
   test "send message with ordering key", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "payload with ordering key",
+             Pulsar.Producer.send(producer, "payload with ordering key",
                ordering_key: "order-456",
                client: @client
              )
@@ -70,7 +70,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     }
 
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "payload with properties",
+             Pulsar.Producer.send(producer, "payload with properties",
                properties: properties,
                client: @client
              )
@@ -88,7 +88,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     event_time_ms = DateTime.to_unix(event_time, :millisecond)
 
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "payload with event time",
+             Pulsar.Producer.send(producer, "payload with event time",
                event_time: event_time,
                client: @client
              )
@@ -102,7 +102,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
 
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "deliver_at payload",
+             Pulsar.Producer.send(producer, "deliver_at payload",
                deliver_at_time: deliver_at,
                client: @client
              )
@@ -115,7 +115,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     before_send = :erlang.system_time(:millisecond)
 
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "deliver_after payload",
+             Pulsar.Producer.send(producer, "deliver_after payload",
                deliver_after: 1000,
                client: @client
              )
@@ -136,7 +136,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     event_time_ms = DateTime.to_unix(event_time, :millisecond)
 
     assert {:ok, _message_id} =
-             Pulsar.send(producer, "complex payload",
+             Pulsar.Producer.send(producer, "complex payload",
                partition_key: "user-999",
                ordering_key: "order-888",
                properties: properties,

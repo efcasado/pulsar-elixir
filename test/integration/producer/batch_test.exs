@@ -25,7 +25,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Pulsar.get_producers(producer_pid)
+      [producer] = Pulsar.Producer.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       messages = Enum.map(1..12, &"msg-#{&1}")
@@ -44,10 +44,10 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
-      [producer] = Pulsar.get_producers(producer_pid)
+      [producer] = Pulsar.Producer.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
-      assert {:ok, _} = Pulsar.send(producer_pid, "single-msg")
+      assert {:ok, _} = Pulsar.Producer.send(producer_pid, "single-msg")
 
       assert_messages_received(consumer_pid, ["single-msg"])
       assert_batch_telemetry(count: 1, producer_name: producer_name)
@@ -61,7 +61,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Wait for a few timer cycles without sending anything
       Process.sleep(200)
 
-      [producer] = Pulsar.get_producers(producer_pid)
+      [producer] = Pulsar.Producer.workers(producer_pid)
       state = :sys.get_state(producer)
       assert state.ready == true
       assert state.batch == []
@@ -77,7 +77,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     :ok = System.create_topic(topic)
 
     {:ok, _consumer_group} =
-      Pulsar.start_consumer(topic, "batch-#{suffix}-sub", DummyConsumer,
+      Pulsar.Consumer.start(topic, "batch-#{suffix}-sub", DummyConsumer,
         client: @client,
         initial_position: :earliest,
         init_args: [notify_pid: self()]
@@ -86,7 +86,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     [consumer_pid] = Utils.wait_for_consumer_ready(1)
 
     {:ok, producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         topic,
         [client: @client, name: "#{suffix}-producer", batch_enabled: true] ++ opts
       )
@@ -97,7 +97,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
   end
 
   defp send_messages(producer_pid, messages) do
-    tasks = Enum.map(messages, fn msg -> Task.async(fn -> Pulsar.send(producer_pid, msg) end) end)
+    tasks = Enum.map(messages, fn msg -> Task.async(fn -> Pulsar.Producer.send(producer_pid, msg) end) end)
     results = Task.await_many(tasks, 10_000)
     assert Enum.all?(results, &match?({:ok, _}, &1))
   end

@@ -18,7 +18,7 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_seek_test_producer
@@ -27,7 +27,7 @@ defmodule Pulsar.Integration.Reader.SeekTest do
     message_ids =
       for i <- 1..@num_messages do
         payload = "Message #{i}"
-        {:ok, message_id} = Pulsar.send(:reader_seek_test_producer, payload, client: @client)
+        {:ok, message_id} = Pulsar.Producer.send(:reader_seek_test_producer, payload, client: @client)
         {i, message_id}
       end
 

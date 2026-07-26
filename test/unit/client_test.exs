@@ -6,14 +6,19 @@ defmodule Pulsar.ClientTest do
   alias Pulsar.Client
 
   describe "start_link/1 option validation" do
-    test "requires a name and a host" do
-      assert_raise NimbleOptions.ValidationError, ~r/required :name option not found/, fn ->
-        Client.start_link(host: "pulsar://localhost:6650")
-      end
-
+    test "requires a host" do
       assert_raise NimbleOptions.ValidationError, ~r/required :host option not found/, fn ->
         Client.start_link(name: :missing_host)
       end
+    end
+
+    test "names the client :default when not told otherwise" do
+      # The same name consumers and producers select by default, so a single-client
+      # application needs to say it in neither place.
+      start_supervised!({Client, host: "pulsar://127.0.0.1:6650"})
+
+      assert Client.child_spec(host: "h").id == :default
+      assert is_pid(Process.whereis(:default))
     end
 
     test "rejects an option of the wrong type" do

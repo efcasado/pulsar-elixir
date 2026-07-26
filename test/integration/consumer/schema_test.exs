@@ -25,7 +25,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert schema.type == :String
 
     # Verify messages can be sent and received
-    {:ok, _} = Pulsar.send(producer_pid, "test message")
+    {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
@@ -41,7 +41,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     state = :sys.get_state(consumer_pid)
     assert state.schema == nil
 
-    {:ok, _} = Pulsar.send(producer_pid, "test message")
+    {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
@@ -54,7 +54,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     start_producer(topic, schema: [type: :String])
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         "incompatible-sub",
         DummyConsumer,
@@ -67,14 +67,14 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
   end
 
   defp start_producer(topic, opts) do
-    {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))
+    {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
     Utils.wait_for_producer_ready(pid)
     pid
   end
 
   defp start_consumer(topic, sub_name, opts \\ []) do
     {:ok, _} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         sub_name,
         DummyConsumer,

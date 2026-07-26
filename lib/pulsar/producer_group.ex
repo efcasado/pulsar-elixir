@@ -6,6 +6,8 @@ defmodule Pulsar.ProducerGroup do
 
   use Supervisor
 
+  alias Pulsar.Producer.Worker
+
   require Logger
 
   @default_client :default
@@ -86,7 +88,7 @@ defmodule Pulsar.ProducerGroup do
 
       [producer_pid | _] ->
         try do
-          Pulsar.Producer.send_message(producer_pid, message, opts)
+          Worker.send_message(producer_pid, message, opts)
         catch
           :exit, reason ->
             {:error, {:producer_died, reason}}
@@ -124,7 +126,7 @@ defmodule Pulsar.ProducerGroup do
       %{
         id: producer_id,
         start: {
-          Pulsar.Producer,
+          Worker,
           :start_link,
           [topic, [name: group_name] ++ opts]
         },
