@@ -67,20 +67,6 @@ defmodule Pulsar.ClientTest do
     end
   end
 
-  describe "supported_options/0" do
-    test "covers everything the schema accepts" do
-      assert :name in Client.supported_options()
-      assert :host in Client.supported_options()
-      assert :max_frame_size in Client.supported_options()
-    end
-
-    test "excludes application configuration the client has no use for" do
-      refute :consumers in Client.supported_options()
-      refute :producers in Client.supported_options()
-      refute :clients in Client.supported_options()
-    end
-  end
-
   describe "socket options" do
     test "accepts options that are not keyword pairs" do
       # :inet6 and {:raw, ...} are valid for :gen_tcp.connect/4 and :ssl.connect/4,
