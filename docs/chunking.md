@@ -121,7 +121,7 @@ consumers: [
 
 - **`expire_incomplete_chunked_message_after`**: How long to wait for all chunks before timing out. Expired messages are delivered as incomplete with `error: :expired`.
 
-- **`chunk_cleanup_interval`**: How often to check for and clean up expired chunked messages. Set to `nil` to disable automatic cleanup (not recommended for production).
+- **`chunk_cleanup_interval`**: How often to check for and clean up expired chunked messages. Set to `false` to disable automatic cleanup (not recommended for production); `nil` is accepted as an alias. Keep it below `expire_incomplete_chunked_message_after`, since an expired chunk is only released on the next sweep.
 
 ## Handling Incomplete Chunks
 

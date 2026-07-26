@@ -130,7 +130,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     assert dlq_payloads == @messages
   end
 
-  test "dead letter policy with nil max_redelivery does not send to DLQ" do
+  test "no dead letter policy means no DLQ" do
     topic = @topic
     subscription = "no-dlq"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
@@ -144,10 +144,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         client: @client,
         initial_position: :earliest,
         subscription_type: :Shared,
-        redelivery_interval: 100,
-        dead_letter_policy: [
-          max_redelivery: nil
-        ]
+        redelivery_interval: 100
       )
 
     [failing_consumer] = Pulsar.get_consumers(consumer_group)

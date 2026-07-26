@@ -233,14 +233,18 @@ defmodule Pulsar.Reader do
       subscription_type: :Exclusive,
       durable: false,
       initial_position: start_position,
-      start_message_id: start_message_id,
-      start_timestamp: start_timestamp,
       read_compacted: read_compacted,
       flow_initial: 0,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms,
       init_args: [self(), reader_ref]
     ]
+
+    # Absent rather than nil, so they read as "not given" instead of "seek to nil".
+    consumer_opts =
+      consumer_opts
+      |> maybe_put(:start_message_id, start_message_id)
+      |> maybe_put(:start_timestamp, start_timestamp)
 
     case Pulsar.start_consumer(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
       {:ok, consumer_group_pid} ->

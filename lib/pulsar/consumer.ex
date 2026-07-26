@@ -1199,7 +1199,7 @@ defmodule Pulsar.Consumer do
 
   defp chunked_message?(_metadata), do: false
 
-  defp schedule_chunk_cleanup(nil), do: :ok
+  defp schedule_chunk_cleanup(interval) when interval in [false, nil], do: :ok
 
   defp schedule_chunk_cleanup(interval) when is_integer(interval) and interval > 0 do
     Process.send_after(self(), :cleanup_expired_chunks, interval)

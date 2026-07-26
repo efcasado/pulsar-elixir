@@ -1,14 +1,7 @@
 defmodule Pulsar.PartitionedConsumer do
-  @moduledoc """
-  A supervisor that manages individual consumer groups for partitioned topics.
+  @moduledoc false
 
-  This module provides a logical abstraction over multiple consumer groups,
-  allowing the `start_consumer` API to return a single PID for partitioned topics
-  while maintaining the individual consumer group architecture underneath.
-
-  The supervisor manages one consumer group per partition, with the number of
-  partitions provided by the caller.
-  """
+  # Supervises one consumer group per partition of a partitioned topic.
 
   use Supervisor
 
