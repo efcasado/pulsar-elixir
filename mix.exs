@@ -65,6 +65,7 @@ defmodule Pulsar.MixProject do
       {:ezstd, "~> 1.2"},
       {:jason, "~> 1.4"},
       {:nimble_lz4, "~> 1.1"},
+      {:nimble_options, "~> 1.1"},
       {:oauth2, "~> 2.1"},
       {:protobuf, "~> 0.17.0"},
       {:snappyer, "~> 1.2"},
