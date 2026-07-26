@@ -20,7 +20,6 @@ defmodule Pulsar.Broker do
   @behaviour :gen_statem
 
   alias Pulsar.Config
-  alias Pulsar.Producer.Worker, as: Producer
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -170,44 +169,16 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Gets the list of registered consumers.
-
-  Accepts either a broker PID or a broker URL string.
-  When passing a broker URL, you can optionally specify the client via the `:client` option.
+  Gets the consumers registered with this broker connection, keyed by consumer id.
   """
-  @spec get_consumers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
-  def get_consumers(broker, opts \\ [])
-
-  def get_consumers(broker, _opts) when is_pid(broker) do
-    :gen_statem.call(broker, :get_consumers)
-  end
-
-  def get_consumers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.Client.lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} -> get_consumers(broker_pid)
-      {:error, :not_found} -> %{}
-    end
-  end
+  @spec get_consumers(GenServer.server()) :: %{integer() => pid()}
+  def get_consumers(broker), do: :gen_statem.call(broker, :get_consumers)
 
   @doc """
-  Gets the list of registered producers.
-
-  Accepts either a broker PID or a broker URL string.
-  When passing a broker URL, you can optionally specify the client via the `:client` option.
+  Gets the producers registered with this broker connection, keyed by producer id.
   """
-  @spec get_producers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
-  def get_producers(broker, opts \\ [])
-
-  def get_producers(broker, _opts) when is_pid(broker) do
-    :gen_statem.call(broker, :get_producers)
-  end
-
-  def get_producers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.Client.lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} -> get_producers(broker_pid)
-      {:error, :not_found} -> %{}
-    end
-  end
+  @spec get_producers(GenServer.server()) :: %{integer() => pid()}
+  def get_producers(broker), do: :gen_statem.call(broker, :get_producers)
 
   @doc """
   Gracefully stops the broker by closing all consumers/producers first.
@@ -232,7 +203,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
       if Process.alive?(consumer_pid) do
         Logger.debug("Gracefully stopping consumer #{consumer_id}")
-        Pulsar.Consumer.Worker.stop(consumer_pid)
+        GenServer.stop(consumer_pid)
       end
     end)
 
@@ -240,7 +211,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
-        Producer.stop(producer_pid)
+        GenServer.stop(producer_pid)
       end
     end)
 
