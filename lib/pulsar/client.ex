@@ -39,12 +39,52 @@ defmodule Pulsar.Client do
 
   use Supervisor
 
-  @supported_broker_opts [
-    :auth,
-    :conn_timeout,
-    :max_frame_size,
-    :socket_opts
+  require Logger
+
+  @broker_opts [
+    auth: [
+      type: :keyword_list,
+      doc: "Authentication configuration, as `[type: module, opts: keyword]`."
+    ],
+    conn_timeout: [
+      type: :pos_integer,
+      doc: "Milliseconds to wait for a connection to a broker. Defaults to 1000."
+    ],
+    max_frame_size: [
+      type: :pos_integer,
+      doc: """
+      Largest frame accepted from this cluster, in bytes. Defaults to
+      `Pulsar.Config.max_frame_size/0`. Raise it to match a broker configured with a
+      larger `maxMessageSize`.
+      """
+    ],
+    socket_opts: [
+      type: :keyword_list,
+      doc: "Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`."
+    ]
   ]
+
+  # No defaults here on purpose: an option the caller omitted has to stay absent so
+  # that build_broker_opts/1 can fall back to the application environment before the
+  # broker applies its own default.
+  @schema [
+            name: [
+              type: :atom,
+              required: true,
+              doc: "Name the client is registered under."
+            ],
+            host: [
+              type: :string,
+              required: true,
+              doc: "Bootstrap broker URL, e.g. `pulsar://localhost:6650`."
+            ]
+          ] ++ @broker_opts
+
+  @supported_broker_opts Keyword.keys(@broker_opts)
+
+  @doc false
+  @spec supported_options() :: [atom()]
+  def supported_options, do: Keyword.keys(@schema)
 
   ## Public API
 
@@ -53,16 +93,10 @@ defmodule Pulsar.Client do
 
   ## Options
 
-  - `:name` - Required. The name of the client (atom)
-  - `:host` - Required. Bootstrap broker URL
-  - `:auth` - Optional. Authentication configuration
-  - `:conn_timeout` - Optional. Connection timeout (default: 5000)
-  - `:max_frame_size` - Optional. Largest frame accepted from this cluster, in
-    bytes (default: `Pulsar.Config.max_frame_size/0`). Raise it to match a broker
-    configured with a larger `maxMessageSize`.
-  - `:socket_opts` - Optional. Socket options
+  #{NimbleOptions.docs(@schema)}
   """
   def start_link(opts) do
+    opts = validate_options!(opts)
     name = Keyword.fetch!(opts, :name)
     bootstrap_host = Keyword.fetch!(opts, :host)
 
@@ -265,6 +299,18 @@ defmodule Pulsar.Client do
   end
 
   ## Private Functions
+
+  # Unknown options are only warned about for now, and will be rejected in the next
+  # major version.
+  defp validate_options!(opts) do
+    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
+
+    if unknown != [] do
+      Logger.warning("Pulsar.Client ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
+    end
+
+    NimbleOptions.validate!(known, @schema)
+  end
 
   defp build_broker_opts(opts) do
     app_opts =

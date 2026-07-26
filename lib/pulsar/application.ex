@@ -20,7 +20,14 @@ defmodule Pulsar.Application do
         nil ->
           # Fallback to legacy single-client mode with :host
           bootstrap_host = Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
-          if bootstrap_host, do: [{@default_client, [host: bootstrap_host] ++ opts}], else: []
+
+          # Only the keys the client understands: the rest of the application
+          # configuration, :consumers and :producers among it, is not its business.
+          client_opts = Keyword.take(opts, Pulsar.Client.supported_options())
+
+          if bootstrap_host,
+            do: [{@default_client, Keyword.put(client_opts, :host, bootstrap_host)}],
+            else: []
 
         clients when is_list(clients) ->
           clients
