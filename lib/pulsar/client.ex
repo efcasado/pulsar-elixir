@@ -86,10 +86,6 @@ defmodule Pulsar.Client do
 
   @supported_broker_opts Keyword.keys(@broker_opts)
 
-  @doc false
-  @spec supported_options() :: [atom()]
-  def supported_options, do: Keyword.keys(@schema)
-
   ## Public API
 
   @doc """

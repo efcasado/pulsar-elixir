@@ -6,6 +6,8 @@ defmodule Pulsar.Application do
   @default_client :default
   @app_supervisor Pulsar.Supervisor
 
+  @app_only_opts [:clients, :consumers, :producers]
+
   @impl true
   def start(_type, opts) do
     consumers =
@@ -21,12 +23,8 @@ defmodule Pulsar.Application do
           # Fallback to legacy single-client mode with :host
           bootstrap_host = Keyword.get(opts, :host, Application.get_env(:pulsar, :host))
 
-          # Only the keys the client understands: the rest of the application
-          # configuration, :consumers and :producers among it, is not its business.
-          client_opts = Keyword.take(opts, Pulsar.Client.supported_options())
-
           if bootstrap_host,
-            do: [{@default_client, Keyword.put(client_opts, :host, bootstrap_host)}],
+            do: [{@default_client, Keyword.put(client_opts(opts), :host, bootstrap_host)}],
             else: []
 
         clients when is_list(clients) ->
@@ -76,6 +74,13 @@ defmodule Pulsar.Application do
 
     {:ok, pid}
   end
+
+  # Everything that is not application-level plumbing is forwarded, so that an
+  # option the client does not recognise is reported by the client rather than
+  # dropped here. Multi-client mode has always forwarded its options verbatim.
+  @doc false
+  @spec client_opts(keyword()) :: keyword()
+  def client_opts(opts), do: Keyword.drop(opts, @app_only_opts)
 
   @impl true
   def stop(pid) when is_pid(pid) do
