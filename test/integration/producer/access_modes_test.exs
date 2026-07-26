@@ -202,24 +202,32 @@ defmodule Pulsar.Integration.AccessModesTest do
       match?({:ok, _}, Pulsar.Producer.send(group_pid_2, "Probe message", client: @client))
     end)
 
-    # Wait for telemetry events to be collected
-    Process.sleep(100)
+    fenced? = &match?(%{success: false, error: :producer_fenced, producer_name: "original-exclusive"}, &1)
 
+    # collect_events/2 drains what has arrived so far, so the results are accumulated
+    # until the fencing shows up. Asserting an exact count would instead measure how
+    # often the fenced producer retried before we looked.
     all_events =
-      Utils.collect_events([:pulsar, :producer, :opened, :stop],
-        producer_names: ["original-exclusive", "fencing-takeover"]
-      )
+      Enum.reduce_while(1..50, [], fn _attempt, collected ->
+        collected =
+          collected ++
+            Utils.collect_events([:pulsar, :producer, :opened, :stop],
+              producer_names: ["original-exclusive", "fencing-takeover"]
+            )
 
-    # Should have:
-    # - 2 successful initial opens (producer 1 and producer 2)
-    # - 1 failed reopen (producer 1 gets fenced when trying to reconnect)
-    # - 1 successful reopen (producer 2 reconnected after broker disconnect)
-    assert Enum.count(all_events) == 4
+        if Enum.any?(collected, fenced?) do
+          {:halt, collected}
+        else
+          Process.sleep(100)
+          {:cont, collected}
+        end
+      end)
 
-    assert Enum.any?(
-             all_events,
-             &match?(%{success: false, error: :producer_fenced, producer_name: "original-exclusive"}, &1)
-           )
+    for name <- ["original-exclusive", "fencing-takeover"] do
+      assert Enum.any?(all_events, &match?(%{success: true, producer_name: ^name}, &1))
+    end
+
+    assert Enum.any?(all_events, fenced?)
 
     # Cleanup
     Pulsar.Producer.stop(group_pid_2)
