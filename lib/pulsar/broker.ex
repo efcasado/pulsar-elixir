@@ -53,7 +53,7 @@ defmodule Pulsar.Broker do
           socket: :gen_tcp.socket() | :ssl.sslsocket() | nil,
           prev_backoff: integer(),
           socket_opts: list(),
-          conn_timeout: integer(),
+          conn_timeout: timeout(),
           auth: list(),
           max_frame_size: pos_integer(),
           buffer: Pulsar.Protocol.buffer(),
