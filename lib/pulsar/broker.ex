@@ -559,6 +559,11 @@ defmodule Pulsar.Broker do
     {:keep_state, new_broker}
   end
 
+  def connected(:info, message, _broker) do
+    Logger.warning("Discarding unexpected message: #{inspect(message)}")
+    :keep_state_and_data
+  end
+
   def connected({:call, from}, {:register_producer, producer_id, producer_pid}, broker) do
     # Monitor the producer process
     monitor_ref = Process.monitor(producer_pid)
