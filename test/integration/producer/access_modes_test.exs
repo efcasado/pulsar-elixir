@@ -175,7 +175,9 @@ defmodule Pulsar.Integration.AccessModesTest do
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
         access_mode: :ExclusiveWithFencing,
         name: "fencing-takeover",
-        client: @client
+        client: @client,
+        startup_delay_ms: 0,
+        startup_jitter_ms: 0
       )
 
     [producer_2] = Pulsar.Producer.workers(group_pid_2)

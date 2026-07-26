@@ -30,7 +30,7 @@ defmodule Pulsar.Broker do
     :port,
     :socket_module,
     :socket,
-    :prev_backoff,
+    {:prev_backoff, 0},
     :socket_opts,
     :conn_timeout,
     :auth,
@@ -39,12 +39,12 @@ defmodule Pulsar.Broker do
     :cleanup_interval,
     :request_timeout,
     :max_backoff,
-    :buffer,
-    :requests,
-    :actions,
+    {:buffer, <<>>},
+    {:requests, %{}},
+    {:actions, []},
     # Broker-specific state
-    :consumers,
-    :producers
+    {:consumers, %{}},
+    {:producers, %{}}
   ]
 
   @type t :: %__MODULE__{
@@ -232,25 +232,14 @@ defmodule Pulsar.Broker do
         "pulsar" -> :gen_tcp
       end
 
-    broker = %__MODULE__{
-      name: name || broker_key(to_string(uri)),
-      host: host,
-      port: port,
-      socket_module: socket_module,
-      socket_opts: Keyword.fetch!(opts, :socket_opts),
-      conn_timeout: Keyword.fetch!(opts, :conn_timeout),
-      auth: Keyword.fetch!(opts, :auth),
-      actions: Keyword.get(opts, :actions, []),
-      max_frame_size: Keyword.fetch!(opts, :max_frame_size),
-      ping_interval: Keyword.fetch!(opts, :ping_interval),
-      cleanup_interval: Keyword.fetch!(opts, :cleanup_interval),
-      request_timeout: Keyword.fetch!(opts, :request_timeout),
-      max_backoff: Keyword.fetch!(opts, :max_backoff),
-      buffer: <<>>,
-      requests: %{},
-      consumers: %{},
-      producers: %{},
-      prev_backoff: 0
+    # Option names and struct field names are the same, so struct/2 carries the client's
+    # settings across; only what is derived from the URL is set explicitly.
+    broker = %{
+      struct(__MODULE__, opts)
+      | name: name || broker_key(to_string(uri)),
+        host: host,
+        port: port,
+        socket_module: socket_module
     }
 
     actions = [{:next_event, :internal, :connect}]
