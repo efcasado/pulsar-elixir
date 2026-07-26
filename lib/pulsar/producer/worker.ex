@@ -119,13 +119,13 @@ defmodule Pulsar.Producer.Worker do
         schema: [type: :Json, definition: json_schema_def]
       )
   """
-  def start_link(topic, opts \\ []) do
+  def start_link(opts) do
     # fetch! for anything the schema defaults: reaching here without it means a caller
     # bypassed Pulsar.Producer, and failing is better than silently using another value.
     producer_config = %{
       client: Keyword.fetch!(opts, :client),
       name: Keyword.get(opts, :name),
-      topic: topic,
+      topic: Keyword.fetch!(opts, :topic),
       access_mode: Keyword.fetch!(opts, :access_mode),
       compression: Keyword.fetch!(opts, :compression),
       chunking_enabled: Keyword.fetch!(opts, :chunking_enabled),

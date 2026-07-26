@@ -30,19 +30,19 @@ defmodule Pulsar.Consumer.Worker do
     :flow_initial,
     :flow_threshold,
     :flow_refill,
-    :flow_outstanding_permits,
+    {:flow_outstanding_permits, 0},
     :initial_position,
     :durable,
     :force_create_topic,
     :read_compacted,
     :start_message_id,
     :start_timestamp,
-    :nacked_messages,
+    {:nacked_messages, MapSet.new()},
     :redelivery_interval,
     :max_redelivery,
     :dead_letter_topic,
     :dead_letter_producer_pid,
-    :chunked_message_contexts,
+    {:chunked_message_contexts, %{}},
     :max_pending_chunked_messages,
     :expire_incomplete_chunked_message_after,
     :chunk_cleanup_interval,
@@ -115,42 +115,7 @@ defmodule Pulsar.Consumer.Worker do
 
   The consumer will automatically use any available broker for service discovery.
   """
-  def start_link(topic, subscription_name, subscription_type, callback_module, opts \\ []) do
-    # fetch! for anything the schema defaults: reaching here without it means a caller
-    # bypassed Pulsar.Consumer, and failing is better than silently using another value.
-    consumer_config = %{
-      client: Keyword.fetch!(opts, :client),
-      topic: topic,
-      subscription_name: subscription_name,
-      subscription_type: subscription_type,
-      callback_module: callback_module,
-      init_args: Keyword.fetch!(opts, :init_args),
-      flow_initial: Keyword.fetch!(opts, :flow_initial),
-      flow_threshold: Keyword.fetch!(opts, :flow_threshold),
-      flow_refill: Keyword.fetch!(opts, :flow_refill),
-      initial_position: Keyword.fetch!(opts, :initial_position),
-      durable: Keyword.fetch!(opts, :durable),
-      force_create_topic: Keyword.fetch!(opts, :force_create_topic),
-      read_compacted: Keyword.fetch!(opts, :read_compacted),
-      max_pending_chunked_messages: Keyword.fetch!(opts, :max_pending_chunked_messages),
-      expire_incomplete_chunked_message_after: Keyword.fetch!(opts, :expire_incomplete_chunked_message_after),
-      chunk_cleanup_interval: Keyword.fetch!(opts, :chunk_cleanup_interval),
-
-      # Optional with no schema default, so absent reads as nil.
-      start_message_id: Keyword.get(opts, :start_message_id),
-      start_timestamp: Keyword.get(opts, :start_timestamp),
-      consumer_name: Keyword.get(opts, :name),
-      redelivery_interval: Keyword.get(opts, :redelivery_interval),
-      dead_letter_policy: Keyword.get(opts, :dead_letter_policy),
-      schema: build_schema(Keyword.get(opts, :schema)),
-
-      # Absent on purpose so that the application environment still wins.
-      startup_delay_ms: Keyword.get(opts, :startup_delay_ms, Config.startup_delay()),
-      startup_jitter_ms: Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
-    }
-
-    GenServer.start_link(__MODULE__, consumer_config, [])
-  end
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc """
   Gracefully stops a consumer process.
@@ -287,71 +252,29 @@ defmodule Pulsar.Consumer.Worker do
   ## GenServer Callbacks
 
   @impl true
-  def init(consumer_config) do
-    %{
-      client: client,
-      topic: topic,
-      subscription_name: subscription_name,
-      subscription_type: subscription_type,
-      callback_module: callback_module,
-      init_args: init_args,
-      flow_initial: initial_permits,
-      flow_threshold: refill_threshold,
-      flow_refill: refill_amount,
-      initial_position: initial_position,
-      durable: durable,
-      force_create_topic: force_create_topic,
-      read_compacted: read_compacted,
-      start_message_id: start_message_id,
-      start_timestamp: start_timestamp,
-      consumer_name: consumer_name,
-      redelivery_interval: redelivery_interval,
-      dead_letter_policy: dead_letter_policy,
-      max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
-      chunk_cleanup_interval: chunk_cleanup_interval,
-      startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms,
-      schema: schema
-    } = consumer_config
+  def init(opts) do
+    {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(Keyword.get(opts, :dead_letter_policy))
 
-    {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(dead_letter_policy)
-
-    state = %__MODULE__{
-      client: client,
-      consumer_id: System.unique_integer([:positive, :monotonic]),
-      consumer_name: consumer_name,
-      topic: topic,
-      subscription_name: subscription_name,
-      subscription_type: subscription_type,
-      callback_module: callback_module,
-      flow_initial: initial_permits,
-      flow_threshold: refill_threshold,
-      flow_refill: refill_amount,
-      flow_outstanding_permits: 0,
-      initial_position: initial_position,
-      durable: durable,
-      force_create_topic: force_create_topic,
-      read_compacted: read_compacted,
-      start_message_id: start_message_id,
-      start_timestamp: start_timestamp,
-      nacked_messages: MapSet.new(),
-      redelivery_interval: redelivery_interval,
-      max_redelivery: max_redelivery,
-      dead_letter_topic: dead_letter_topic,
-      chunked_message_contexts: %{},
-      max_pending_chunked_messages: max_pending_chunked_messages,
-      expire_incomplete_chunked_message_after: expire_incomplete_chunked_message_after,
-      chunk_cleanup_interval: chunk_cleanup_interval,
-      schema: schema,
-      schema_version: nil
+    # Option names and struct field names are the same, so struct/2 carries them across
+    # and ignores the group-level options that are not part of a consumer's state.
+    state = %{
+      struct(__MODULE__, opts)
+      | consumer_id: System.unique_integer([:positive, :monotonic]),
+        consumer_name: Keyword.get(opts, :name),
+        schema: build_schema(Keyword.get(opts, :schema)),
+        max_redelivery: max_redelivery,
+        dead_letter_topic: dead_letter_topic
     }
 
     Logger.info("Starting consumer for topic #{state.topic}")
 
-    total_startup_delay = startup_delay_ms + startup_jitter_ms
+    init_args = Keyword.fetch!(opts, :init_args)
 
-    if total_startup_delay > 0 do
+    # Absent on purpose so that the application environment still wins.
+    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, Config.startup_delay())
+    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
+
+    if startup_delay_ms + startup_jitter_ms > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}
     else
       {:ok, state, {:continue, {:subscribe, init_args}}}
@@ -1011,12 +934,9 @@ defmodule Pulsar.Consumer.Worker do
         "#{state.topic}-#{state.subscription_name}-DLQ"
 
     # Through the schema, so the dead letter producer gets the same defaults as any other.
-    {topic, opts} =
-      [topic: dead_letter_topic, client: state.client]
-      |> ProducerOptions.validate!()
-      |> Keyword.pop!(:topic)
-
-    ProducerWorker.start_link(topic, opts)
+    [topic: dead_letter_topic, client: state.client]
+    |> ProducerOptions.validate!()
+    |> ProducerWorker.start_link()
   end
 
   defp send_to_dead_letter(state, payload, _message_id) do

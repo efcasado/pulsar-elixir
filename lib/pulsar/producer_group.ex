@@ -10,37 +10,11 @@ defmodule Pulsar.ProducerGroup do
 
   require Logger
 
-  @default_client :default
+  def start_link(opts) do
+    name = Keyword.fetch!(opts, :name)
+    client = Keyword.fetch!(opts, :client)
 
-  @doc """
-  Starts a producer group supervisor.
-
-  ## Parameters
-
-  - `name` - Unique name for this producer group
-  - `topic` - The topic to publish to
-  - `opts` - Additional options:
-    - `:producer_count` - Number of producer processes in this group (default: 1)
-    - `:access_mode` - Producer access mode (default: :Shared)
-    - `:batch_enabled` - Enable batching (default: false)
-    - `:batch_size` - Max messages per batch (default: 100)
-    - `:flush_interval` - Flush interval in ms (default: 10)
-    - Other options passed to individual producer processes
-
-  ## Returns
-
-  `{:ok, pid}` - The producer group supervisor PID
-  `{:error, reason}` - Error if the supervisor failed to start
-  """
-  def start_link(name, topic, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-    producer_registry = Pulsar.Client.producer_registry(client)
-
-    Supervisor.start_link(
-      __MODULE__,
-      {name, topic, opts},
-      name: {:via, Registry, {producer_registry, name}}
-    )
+    Supervisor.start_link(__MODULE__, opts, name: {:via, Registry, {Pulsar.Client.producer_registry(client), name}})
   end
 
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
@@ -97,42 +71,30 @@ defmodule Pulsar.ProducerGroup do
   end
 
   @impl true
-  def init({name, topic, opts}) do
-    producer_count = Keyword.get(opts, :producer_count, 1)
+  def init(opts) do
+    name = Keyword.fetch!(opts, :name)
+    producer_count = Keyword.fetch!(opts, :producer_count)
 
     Logger.info(
-      "Starting producer group #{name} for topic #{topic} with #{producer_count} producers (access: #{Keyword.get(opts, :access_mode, :Shared)})"
+      "Starting producer group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{producer_count} producers " <>
+        "(access: #{Keyword.fetch!(opts, :access_mode)})"
     )
 
-    children = create_producer_children(name, topic, opts, producer_count)
+    children =
+      for i <- 1..producer_count do
+        %{
+          id: "#{name}-producer-#{i}",
+          start: {Worker, :start_link, [opts]},
+          restart: :transient,
+          type: :worker
+        }
+      end
 
-    supervisor_opts = [
+    # Many restarts on purpose: producers can fail repeatedly while a broker reconnects.
+    Supervisor.init(children,
       strategy: :one_for_one,
-      # Allow many restarts to handle broker disconnection scenarios
-      # where producers may fail multiple times while broker reconnects
-      max_restarts: Keyword.get(opts, :max_restarts, 100),
+      max_restarts: Keyword.fetch!(opts, :max_restarts),
       max_seconds: 60
-    ]
-
-    Supervisor.init(children, supervisor_opts)
-  end
-
-  # Private functions
-
-  defp create_producer_children(group_name, topic, opts, producer_count) do
-    for i <- 1..producer_count do
-      producer_id = "#{group_name}-producer-#{i}"
-
-      %{
-        id: producer_id,
-        start: {
-          Worker,
-          :start_link,
-          [topic, [name: group_name] ++ opts]
-        },
-        restart: :transient,
-        type: :worker
-      }
-    end
+    )
   end
 end

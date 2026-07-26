@@ -1,56 +1,27 @@
 defmodule Pulsar.ConsumerGroup do
   @moduledoc false
 
-  # Supervises the consumer processes for one topic or partition. Started by
-  # Pulsar.Consumer.start/4, which owns the option surface.
+  # Supervises the worker processes for one topic or one partition of it. Started by
+  # Pulsar.Consumer, which owns the option surface and has already validated these
+  # options, so they are threaded through untouched apart from the per-worker :name.
 
   use Supervisor
 
   require Logger
 
-  @default_client :default
+  def start_link(opts) do
+    name = Keyword.fetch!(opts, :name)
+    client = Keyword.fetch!(opts, :client)
 
-  @doc """
-  Starts a consumer group supervisor.
-
-  ## Parameters
-
-  - `name` - Unique name for this consumer group
-  - `topic` - The topic to subscribe to
-  - `subscription_name` - Name of the subscription
-  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared)
-  - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
-  - `opts` - Additional options:
-    - `:consumer_count` - Number of consumer processes in this group (default: 1)
-    - Other options passed to individual consumer processes
-
-  ## Returns
-
-  `{:ok, pid}` - The consumer group supervisor PID
-  `{:error, reason}` - Error if the supervisor failed to start
-  """
-  def start_link(name, topic, subscription_name, subscription_type, callback_module, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-    consumer_registry = Pulsar.Client.consumer_registry(client)
-
-    Supervisor.start_link(
-      __MODULE__,
-      {name, topic, subscription_name, subscription_type, callback_module, opts},
-      name: {:via, Registry, {consumer_registry, name}}
-    )
+    Supervisor.start_link(__MODULE__, opts, name: {:via, Registry, {Pulsar.Client.consumer_registry(client), name}})
   end
 
-  @doc """
-  Stops a consumer group supervisor and all its child consumer processes.
-  """
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
     Supervisor.stop(supervisor_pid, reason, timeout)
   end
 
   @doc """
   Gets all consumer process PIDs managed by this consumer group.
-
-  Returns a list of consumer PIDs.
   """
   def get_consumers(supervisor_pid) do
     supervisor_pid
@@ -59,55 +30,26 @@ defmodule Pulsar.ConsumerGroup do
   end
 
   @impl true
-  def init({name, topic, subscription_name, subscription_type, callback_module, opts}) do
-    consumer_count = Keyword.get(opts, :consumer_count, 1)
+  def init(opts) do
+    name = Keyword.fetch!(opts, :name)
+    consumer_count = Keyword.fetch!(opts, :consumer_count)
 
-    Logger.info("Starting consumer group #{name} for topic #{topic} with #{consumer_count} consumers")
+    Logger.info(
+      "Starting consumer group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{consumer_count} consumers"
+    )
 
-    # Create child specs for each consumer in the group
     children =
-      create_consumer_children(
-        name,
-        topic,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        opts,
-        consumer_count
-      )
+      for i <- 1..consumer_count do
+        worker_name = "#{name}-consumer-#{i}"
 
-    supervisor_opts = [
-      strategy: :one_for_one,
-      max_restarts: Keyword.get(opts, :max_restarts, 10)
-    ]
+        %{
+          id: worker_name,
+          start: {Pulsar.Consumer.Worker, :start_link, [Keyword.put(opts, :name, worker_name)]},
+          restart: :transient,
+          type: :worker
+        }
+      end
 
-    Supervisor.init(children, supervisor_opts)
-  end
-
-  # Private functions
-
-  defp create_consumer_children(
-         group_name,
-         topic,
-         subscription_name,
-         subscription_type,
-         callback_module,
-         opts,
-         consumer_count
-       ) do
-    for i <- 1..consumer_count do
-      consumer_id = "#{group_name}-consumer-#{i}"
-
-      %{
-        id: consumer_id,
-        start: {
-          Pulsar.Consumer.Worker,
-          :start_link,
-          [topic, subscription_name, subscription_type, callback_module, [name: consumer_id] ++ opts]
-        },
-        restart: :transient,
-        type: :worker
-      }
-    end
+    Supervisor.init(children, strategy: :one_for_one, max_restarts: Keyword.fetch!(opts, :max_restarts))
   end
 end

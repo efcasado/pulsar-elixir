@@ -76,32 +76,18 @@ defmodule Pulsar.Consumer do
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
     opts = Options.validate!(opts)
-
-    {topic, opts} = Keyword.pop!(opts, :topic)
-    {subscription_name, opts} = Keyword.pop!(opts, :subscription_name)
-    {callback_module, opts} = Keyword.pop!(opts, :callback_module)
-    {name, opts} = Keyword.pop(opts, :name, default_name(topic, subscription_name))
-
+    topic = Keyword.fetch!(opts, :topic)
     client = Keyword.fetch!(opts, :client)
-    subscription_type = Keyword.fetch!(opts, :subscription_type)
+
+    opts =
+      Keyword.put_new_lazy(opts, :name, fn ->
+        default_name(topic, Keyword.fetch!(opts, :subscription_name))
+      end)
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} ->
-        Pulsar.ConsumerGroup.start_link(name, topic, subscription_name, subscription_type, callback_module, opts)
-
-      {:ok, partitions} ->
-        Pulsar.PartitionedConsumer.start_link(
-          name,
-          topic,
-          partitions,
-          subscription_name,
-          subscription_type,
-          callback_module,
-          opts
-        )
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, 0} -> Pulsar.ConsumerGroup.start_link(opts)
+      {:ok, partitions} -> Pulsar.PartitionedConsumer.start_link(Keyword.put(opts, :partitions, partitions))
+      {:error, reason} -> {:error, reason}
     end
   end
 

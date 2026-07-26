@@ -56,21 +56,14 @@ defmodule Pulsar.Producer do
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
     opts = Options.validate!(opts)
-
-    {topic, opts} = Keyword.pop!(opts, :topic)
-    {name, opts} = Keyword.pop(opts, :name, default_name(topic))
-
+    topic = Keyword.fetch!(opts, :topic)
     client = Keyword.fetch!(opts, :client)
+    opts = Keyword.put_new(opts, :name, default_name(topic))
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} ->
-        Pulsar.ProducerGroup.start_link(name, topic, opts)
-
-      {:ok, partitions} ->
-        Pulsar.PartitionedProducer.start_link(name, topic, partitions, opts)
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, 0} -> Pulsar.ProducerGroup.start_link(opts)
+      {:ok, partitions} -> Pulsar.PartitionedProducer.start_link(Keyword.put(opts, :partitions, partitions))
+      {:error, reason} -> {:error, reason}
     end
   end
 

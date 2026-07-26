@@ -1,46 +1,21 @@
 defmodule Pulsar.PartitionedConsumer do
   @moduledoc false
 
-  # Supervises one consumer group per partition of a partitioned topic.
+  # Supervises one consumer group per partition of a partitioned topic. Started by
+  # Pulsar.Consumer, which owns the option surface; a partition's group differs only in
+  # its :topic and :name, so the rest is threaded through untouched.
 
   use Supervisor
 
   require Logger
 
-  @default_client :default
+  def start_link(opts) do
+    name = Keyword.fetch!(opts, :name)
+    client = Keyword.fetch!(opts, :client)
 
-  @doc """
-  Starts a partitioned consumer supervisor.
-
-  ## Parameters
-
-  - `name` - Unique name for this partitioned consumer
-  - `topic` - The base partitioned topic name (without partition suffix)
-  - `partitions` - Number of partitions for this topic
-  - `subscription_name` - Name of the subscription
-  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared)
-  - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
-  - `opts` - Additional options passed to individual consumer groups
-
-  ## Returns
-
-  `{:ok, pid}` - The supervisor PID that manages all partition consumer groups
-  `{:error, reason}` - Error if the supervisor failed to start
-  """
-  def start_link(name, topic, partitions, subscription_name, subscription_type, callback_module, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-    consumer_registry = Pulsar.Client.consumer_registry(client)
-
-    Supervisor.start_link(
-      __MODULE__,
-      {name, topic, partitions, subscription_name, subscription_type, callback_module, opts},
-      name: {:via, Registry, {consumer_registry, name}}
-    )
+    Supervisor.start_link(__MODULE__, opts, name: {:via, Registry, {Pulsar.Client.consumer_registry(client), name}})
   end
 
-  @doc """
-  Stops a partitioned consumer supervisor and all its child consumer groups.
-  """
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
     Supervisor.stop(supervisor_pid, reason, timeout)
   end
@@ -61,8 +36,6 @@ defmodule Pulsar.PartitionedConsumer do
 
   @doc """
   Gets all consumer processes from all partition groups managed by this supervisor.
-
-  Returns a flat list of consumer process PIDs from all partitions.
   """
   def get_consumers(supervisor_pid) do
     supervisor_pid
@@ -73,53 +46,38 @@ defmodule Pulsar.PartitionedConsumer do
   end
 
   @impl true
-  def init({name, topic, partitions, subscription_name, subscription_type, callback_module, opts}) do
+  def init(opts) do
+    topic = Keyword.fetch!(opts, :topic)
+    partitions = Keyword.fetch!(opts, :partitions)
+
     Logger.info("Starting partitioned consumer for topic #{topic} with #{partitions} partitions")
 
-    build_child_spec = fn partition_index ->
-      partition_child_spec(
-        partition_index,
-        name,
-        topic,
-        subscription_name,
-        subscription_type,
-        callback_module,
-        opts
-      )
-    end
-
-    partition_children = Enum.map(0..(partitions - 1), build_child_spec)
+    build_child_spec = &partition_child_spec(&1, opts)
 
     discovery_children =
       Pulsar.PartitionDiscovery.child_specs(self(),
         topic: topic,
-        client: Keyword.get(opts, :client, @default_client),
+        client: Keyword.fetch!(opts, :client),
         interval_ms: Keyword.get(opts, :partition_discovery_interval_ms, Pulsar.Config.partition_discovery_interval()),
         build_child_spec: build_child_spec
       )
 
+    partition_children = Enum.map(0..(partitions - 1), build_child_spec)
+
     Supervisor.init(partition_children ++ discovery_children, strategy: :one_for_one)
   end
 
-  # Builds the ConsumerGroup child spec for a single partition.
-  defp partition_child_spec(partition_index, name, topic, subscription_name, subscription_type, callback_module, opts) do
-    partition_topic = Pulsar.PartitionTopic.name(topic, partition_index)
-    partition_group_name = Pulsar.PartitionTopic.name(name, partition_index)
+  defp partition_child_spec(partition_index, opts) do
+    partition_topic = Pulsar.PartitionTopic.name(Keyword.fetch!(opts, :topic), partition_index)
+
+    partition_opts =
+      opts
+      |> Keyword.put(:topic, partition_topic)
+      |> Keyword.put(:name, Pulsar.PartitionTopic.name(Keyword.fetch!(opts, :name), partition_index))
 
     %{
       id: partition_topic,
-      start: {
-        Pulsar.ConsumerGroup,
-        :start_link,
-        [
-          partition_group_name,
-          partition_topic,
-          subscription_name,
-          subscription_type,
-          callback_module,
-          opts
-        ]
-      },
+      start: {Pulsar.ConsumerGroup, :start_link, [partition_opts]},
       restart: :permanent,
       type: :supervisor
     }
