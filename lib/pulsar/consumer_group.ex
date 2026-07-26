@@ -110,7 +110,7 @@ defmodule Pulsar.ConsumerGroup do
         start: {
           Pulsar.Consumer,
           :start_link,
-          [topic, subscription_name, subscription_type, callback_module, opts]
+          [topic, subscription_name, subscription_type, callback_module, [name: consumer_id] ++ opts]
         },
         restart: :transient,
         type: :worker
