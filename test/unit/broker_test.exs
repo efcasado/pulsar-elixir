@@ -81,4 +81,19 @@ defmodule Pulsar.BrokerTest do
       assert :keep_state_and_data = Broker.connected(:info, event, broker)
     end
   end
+
+  describe "drop_ssl_opts/1" do
+    test "strips TLS-only options before a plain TCP connect" do
+      opts = [verify: :verify_peer, cacertfile: "/ca.pem", certfile: "/c.pem", keyfile: "/k.pem"]
+
+      assert Broker.drop_ssl_opts(opts ++ [nodelay: true]) == [nodelay: true]
+    end
+
+    test "keeps socket options that are not keyword pairs" do
+      # Keyword.drop/2 raised a FunctionClauseError on every one of these.
+      opts = [:inet6, {:raw, 6, 1, <<1::32>>}, {:verify, :verify_peer}, {:nodelay, true}]
+
+      assert Broker.drop_ssl_opts(opts) == [:inet6, {:raw, 6, 1, <<1::32>>}, {:nodelay, true}]
+    end
+  end
 end
