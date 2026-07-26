@@ -33,8 +33,8 @@ defmodule Pulsar.Producer.Worker do
     :max_message_size,
     :batch_enabled,
     {:batch, []},
-    {:batch_size, 0},
-    :batch_size_threshold,
+    {:batched, 0},
+    :batch_size,
     :batch_flush_timer,
     :flush_interval,
     :schema,
@@ -58,8 +58,8 @@ defmodule Pulsar.Producer.Worker do
           max_message_size: non_neg_integer(),
           batch_enabled: boolean(),
           batch: list({map(), GenServer.from()}),
+          batched: non_neg_integer(),
           batch_size: non_neg_integer(),
-          batch_size_threshold: non_neg_integer(),
           batch_flush_timer: reference() | nil,
           flush_interval: non_neg_integer(),
           schema: Schema.t() | nil,
@@ -179,10 +179,6 @@ defmodule Pulsar.Producer.Worker do
       | producer_id: producer_id,
         producer_name: name,
         topic_epoch: topic_epoch,
-        # The :batch_size option is the threshold; the field of that name counts the
-        # messages currently batched, so struct/2 must not carry the option into it.
-        batch_size: 0,
-        batch_size_threshold: Keyword.fetch!(opts, :batch_size),
         schema: build_schema(Keyword.get(opts, :schema))
     }
 
@@ -269,13 +265,13 @@ defmodule Pulsar.Producer.Worker do
     }
 
     new_batch = [{message, from} | state.batch]
-    new_size = state.batch_size + 1
+    new_batched = state.batched + 1
 
-    if new_size >= state.batch_size_threshold do
-      state = do_flush_batch(%{state | batch: new_batch, batch_size: new_size})
+    if new_batched >= state.batch_size do
+      state = do_flush_batch(%{state | batch: new_batch, batched: new_batched})
       {:noreply, state}
     else
-      {:noreply, %{state | batch: new_batch, batch_size: new_size}}
+      {:noreply, %{state | batch: new_batch, batched: new_batched}}
     end
   end
 
@@ -518,12 +514,12 @@ defmodule Pulsar.Producer.Worker do
 
         new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
 
-        %{state | sequence_id: sequence_id, pending_sends: new_pending, batch: [], batch_size: 0}
+        %{state | sequence_id: sequence_id, pending_sends: new_pending, batch: [], batched: 0}
 
       {:error, reason} ->
         Logger.error("Failed to send batch: #{inspect(reason)}")
         Enum.each(callers, fn from -> GenServer.reply(from, {:error, reason}) end)
-        %{state | batch: [], batch_size: 0}
+        %{state | batch: [], batched: 0}
     end
   end
 
