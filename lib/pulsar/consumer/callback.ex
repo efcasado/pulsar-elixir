@@ -39,6 +39,11 @@ defmodule Pulsar.Consumer.Callback do
   - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
   - `became_active/1` - Called when this consumer becomes the active consumer of a `:Failover` subscription (default: `{:noreply, state}`)
   - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:Failover` subscription (default: `{:noreply, state}`)
+  - `handle_invalid_message/2` - Called instead of `handle_message/2` for a message whose
+    bytes could not be trusted (default: log a warning and acknowledge it, so it is not
+    redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
+    for what they contain. Because they are routed here, `handle_message/2` only ever
+    receives messages that arrived intact.
 
   ## Message Format
 
@@ -238,7 +243,8 @@ defmodule Pulsar.Consumer.Callback do
                       handle_cast: 2,
                       handle_info: 2,
                       became_active: 1,
-                      became_passive: 1
+                      became_passive: 1,
+                      handle_invalid_message: 2
   @callback terminate(reason, state) :: term()
   @callback handle_call(term(), GenServer.from(), state) ::
               {:reply, term(), state}
@@ -263,6 +269,10 @@ defmodule Pulsar.Consumer.Callback do
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
+  @callback handle_invalid_message(message_args, state) ::
+              {:ok, state}
+              | {:error, reason, state}
+              | {:noreply, state}
 
   defmacro __using__(_opts) do
     quote do
@@ -293,13 +303,22 @@ defmodule Pulsar.Consumer.Callback do
         {:noreply, state}
       end
 
+      def handle_invalid_message(message, state) do
+        require Logger
+
+        Logger.warning("Discarding invalid message: #{message.validation_error}")
+
+        {:ok, state}
+      end
+
       defoverridable init: 1,
                      terminate: 2,
                      handle_call: 3,
                      handle_cast: 2,
                      handle_info: 2,
                      became_active: 1,
-                     became_passive: 1
+                     became_passive: 1,
+                     handle_invalid_message: 2
     end
   end
 end

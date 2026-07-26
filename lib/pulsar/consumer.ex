@@ -750,8 +750,14 @@ defmodule Pulsar.Consumer do
   end
 
   defp process_single_message(state, %Pulsar.Message{} = message, callback_state, nacked_acc) do
-    # Call callback for ALL messages (including incomplete chunks)
-    result = state.callback_module.handle_message(message, callback_state)
+    # Call callback for ALL messages (including incomplete chunks). An invalid one
+    # goes to its own callback, so handle_message/2 can trust what it is given.
+    result =
+      if Pulsar.Message.valid?(message) do
+        state.callback_module.handle_message(message, callback_state)
+      else
+        state.callback_module.handle_invalid_message(message, callback_state)
+      end
 
     # message_id_to_ack can be single value or list (chunked messages)
     message_ids_list =
