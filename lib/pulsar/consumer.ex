@@ -50,7 +50,9 @@ defmodule Pulsar.Consumer do
   #{Pulsar.Consumer.Options.docs()}
   """
 
+  alias Pulsar.Consumer.Group
   alias Pulsar.Consumer.Options
+  alias Pulsar.Consumer.Partitioned
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
@@ -85,8 +87,8 @@ defmodule Pulsar.Consumer do
       end)
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} -> Pulsar.ConsumerGroup.start_link(opts)
-      {:ok, partitions} -> Pulsar.PartitionedConsumer.start_link(Keyword.put(opts, :partitions, partitions))
+      {:ok, 0} -> Group.start_link(opts)
+      {:ok, partitions} -> Partitioned.start_link(Keyword.put(opts, :partitions, partitions))
       {:error, reason} -> {:error, reason}
     end
   end
@@ -162,19 +164,27 @@ defmodule Pulsar.Consumer do
   def workers(consumer, opts \\ [])
 
   def workers(consumer, _opts) when is_pid(consumer) do
-    case Supervisor.which_children(consumer) do
-      [] ->
-        []
-
-      children ->
-        if partitioned?(children),
-          do: Pulsar.PartitionedConsumer.get_consumers(consumer),
-          else: Pulsar.ConsumerGroup.get_consumers(consumer)
-    end
+    collect_workers(consumer)
   end
 
   def workers(name, opts) when is_binary(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
+  end
+
+  @doc """
+  Returns how many partitions a consumer covers, or `0` for a non-partitioned topic.
+  """
+  @spec partitions(pid() | String.t(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  def partitions(consumer, opts \\ [])
+
+  def partitions(consumer, _opts) when is_pid(consumer) do
+    consumer
+    |> Supervisor.which_children()
+    |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
+  end
+
+  def partitions(name, opts) when is_binary(name) do
+    with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
   end
 
   @doc """
@@ -237,10 +247,17 @@ defmodule Pulsar.Consumer do
   """
   defdelegate topic(consumer), to: Worker
 
-  # A partitioned consumer supervises one group supervisor per partition, while a plain
-  # group supervises workers, so any `:supervisor` child distinguishes the two.
-  defp partitioned?(children) do
-    Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
+  # Descends through the partition supervisors, if any, so a partitioned and a plain
+  # consumer read the same. Matching on the worker module skips the partition discovery
+  # process, which is also a `:worker` child.
+  defp collect_workers(supervisor) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.flat_map(fn
+      {_id, pid, :worker, [Worker]} when is_pid(pid) -> [pid]
+      {_id, pid, :supervisor, _modules} when is_pid(pid) -> collect_workers(pid)
+      _child -> []
+    end)
   end
 
   # Resolved by the caller for Pulsar.Consumer.start/4, so that the lookup and its retries

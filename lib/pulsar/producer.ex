@@ -31,7 +31,10 @@ defmodule Pulsar.Producer do
   #{Pulsar.Producer.Options.docs()}
   """
 
+  alias Pulsar.Producer.Group
   alias Pulsar.Producer.Options
+  alias Pulsar.Producer.Partitioned
+  alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
 
@@ -61,8 +64,8 @@ defmodule Pulsar.Producer do
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} -> Pulsar.ProducerGroup.start_link(opts)
-      {:ok, partitions} -> Pulsar.PartitionedProducer.start_link(Keyword.put(opts, :partitions, partitions))
+      {:ok, 0} -> Group.start_link(opts)
+      {:ok, partitions} -> Partitioned.start_link(Keyword.put(opts, :partitions, partitions))
       {:error, reason} -> {:error, reason}
     end
   end
@@ -157,34 +160,81 @@ defmodule Pulsar.Producer do
   @spec workers(pid() | String.t(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(producer, opts \\ [])
 
-  def workers(producer, _opts) when is_pid(producer) do
-    case Supervisor.which_children(producer) do
-      [] ->
-        []
-
-      children ->
-        if partitioned?(children),
-          do: Pulsar.PartitionedProducer.get_producers(producer),
-          else: Pulsar.ProducerGroup.get_producers(producer)
-    end
-  end
+  def workers(producer, _opts) when is_pid(producer), do: collect_workers(producer)
 
   def workers(name, opts) when is_binary(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
   end
 
+  @doc """
+  Returns how many partitions a producer covers, or `0` for a non-partitioned topic.
+  """
+  @spec partitions(pid() | String.t(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  def partitions(producer, opts \\ [])
+
+  def partitions(producer, _opts) when is_pid(producer) do
+    producer
+    |> Supervisor.which_children()
+    |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
+  end
+
+  def partitions(name, opts) when is_binary(name) do
+    with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
+  end
+
+  # Resolving the partition here keeps topology knowledge in one module: the partition
+  # supervisors below only build child specs.
   defp publish(producer, message, opts) do
-    if producer |> Supervisor.which_children() |> partitioned?() do
-      Pulsar.PartitionedProducer.send_message(producer, message, opts)
-    else
-      Pulsar.ProducerGroup.send_message(producer, message, opts)
+    case partition_groups(producer) do
+      [] -> send_to_worker(collect_workers(producer), message, opts)
+      groups -> route(groups, message, opts)
     end
   end
 
-  # A partitioned producer supervises one group supervisor per partition, while a plain
-  # group supervises workers, so any `:supervisor` child distinguishes the two.
-  defp partitioned?(children) do
-    Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
+  defp route(groups, message, opts) do
+    # Routing uses the partition index parsed from the topic suffix rather than a
+    # position in a sorted list: sorting names lexicographically misorders partitions
+    # once there are ten or more ("...-partition-10" before "...-partition-2").
+    index = select_partition(opts, length(groups))
+
+    case Enum.find(groups, fn {topic, _pid} -> Pulsar.PartitionTopic.index(topic) == index end) do
+      {_topic, group} -> send_to_worker(collect_workers(group), message, opts)
+      nil -> {:error, {:partition_not_found, index}}
+    end
+  end
+
+  defp select_partition(opts, partitions) do
+    case Keyword.get(opts, :partition_key) do
+      nil -> Enum.random(0..(partitions - 1))
+      partition_key -> :erlang.phash2(partition_key, partitions)
+    end
+  end
+
+  defp send_to_worker([], _message, _opts), do: {:error, :no_producers_available}
+
+  defp send_to_worker([worker | _rest], message, opts) do
+    Worker.send_message(worker, message, opts)
+  catch
+    :exit, reason -> {:error, {:producer_died, reason}}
+  end
+
+  defp partition_groups(producer) do
+    producer
+    |> Supervisor.which_children()
+    |> Enum.filter(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
+    |> Enum.map(fn {topic, pid, _type, _modules} -> {topic, pid} end)
+  end
+
+  # Descends through the partition supervisors, if any. Matching on the worker module
+  # skips the partition discovery process, which is also a `:worker` child.
+  defp collect_workers(supervisor) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.flat_map(fn
+      {_id, pid, :worker, [Worker]} when is_pid(pid) -> [pid]
+      {_id, pid, :supervisor, _modules} when is_pid(pid) -> collect_workers(pid)
+      _child -> []
+    end)
   end
 
   # Resolved by the caller for Pulsar.Producer.start/2, so that the lookup and its retries

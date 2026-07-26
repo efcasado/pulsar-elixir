@@ -62,14 +62,14 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         @consumer_callback.count_messages(consumer_pid) + acc
       end)
 
-    partition_groups = Pulsar.PartitionedConsumer.get_partition_groups(partitioned_consumer_pid)
+    partition_count = Pulsar.Consumer.partitions(partitioned_consumer_pid)
 
     # The number of partition groups should be equal to the number of
     # partitions in the topic. The total number of consumers should be
     # equal to the number of partitions times the number of consumers per
     # partition. Last but not least, all messages produced should be
     # consumed.
-    assert length(partition_groups) == 3
+    assert partition_count == 3
     assert Enum.count(consumers) == 6
     assert consumed_messages == expected_count
   end
@@ -109,7 +109,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   defp wait_for_partition_count(partitioned_consumer_pid, expected) do
     Utils.wait_for(fn ->
-      length(Pulsar.PartitionedConsumer.get_partition_groups(partitioned_consumer_pid)) == expected
+      Pulsar.Consumer.partitions(partitioned_consumer_pid) == expected
     end)
   end
 end

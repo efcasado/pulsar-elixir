@@ -1,4 +1,4 @@
-defmodule Pulsar.ConsumerGroup do
+defmodule Pulsar.Consumer.Group do
   @moduledoc false
 
   # Supervises the worker processes for one topic or one partition of it. Started by
@@ -18,15 +18,6 @@ defmodule Pulsar.ConsumerGroup do
 
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
     Supervisor.stop(supervisor_pid, reason, timeout)
-  end
-
-  @doc """
-  Gets all consumer process PIDs managed by this consumer group.
-  """
-  def get_consumers(supervisor_pid) do
-    supervisor_pid
-    |> Supervisor.which_children()
-    |> Enum.map(fn {_id, child_pid, :worker, _modules} -> child_pid end)
   end
 
   @impl true

@@ -37,10 +37,10 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     :ok = wait_for_producers_ready(producer_pid)
 
-    partition_groups = Pulsar.PartitionedProducer.get_partition_groups(producer_pid)
-    all_producers = Pulsar.PartitionedProducer.get_producers(producer_pid)
+    partition_count = Pulsar.Producer.partitions(producer_pid)
+    all_producers = Pulsar.Producer.workers(producer_pid)
 
-    assert Enum.count(partition_groups) == 3
+    assert partition_count == 3
     assert Enum.count(all_producers) == 3
 
     :ok = Pulsar.Producer.stop(producer_pid)
@@ -184,7 +184,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
   defp wait_for_producers_ready(partitioned_producer_pid) do
     Utils.wait_for(fn ->
-      producers = Pulsar.PartitionedProducer.get_producers(partitioned_producer_pid)
+      producers = Pulsar.Producer.workers(partitioned_producer_pid)
 
       Enum.count(producers) == 3 and
         Enum.all?(producers, fn producer ->
@@ -196,7 +196,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
   defp wait_for_partition_count(partitioned_producer_pid, expected) do
     Utils.wait_for(fn ->
-      length(Pulsar.PartitionedProducer.get_partition_groups(partitioned_producer_pid)) == expected
+      Pulsar.Producer.partitions(partitioned_producer_pid) == expected
     end)
   end
 end
