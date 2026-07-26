@@ -1,20 +1,9 @@
 defmodule Pulsar.PartitionedProducer do
-  @moduledoc """
-  A supervisor that manages individual producer groups for partitioned topics.
+  @moduledoc false
 
-  This module provides a logical abstraction over multiple producer groups,
-  allowing the `start_producer` API to return a single PID for partitioned topics
-  while maintaining the individual producer group architecture underneath.
-
-  The supervisor manages one producer group per partition, with the number of
-  partitions provided by the caller.
-
-  ## Message Routing
-
-  Messages are routed to partitions based on the `:partition_key` option:
-  - With `:partition_key` - Consistent hash routing via `:erlang.phash2(partition_key, num_partitions)`
-  - Without `:partition_key` - Random selection
-  """
+  # Supervises one producer group per partition of a partitioned topic.
+  # Messages are routed to a partition by :partition_key, hashed with
+  # :erlang.phash2/2, or at random when no key is given.
 
   use Supervisor
 

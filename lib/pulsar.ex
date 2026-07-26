@@ -130,6 +130,7 @@ defmodule Pulsar do
       {:ok, consumer_pid} = Pulsar.lookup_consumer("my-topic-my-subscription")
       {:ok, producer_pid} = Pulsar.lookup_producer(:my_producer)
   """
+  alias Pulsar.Producer.Options
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
 
   require Logger
@@ -485,18 +486,10 @@ defmodule Pulsar do
   ## Parameters
 
   - `topic` - The topic to publish to (required)
-  - `opts` - Optional parameters:
-    - `:name` - Custom name for the producer group (default: "<topic>-producer")
-    - `:producer_count` - Number of producer processes in the group (default: 1)
-    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
-      - `:Shared` - Multiple producers can publish on the topic
-      - `:Exclusive` - Only one producer can publish. Other producers get errors immediately.
-      - `:WaitForExclusive` - Wait for exclusive access if another producer is connected
-      - `:ExclusiveWithFencing` - Immediately remove any existing producer
-    - `:partition_discovery_interval_ms` - For partitioned topics, how often to poll
-      for newly added partitions, in milliseconds (default: 60000). Set to `false`
-      to disable auto-discovery. Discovery is grow-only.
-    - Other options passed to individual producer processes
+
+  ## Options
+
+  #{Options.docs()}
 
   ## Producer Naming and Registry
 
@@ -539,7 +532,8 @@ defmodule Pulsar do
   """
   @spec start_producer(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_producer(topic, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
+    opts = Options.validate!(opts)
+    client = Keyword.fetch!(opts, :client)
     producer_supervisor = Pulsar.Client.producer_supervisor(client)
     {name, producer_opts} = Keyword.pop(opts, :name, "#{topic}-producer")
 
