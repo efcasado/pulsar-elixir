@@ -22,8 +22,8 @@ defmodule Pulsar.Producer do
   a partitioned topic needs nothing special at the call site. Messages are routed across
   partitions, honouring a message's partition key when one is set.
 
-  Producers can also be started and stopped at runtime with `Pulsar.start_producer/2`
-  and `Pulsar.stop_producer/2`, which put them under their client's supervisor instead of
+  Producers can also be started and stopped at runtime with `Pulsar.Producer.start/2`
+  and `Pulsar.Producer.stop/2`, which put them under their client's supervisor instead of
   yours.
 
   ## Options
@@ -194,7 +194,7 @@ defmodule Pulsar.Producer do
     Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
 
-  # Resolved by the caller for Pulsar.start_producer/2, so that the lookup and its retries
+  # Resolved by the caller for Pulsar.Producer.start/2, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other producer start.
   defp partition_count(opts, topic, client) do
     case Keyword.fetch(opts, :partitions) do

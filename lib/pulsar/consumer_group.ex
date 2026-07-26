@@ -2,7 +2,7 @@ defmodule Pulsar.ConsumerGroup do
   @moduledoc false
 
   # Supervises the consumer processes for one topic or partition. Started by
-  # Pulsar.start_consumer/4, which owns the option surface.
+  # Pulsar.Consumer.start/4, which owns the option surface.
 
   use Supervisor
 

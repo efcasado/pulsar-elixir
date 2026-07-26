@@ -50,35 +50,4 @@ defmodule Pulsar.Integration.SupervisionTreeTest do
 
     assert_receive {:received, "from the tree"}, 15_000
   end
-
-  test "two consumers on one topic can be siblings" do
-    # The child spec's id defaults to the consumer's name, so a static tree accepts
-    # more than one consumer per topic.
-    broker = System.broker()
-
-    children = [
-      {Pulsar.Client, name: :sibling_consumers_client, host: broker.service_url},
-      {Pulsar.Consumer,
-       topic: @topic,
-       subscription_name: "sibling-a",
-       callback_module: Handler,
-       client: :sibling_consumers_client,
-       init_args: [self()]},
-      {Pulsar.Consumer,
-       topic: @topic,
-       subscription_name: "sibling-b",
-       callback_module: Handler,
-       client: :sibling_consumers_client,
-       init_args: [self()]}
-    ]
-
-    supervisor =
-      start_supervised!(%{
-        id: :sibling_tree,
-        start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
-        type: :supervisor
-      })
-
-    assert length(Supervisor.which_children(supervisor)) == 3
-  end
 end

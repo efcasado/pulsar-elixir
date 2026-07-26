@@ -22,8 +22,8 @@ defmodule Pulsar.Consumer do
   a partitioned topic needs nothing special at the call site. Partition count is resolved
   at startup, and new partitions are picked up by `:partition_discovery_interval_ms`.
 
-  Consumers can also be started and stopped at runtime with `Pulsar.start_consumer/4`
-  and `Pulsar.stop_consumer/2`, which put them under their client's supervisor instead of
+  Consumers can also be started and stopped at runtime with `Pulsar.Consumer.start/4`
+  and `Pulsar.Consumer.stop/2`, which put them under their client's supervisor instead of
   yours.
 
   ## Callback module
@@ -257,7 +257,7 @@ defmodule Pulsar.Consumer do
     Enum.any?(children, fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
 
-  # Resolved by the caller for Pulsar.start_consumer/4, so that the lookup and its retries
+  # Resolved by the caller for Pulsar.Consumer.start/4, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other consumer start.
   defp partition_count(opts, topic, client) do
     case Keyword.fetch(opts, :partitions) do

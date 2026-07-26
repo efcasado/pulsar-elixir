@@ -1,7 +1,7 @@
 defmodule Pulsar.ProducerGroup do
   @moduledoc false
 
-  # Supervises the producer processes for one topic. Started by Pulsar.start_producer/2,
+  # Supervises the producer processes for one topic. Started by Pulsar.Producer.start/2,
   # which owns the option surface.
 
   use Supervisor

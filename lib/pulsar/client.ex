@@ -34,7 +34,7 @@ defmodule Pulsar.Client do
        callback_module: MyCallback,
        client: :analytics}
 
-  Clients can also be started at runtime with `Pulsar.start_client/1`, which supervises
+  Clients can also be started at runtime with `Pulsar.Client.start/1`, which supervises
   them under `:pulsar` rather than under the caller.
   """
 
