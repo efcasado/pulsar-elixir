@@ -30,6 +30,11 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     end
   end
 
+  # Opts in to invalid messages so tests can assert on them; the default drops them.
+  def handle_invalid_message(%Pulsar.Message{} = message, state) do
+    {:ok, %{state | messages: [message | state.messages], count: state.count + 1}}
+  end
+
   def get_messages(consumer_pid) do
     GenServer.call(consumer_pid, :get_messages)
   end

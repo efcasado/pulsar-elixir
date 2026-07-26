@@ -203,16 +203,14 @@ defmodule Pulsar.Message do
   is delivered so the callback can record or divert it, but the payload must not be
   treated as data. `validation_error` says what went wrong.
 
+  Messages that fail validation are routed to `c:Pulsar.Consumer.Callback.handle_invalid_message/2`,
+  so `handle_message/2` never receives one and rarely needs this check.
+
   ## Examples
 
-      def handle_message(%Pulsar.Message{} = message, state) do
-        if Pulsar.Message.valid?(message) do
-          process(message.payload)
-          {:ok, state}
-        else
-          Logger.error("dropping corrupt message: \#{message.validation_error}")
-          {:ok, state}
-        end
+      def handle_invalid_message(%Pulsar.Message{} = message, state) do
+        Logger.error("dropping corrupt message: \#{message.validation_error}")
+        {:ok, state}
       end
   """
   @spec valid?(t()) :: boolean()
