@@ -5,7 +5,6 @@ defmodule Pulsar.Consumer.Options do
 
   # Options whose current default is read from the application environment carry no
   # default here: they have to stay absent so the process that reads them can still
-  # consult Pulsar.Config.
   @schema [
     partitions: [
       type: :non_neg_integer,
@@ -153,9 +152,10 @@ defmodule Pulsar.Consumer.Options do
     ],
     partition_discovery_interval_ms: [
       type: {:or, [:pos_integer, {:in, [false]}]},
+      default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables it. Defaults to `Pulsar.Config.partition_discovery_interval/0`.
+      `false` disables it.
       """
     ],
     max_restarts: [
@@ -165,11 +165,13 @@ defmodule Pulsar.Consumer.Options do
     ],
     startup_delay_ms: [
       type: :non_neg_integer,
-      doc: "Delay before a consumer subscribes. Defaults to `Pulsar.Config.startup_delay/0`."
+      default: 1_000,
+      doc: "Delay before a consumer subscribes, giving its broker time to connect."
     ],
     startup_jitter_ms: [
       type: :non_neg_integer,
-      doc: "Random delay added to `:startup_delay_ms`. Defaults to `Pulsar.Config.startup_jitter/0`."
+      default: 1_000,
+      doc: "Random extra delay on top of `:startup_delay_ms`, to spread out restarts."
     ]
   ]
 

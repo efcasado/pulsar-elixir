@@ -6,7 +6,6 @@ defmodule Pulsar.Consumer.Worker do
 
   use GenServer
 
-  alias Pulsar.Config
   alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Producer.Options, as: ProducerOptions
   alias Pulsar.Producer.Worker, as: ProducerWorker
@@ -270,9 +269,8 @@ defmodule Pulsar.Consumer.Worker do
 
     init_args = Keyword.fetch!(opts, :init_args)
 
-    # Absent on purpose so that the application environment still wins.
-    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, Config.startup_delay())
-    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
+    startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
+    startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
     if startup_delay_ms + startup_jitter_ms > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}

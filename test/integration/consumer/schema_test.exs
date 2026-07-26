@@ -59,6 +59,8 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         "incompatible-sub",
         DummyConsumer,
         client: @client,
+        startup_delay_ms: 0,
+        startup_jitter_ms: 0,
         schema: [type: :Int32]
       )
 

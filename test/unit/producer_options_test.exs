@@ -20,14 +20,12 @@ defmodule Pulsar.Producer.OptionsTest do
       assert opts[:batch_enabled] == false
     end
 
-    test "leaves options backed by the application environment absent" do
+    test "defaults the startup delays and partition discovery" do
       opts = validate!([])
 
-      # These fall back to Pulsar.Config at the point they are read, so a default
-      # here would shadow the application environment.
-      refute Keyword.has_key?(opts, :startup_delay_ms)
-      refute Keyword.has_key?(opts, :startup_jitter_ms)
-      refute Keyword.has_key?(opts, :partition_discovery_interval_ms)
+      assert opts[:startup_delay_ms] == 1_000
+      assert opts[:startup_jitter_ms] == 1_000
+      assert opts[:partition_discovery_interval_ms] == 60_000
     end
 
     test "accepts a name as either a string or an atom" do

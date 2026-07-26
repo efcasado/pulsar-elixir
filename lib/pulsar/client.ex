@@ -45,37 +45,57 @@ defmodule Pulsar.Client do
   @broker_opts [
     auth: [
       type: :keyword_list,
+      default: [type: Pulsar.Auth.None, opts: []],
       doc: "Authentication configuration, as `[type: module, opts: keyword]`."
     ],
     conn_timeout: [
       type: :timeout,
+      default: 1_000,
       doc: """
-      Milliseconds to wait for a connection to a broker. Defaults to 1000. `:infinity`
+      Milliseconds to wait for a connection to a broker. `:infinity`
       waits indefinitely, which leaves the broker process blocked in `connect` with no
       reconnect timer and no way to answer calls until the network gives up.
       """
     ],
     max_frame_size: [
       type: :pos_integer,
+      default: Pulsar.Protocol.default_max_frame_size(),
       doc: """
-      Largest frame accepted from this cluster, in bytes. Defaults to
-      `Pulsar.Config.max_frame_size/0`. Raise it to match a broker configured with a
-      larger `maxMessageSize`.
+      Largest frame accepted from this cluster, in bytes. Raise it to match a broker
+      configured with a larger `maxMessageSize`.
       """
+    ],
+    ping_interval: [
+      type: :timeout,
+      default: 60_000,
+      doc: "Milliseconds between keepalive pings to each broker in this cluster."
+    ],
+    cleanup_interval: [
+      type: :timeout,
+      default: 30_000,
+      doc: "Milliseconds between sweeps for requests that never got a response."
+    ],
+    request_timeout: [
+      type: :timeout,
+      default: 60_000,
+      doc: "Milliseconds after which a request without a response is failed."
+    ],
+    max_backoff: [
+      type: :pos_integer,
+      default: 30_000,
+      doc: "Longest wait between attempts to reconnect to a broker, in milliseconds."
     ],
     socket_opts: [
       type: {:list, :any},
       doc: """
-      Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`. Not a keyword list:
+      Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`. Defaults to verifying
+      the broker's certificate against the CA bundle from `:castore`. Not a keyword list:
       bare atoms such as `:inet6` and tuples such as `{:raw, level, opt, value}` are
       valid entries.
       """
     ]
   ]
 
-  # No defaults here on purpose: an option the caller omitted has to stay absent so
-  # that build_broker_opts/1 can fall back to the application environment before the
-  # broker applies its own default.
   @schema [
             name: [
               type: :atom,
@@ -115,6 +135,10 @@ defmodule Pulsar.Client do
   """
   def start_link(opts) do
     opts = validate_options!(opts)
+
+    # Resolved at runtime rather than in the schema: the CA bundle's path is a property
+    # of the machine, not of the compiled library.
+    opts = Keyword.put_new(opts, :socket_opts, verify: :verify_peer, cacertfile: CAStore.file_path())
     name = Keyword.fetch!(opts, :name)
     bootstrap_host = Keyword.fetch!(opts, :host)
 
@@ -342,16 +366,6 @@ defmodule Pulsar.Client do
   end
 
   defp build_broker_opts(opts) do
-    app_opts =
-      @supported_broker_opts
-      |> Enum.map(fn key -> {key, Application.get_env(:pulsar, key)} end)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    passed_opts =
-      opts
-      |> Keyword.take(@supported_broker_opts)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    Keyword.merge(app_opts, passed_opts)
+    Keyword.take(opts, @supported_broker_opts)
   end
 end

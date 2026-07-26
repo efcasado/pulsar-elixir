@@ -319,6 +319,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
   defp subscription_options(initial_position, opts \\ []) do
     [
       client: @client,
+      startup_delay_ms: 0,
+      startup_jitter_ms: 0,
       subscription_type: :Exclusive,
       initial_position: initial_position
     ] ++ opts

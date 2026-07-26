@@ -242,7 +242,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "rejects an oversized frame on its length prefix alone" do
-      max = Pulsar.Config.max_frame_size()
+      max = Protocol.default_max_frame_size()
       oversized = <<max - 3::32>>
 
       assert byte_size(oversized) == 4
@@ -250,7 +250,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "accepts a length prefix at exactly the maximum frame size" do
-      prefix = <<Pulsar.Config.max_frame_size() - 4::32>>
+      prefix = <<Protocol.default_max_frame_size() - 4::32>>
 
       assert {:ok, [], buffer} = decode_stream(prefix)
       assert buffered(buffer) == prefix
@@ -262,7 +262,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "rejects an oversized frame before the frames behind it are decoded", ctx do
-      max = Pulsar.Config.max_frame_size()
+      max = Protocol.default_max_frame_size()
 
       assert decode_stream(ctx.ping <> <<max::32>>) == {:error, {:frame_too_large, max + 4}}
     end
@@ -547,7 +547,7 @@ defmodule Pulsar.ProtocolTest do
     |> frame_base_command()
   end
 
-  defp decode_stream(data, max_frame_size \\ Pulsar.Config.max_frame_size()) do
+  defp decode_stream(data, max_frame_size \\ Protocol.default_max_frame_size()) do
     Protocol.decode_stream(<<>>, data, max_frame_size)
   end
 
@@ -556,7 +556,7 @@ defmodule Pulsar.ProtocolTest do
 
   defp feed(chunks) do
     Enum.reduce_while(chunks, {:ok, [], <<>>}, fn chunk, {:ok, commands, buffer} ->
-      case Protocol.decode_stream(buffer, chunk, Pulsar.Config.max_frame_size()) do
+      case Protocol.decode_stream(buffer, chunk, Protocol.default_max_frame_size()) do
         {:ok, new_commands, rest} -> {:cont, {:ok, commands ++ new_commands, rest}}
         {:error, reason} -> {:halt, {:error, reason}}
       end

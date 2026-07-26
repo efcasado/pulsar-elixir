@@ -6,7 +6,6 @@ defmodule Pulsar.Producer.Worker do
 
   use GenServer
 
-  alias Pulsar.Config
   alias Pulsar.ProducerEpochStore
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
@@ -188,9 +187,8 @@ defmodule Pulsar.Producer.Worker do
       Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
     end
 
-    # Absent on purpose so that the application environment still wins.
-    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, Config.startup_delay())
-    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
+    startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
+    startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
     if startup_delay_ms + startup_jitter_ms > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms}}}

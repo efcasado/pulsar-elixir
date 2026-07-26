@@ -33,7 +33,7 @@ defmodule Pulsar.Consumer.Partitioned do
       Pulsar.PartitionDiscovery.child_specs(self(),
         topic: topic,
         client: Keyword.fetch!(opts, :client),
-        interval_ms: Keyword.get(opts, :partition_discovery_interval_ms, Pulsar.Config.partition_discovery_interval()),
+        interval_ms: Keyword.fetch!(opts, :partition_discovery_interval_ms),
         build_child_spec: build_child_spec
       )
 

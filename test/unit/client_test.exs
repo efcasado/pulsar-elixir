@@ -47,28 +47,39 @@ defmodule Pulsar.ClientTest do
     end
   end
 
-  describe "broker option precedence" do
-    test "falls back to the application environment when an option is omitted" do
-      Application.put_env(:pulsar, :max_frame_size, 777_777)
-      on_exit(fn -> Application.delete_env(:pulsar, :max_frame_size) end)
+  describe "broker options" do
+    test "carries the connection tunables to the broker with their defaults" do
+      start_supervised!({Client, name: :broker_defaults, host: "pulsar://127.0.0.1:1"})
 
-      {:ok, _pid} = Client.start_link(name: :from_env, host: "pulsar://127.0.0.1:1")
+      opts = Client.get_broker_opts(:broker_defaults)
 
-      assert Client.get_broker_opts(:from_env) == [max_frame_size: 777_777]
-
-      Client.stop(:from_env)
+      assert opts[:conn_timeout] == 1_000
+      assert opts[:max_frame_size] == Pulsar.Protocol.default_max_frame_size()
+      assert opts[:ping_interval] == 60_000
+      assert opts[:cleanup_interval] == 30_000
+      assert opts[:request_timeout] == 60_000
+      assert opts[:max_backoff] == 30_000
     end
 
-    test "prefers an option passed to start_link over the application environment" do
+    test "prefers an option passed to start_link over the default" do
+      start_supervised!({Client, name: :broker_explicit, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111})
+
+      assert Client.get_broker_opts(:broker_explicit)[:max_frame_size] == 111_111
+    end
+
+    test "ignores the application environment" do
+      # These were read from the application environment until it stopped being a
+      # tuning layer; a client is now configured only through its own options.
       Application.put_env(:pulsar, :max_frame_size, 777_777)
-      on_exit(fn -> Application.delete_env(:pulsar, :max_frame_size) end)
+      Application.put_env(:pulsar, :ping_interval, 777)
+      on_exit(fn -> Enum.each([:max_frame_size, :ping_interval], &Application.delete_env(:pulsar, &1)) end)
 
-      {:ok, _pid} =
-        Client.start_link(name: :from_opts, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111)
+      start_supervised!({Client, name: :ignores_env, host: "pulsar://127.0.0.1:1"})
 
-      assert Client.get_broker_opts(:from_opts) == [max_frame_size: 111_111]
+      opts = Client.get_broker_opts(:ignores_env)
 
-      Client.stop(:from_opts)
+      assert opts[:max_frame_size] == Pulsar.Protocol.default_max_frame_size()
+      assert opts[:ping_interval] == 60_000
     end
   end
 
