@@ -50,21 +50,7 @@ defmodule Pulsar.Reader do
 
   ## Options
 
-  - `:host` - Pulsar broker URL (e.g., "pulsar://localhost:6650").
-    If provided, creates a temporary client for this stream. Mutually exclusive with `:client`.
-  - `:name` - Name for the internal client (default: `:default`). Only used with `:host`.
-    Use this to avoid conflicts when running multiple readers with `:host`.
-  - `:auth` - Authentication configuration (only used with `:host`)
-  - `:socket_opts` - Socket options (only used with `:host`)
-  - `:client` - Name of existing Pulsar client to use (default: `:default`).
-    Use this when Pulsar is already started in your supervision tree. Mutually exclusive with `:host`.
-  - `:start_position` - Where to start reading (`:earliest` or `:latest`, default: `:earliest`)
-  - `:start_message_id` - Start from specific message ID as `{ledger_id, entry_id}` tuple
-  - `:start_timestamp` - Start from specific timestamp (milliseconds since epoch)
-  - `:flow_permits` - Number of messages to request per flow command (default: 100)
-  - `:read_compacted` - Only read non-deleted messages from compacted topics (default: false)
-  - `:timeout` - Inactivity timeout in milliseconds (default: `60_000`). Stream halts if
-    no message is received within this time.
+  See `stream/2`.
 
   ## Connection Management
 
@@ -122,7 +108,75 @@ defmodule Pulsar.Reader do
 
   alias Pulsar.Consumer
 
+  require Logger
+
   @default_flow_permits 100
+
+  @schema [
+    host: [
+      type: :string,
+      doc: """
+      Broker URL for a client the stream starts and stops itself, e.g.
+      `pulsar://localhost:6650`. Mutually exclusive with `:client`.
+      """
+    ],
+    client: [
+      type: :atom,
+      default: :default,
+      doc: "An already running client to read through. Mutually exclusive with `:host`."
+    ],
+    name: [
+      type: :atom,
+      default: :default,
+      doc: "Name for the client started from `:host`. Ignored when reading through `:client`."
+    ],
+    auth: [
+      type: :keyword_list,
+      doc: "Authentication for the client started from `:host`."
+    ],
+    socket_opts: [
+      type: :keyword_list,
+      doc: "Socket options for the client started from `:host`."
+    ],
+    start_position: [
+      type: {:in, [:earliest, :latest]},
+      default: :earliest,
+      doc: "Where to start reading when no message id or timestamp is given."
+    ],
+    start_message_id: [
+      type: {:tuple, [:non_neg_integer, :non_neg_integer]},
+      doc: "Start from a `{ledger_id, entry_id}`."
+    ],
+    start_timestamp: [
+      type: :non_neg_integer,
+      doc: "Start from a publish time, in milliseconds since the epoch."
+    ],
+    read_compacted: [
+      type: :boolean,
+      default: false,
+      doc: "Read only the latest value per key from a compacted topic."
+    ],
+    flow_permits: [
+      type: :pos_integer,
+      default: 100,
+      doc: "Messages to request from the broker at a time."
+    ],
+    timeout: [
+      type: :timeout,
+      default: 60_000,
+      doc: "Milliseconds without a message after which the stream halts."
+    ],
+    startup_delay_ms: [
+      type: :non_neg_integer,
+      default: 0,
+      doc: "Delay before the underlying consumer subscribes."
+    ],
+    startup_jitter_ms: [
+      type: :non_neg_integer,
+      default: 0,
+      doc: "Random delay added to `:startup_delay_ms`."
+    ]
+  ]
 
   @doc """
   Creates a stream of messages from a Pulsar topic.
@@ -132,6 +186,10 @@ defmodule Pulsar.Reader do
 
   The stream handles connection lifecycle automatically based on whether
   you provide `:host` or `:client`.
+
+  ## Options
+
+  #{NimbleOptions.docs(@schema)}
 
   ## Examples
 
@@ -169,24 +227,8 @@ defmodule Pulsar.Reader do
     )
   end
 
-  @supported_options [
-    :host,
-    :name,
-    :client,
-    :start_position,
-    :start_message_id,
-    :start_timestamp,
-    :flow_permits,
-    :read_compacted,
-    :timeout,
-    :auth,
-    :socket_opts,
-    :startup_delay_ms,
-    :startup_jitter_ms
-  ]
-
   defp start_reader(topic, opts) do
-    validate_options!(opts)
+    opts = validate_options!(opts)
 
     {connection_mode, client_name} = resolve_connection_mode(opts)
 
@@ -345,13 +387,16 @@ defmodule Pulsar.Reader do
     end
   end
 
+  # Unknown options are only warned about for now, and will be rejected in the next
+  # major version.
   defp validate_options!(opts) do
-    unknown_opts = Keyword.keys(opts) -- @supported_options
+    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
 
-    if unknown_opts != [] do
-      raise ArgumentError,
-            "unknown options #{inspect(unknown_opts)}, supported options are: #{inspect(@supported_options)}"
+    if unknown != [] do
+      Logger.warning("Pulsar.Reader ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
     end
+
+    NimbleOptions.validate!(known, @schema)
   end
 
   defp maybe_put(keyword, _key, nil), do: keyword

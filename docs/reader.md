@@ -154,18 +154,5 @@ For most use cases, the default is fine. Adjust this if you're processing very l
 
 ## Configuration Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `:host` | string | - | Pulsar broker URL (mutually exclusive with `:client`) |
-| `:name` | atom | `:default` | Name for the internal client (only used with `:host`) |
-| `:auth` | tuple | - | Authentication configuration (only used with `:host`) |
-| `:socket_opts` | list | - | Socket options (only used with `:host`) |
-| `:client` | atom | `:default` | Name of existing client (mutually exclusive with `:host`) |
-| `:start_position` | atom | `:earliest` | `:earliest` or `:latest` |
-| `:start_message_id` | tuple | - | `{ledger_id, entry_id}` tuple to start from |
-| `:start_timestamp` | integer | - | Unix timestamp (ms) to start from |
-| `:flow_permits` | integer | 100 | Number of messages to request per flow batch |
-| `:timeout` | integer | 60_000 | Inactivity timeout in milliseconds |
-| `:read_compacted` | boolean | `false` | Read only latest value for each key (compacted topics) |
-| `:startup_delay_ms` | integer | 0 | Delay before consumer starts (ms) |
-| `:startup_jitter_ms` | integer | 0 | Random jitter added to startup delay (ms) |
+See `Pulsar.Reader.stream/2`, whose option list is generated from the schema it
+validates against, so the two cannot disagree.
