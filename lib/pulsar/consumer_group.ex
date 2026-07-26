@@ -1,15 +1,8 @@
 defmodule Pulsar.ConsumerGroup do
-  @moduledoc """
-  A supervisor that manages a group of consumer processes for a single topic.
+  @moduledoc false
 
-  This module provides a reusable abstraction for creating and managing
-  consumer groups, whether for regular topics or individual partitions
-  within a partitioned topic.
-
-  Each consumer group manages multiple consumer processes (configurable via
-  `consumer_count`) that all subscribe to the same topic with the same
-  subscription configuration.
-  """
+  # Supervises the consumer processes for one topic or partition. Started by
+  # Pulsar.start_consumer/4, which owns the option surface.
 
   use Supervisor
 

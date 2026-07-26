@@ -254,19 +254,10 @@ defmodule Pulsar do
   - `topic` - The topic to subscribe to (regular or partitioned)
   - `subscription_name` - Name of the subscription
   - `callback_module` - Module that implements `Pulsar.Consumer.Callback` behaviour
-  - `opts` - Optional parameters:
-    - `:subscription_type` - Type of subscription (e.g., :Exclusive, :Shared, :Key_Shared, default: :Shared)
-    - `:name` - Custom name for the consumer (default: "topic-subscription_name")
-    - `:consumer_count` - Number of consumer processes per topic/partition (default: 1)
-    - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial` - Initial flow permits (default: 100)
-    - `:flow_threshold` - Flow permits threshold for refill (default: 50)
-    - `:flow_refill` - Flow permits refill amount (default: 50)
-    - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
-    - `:partition_discovery_interval_ms` - For partitioned topics, how often to poll
-      for newly added partitions, in milliseconds (default: 60000). Set to `false`
-      to disable auto-discovery. Discovery is grow-only.
-    - Other options passed to ConsumerGroup supervisor
+
+  ## Options
+
+  #{Pulsar.Consumer.Options.docs()}
 
   ## Return Values
 
@@ -323,9 +314,10 @@ defmodule Pulsar do
   """
   @spec start_consumer(String.t(), String.t(), module(), keyword()) :: {:ok, pid} | {:error, term}
   def start_consumer(topic, subscription_name, callback_module, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
+    opts = Pulsar.Consumer.Options.validate!(opts)
+    client = Keyword.fetch!(opts, :client)
     consumer_supervisor = Pulsar.Client.consumer_supervisor(client)
-    subscription_type = Keyword.get(opts, :subscription_type, :Shared)
+    subscription_type = Keyword.fetch!(opts, :subscription_type)
     {name, opts} = Keyword.pop(opts, :name, topic <> "-" <> subscription_name)
 
     case check_partitioned_topic(topic, client) do
