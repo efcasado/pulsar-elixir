@@ -47,8 +47,12 @@ defmodule Pulsar.Client do
       doc: "Authentication configuration, as `[type: module, opts: keyword]`."
     ],
     conn_timeout: [
-      type: :pos_integer,
-      doc: "Milliseconds to wait for a connection to a broker. Defaults to 1000."
+      type: :timeout,
+      doc: """
+      Milliseconds to wait for a connection to a broker. Defaults to 1000. `:infinity`
+      waits indefinitely, which leaves the broker process blocked in `connect` with no
+      reconnect timer and no way to answer calls until the network gives up.
+      """
     ],
     max_frame_size: [
       type: :pos_integer,

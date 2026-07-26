@@ -17,7 +17,7 @@ defmodule Pulsar.ClientTest do
     end
 
     test "rejects an option of the wrong type" do
-      assert_raise NimbleOptions.ValidationError, ~r/expected positive integer/, fn ->
+      assert_raise NimbleOptions.ValidationError, ~r/invalid value for :conn_timeout/, fn ->
         Client.start_link(name: :bad_type, host: "pulsar://localhost:6650", conn_timeout: "soon")
       end
     end
@@ -64,6 +64,20 @@ defmodule Pulsar.ClientTest do
       assert Client.get_broker_opts(:from_opts) == [max_frame_size: 111_111]
 
       Client.stop(:from_opts)
+    end
+  end
+
+  describe "conn_timeout" do
+    test "accepts :infinity to wait indefinitely" do
+      start_supervised!({Client, name: :infinite_conn_timeout, host: "pulsar://127.0.0.1:6650", conn_timeout: :infinity})
+
+      assert Client.get_broker_opts(:infinite_conn_timeout)[:conn_timeout] == :infinity
+    end
+
+    test "still rejects a value that is not a timeout" do
+      assert_raise NimbleOptions.ValidationError, ~r/:conn_timeout/, fn ->
+        Client.start_link(name: :bad_conn_timeout, host: "pulsar://127.0.0.1:6650", conn_timeout: -1)
+      end
     end
   end
 
