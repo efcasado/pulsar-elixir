@@ -124,7 +124,10 @@ defmodule Pulsar.Producer do
   def send(producer, message, opts) when is_pid(producer), do: publish(producer, message, opts)
 
   def send(name, message, opts) when is_binary(message) do
-    with {:ok, pid} <- lookup(name, opts), do: publish(pid, message, opts)
+    case lookup(name, opts) do
+      {:ok, pid} -> publish(pid, message, opts)
+      {:error, :not_found} -> {:error, :producer_not_found}
+    end
   end
 
   @doc """

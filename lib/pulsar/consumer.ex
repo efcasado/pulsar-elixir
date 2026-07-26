@@ -204,7 +204,10 @@ defmodule Pulsar.Consumer do
   def ack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
 
   def ack(name, message_ids, opts) when is_binary(name) do
-    with {:ok, pid} <- lookup(name, opts), do: Worker.ack(pid, message_ids)
+    case lookup(name, opts) do
+      {:ok, pid} -> Worker.ack(pid, message_ids)
+      {:error, :not_found} -> {:error, :consumer_not_found}
+    end
   end
 
   @doc """
@@ -220,7 +223,10 @@ defmodule Pulsar.Consumer do
   def nack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.nack(consumer, message_ids)
 
   def nack(name, message_ids, opts) when is_binary(name) do
-    with {:ok, pid} <- lookup(name, opts), do: Worker.nack(pid, message_ids)
+    case lookup(name, opts) do
+      {:ok, pid} -> Worker.nack(pid, message_ids)
+      {:error, :not_found} -> {:error, :consumer_not_found}
+    end
   end
 
   @doc """
@@ -234,7 +240,10 @@ defmodule Pulsar.Consumer do
   def send_flow(consumer, permits, _opts) when is_pid(consumer), do: Worker.send_flow(consumer, permits)
 
   def send_flow(name, permits, opts) when is_binary(name) do
-    with {:ok, pid} <- lookup(name, opts), do: Worker.send_flow(pid, permits)
+    case lookup(name, opts) do
+      {:ok, pid} -> Worker.send_flow(pid, permits)
+      {:error, :not_found} -> {:error, :consumer_not_found}
+    end
   end
 
   @doc """
