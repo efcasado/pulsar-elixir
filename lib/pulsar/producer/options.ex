@@ -90,12 +90,13 @@ defmodule Pulsar.Producer.Options do
     ],
     startup_delay_ms: [
       type: :non_neg_integer,
-      default: 1_000,
-      doc: "Delay before a producer connects, giving its broker time to connect."
+      default: 0,
+      doc:
+        "Delay before a producer connects. A broker that is not connected yet is retried, so this is only needed to stagger a large number of restarts."
     ],
     startup_jitter_ms: [
       type: :non_neg_integer,
-      default: 1_000,
+      default: 0,
       doc: "Random extra delay on top of `:startup_delay_ms`, to spread out restarts."
     ]
   ]

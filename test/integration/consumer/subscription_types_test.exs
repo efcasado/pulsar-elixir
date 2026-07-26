@@ -185,8 +185,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   defp subscription_options(type, count) do
     [
       client: @client,
-      startup_delay_ms: 0,
-      startup_jitter_ms: 0,
       subscription_type: type,
       initial_position: :earliest,
       consumer_count: count,

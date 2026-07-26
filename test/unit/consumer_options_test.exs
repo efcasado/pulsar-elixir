@@ -24,8 +24,8 @@ defmodule Pulsar.Consumer.OptionsTest do
     test "defaults the startup delays and partition discovery" do
       opts = validate!([])
 
-      assert opts[:startup_delay_ms] == 1_000
-      assert opts[:startup_jitter_ms] == 1_000
+      assert opts[:startup_delay_ms] == 0
+      assert opts[:startup_jitter_ms] == 0
       assert opts[:partition_discovery_interval_ms] == 60_000
     end
 
