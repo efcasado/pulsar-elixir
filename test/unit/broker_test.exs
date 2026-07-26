@@ -48,6 +48,22 @@ defmodule Pulsar.BrokerTest do
     assert [{:next_event, :internal, {:command, %Proto.CommandPing{}}}] = actions
   end
 
+  test "discards unexpected messages rather than crashing the connection" do
+    broker = %Broker{socket: :current_socket}
+
+    messages = [
+      :stray_atom,
+      {:hello, :world},
+      {:ssl_passive, :current_socket},
+      {:EXIT, self(), :normal}
+    ]
+
+    for message <- messages do
+      assert :keep_state_and_data = Broker.connected(:info, message, broker),
+             "expected #{inspect(message)} to be discarded"
+    end
+  end
+
   defp buffered({head, pending, _size}), do: :erlang.iolist_to_binary([head | pending])
   defp buffered(binary) when is_binary(binary), do: binary
 
