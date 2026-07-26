@@ -22,8 +22,8 @@ defmodule Pulsar.Producer.Worker do
     :producer_name,
     :broker_pid,
     :broker_monitor,
-    :sequence_id,
-    :pending_sends,
+    {:sequence_id, 0},
+    {:pending_sends, %{}},
     :access_mode,
     :compression,
     :ready,
@@ -32,8 +32,8 @@ defmodule Pulsar.Producer.Worker do
     :chunking_enabled,
     :max_message_size,
     :batch_enabled,
-    :batch,
-    :batch_size,
+    {:batch, []},
+    {:batch_size, 0},
     :batch_size_threshold,
     :batch_flush_timer,
     :flush_interval,
@@ -119,29 +119,7 @@ defmodule Pulsar.Producer.Worker do
         schema: [type: :Json, definition: json_schema_def]
       )
   """
-  def start_link(opts) do
-    # fetch! for anything the schema defaults: reaching here without it means a caller
-    # bypassed Pulsar.Producer, and failing is better than silently using another value.
-    producer_config = %{
-      client: Keyword.fetch!(opts, :client),
-      name: Keyword.get(opts, :name),
-      topic: Keyword.fetch!(opts, :topic),
-      access_mode: Keyword.fetch!(opts, :access_mode),
-      compression: Keyword.fetch!(opts, :compression),
-      chunking_enabled: Keyword.fetch!(opts, :chunking_enabled),
-      max_message_size: Keyword.fetch!(opts, :max_message_size),
-      batch_enabled: Keyword.fetch!(opts, :batch_enabled),
-      batch_size_threshold: Keyword.fetch!(opts, :batch_size),
-      flush_interval: Keyword.fetch!(opts, :flush_interval),
-      schema: build_schema(Keyword.get(opts, :schema)),
-
-      # Absent on purpose so that the application environment still wins.
-      startup_delay_ms: Keyword.get(opts, :startup_delay_ms, Config.startup_delay()),
-      startup_jitter_ms: Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
-    }
-
-    GenServer.start_link(__MODULE__, producer_config, [])
-  end
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   @doc """
   Gracefully stops a producer process.
@@ -178,57 +156,34 @@ defmodule Pulsar.Producer.Worker do
   ## GenServer Callbacks
 
   @impl true
-  def init(producer_config) do
+  def init(opts) do
     # Trap exits so terminate/2 is called on shutdown
     Process.flag(:trap_exit, true)
 
-    %{
-      client: client,
-      name: name,
-      topic: topic,
-      access_mode: access_mode,
-      compression: compression,
-      chunking_enabled: chunking_enabled,
-      max_message_size: max_message_size,
-      startup_delay_ms: startup_delay_ms,
-      startup_jitter_ms: startup_jitter_ms,
-      batch_enabled: batch_enabled,
-      batch_size_threshold: batch_size_threshold,
-      flush_interval: flush_interval,
-      schema: schema
-    } = producer_config
-
+    client = Keyword.fetch!(opts, :client)
+    topic = Keyword.fetch!(opts, :topic)
+    name = Keyword.get(opts, :name)
     producer_id = System.unique_integer([:positive, :monotonic])
 
-    # Try to restore topic_epoch from ETS if this producer is restarting
+    # Restored from ETS when this producer is restarting.
     topic_epoch =
-      case ProducerEpochStore.get(client, topic, name, access_mode) do
+      case ProducerEpochStore.get(client, topic, name, Keyword.fetch!(opts, :access_mode)) do
         {:ok, epoch} -> epoch
         :error -> nil
       end
 
-    state = %__MODULE__{
-      client: client,
-      topic: topic,
-      producer_id: producer_id,
-      producer_name: name,
-      sequence_id: 0,
-      pending_sends: %{},
-      access_mode: access_mode,
-      compression: compression,
-      ready: nil,
-      registration_request_id: nil,
-      topic_epoch: topic_epoch,
-      chunking_enabled: chunking_enabled,
-      max_message_size: max_message_size,
-      batch_enabled: batch_enabled,
-      batch: [],
-      batch_size: 0,
-      batch_size_threshold: batch_size_threshold,
-      batch_flush_timer: nil,
-      flush_interval: flush_interval,
-      schema: schema,
-      schema_version: nil
+    # Option names and struct field names are the same, so struct/2 carries them across
+    # and ignores the group-level options that are not part of a producer's state.
+    state = %{
+      struct(__MODULE__, opts)
+      | producer_id: producer_id,
+        producer_name: name,
+        topic_epoch: topic_epoch,
+        # The :batch_size option is the threshold; the field of that name counts the
+        # messages currently batched, so struct/2 must not carry the option into it.
+        batch_size: 0,
+        batch_size_threshold: Keyword.fetch!(opts, :batch_size),
+        schema: build_schema(Keyword.get(opts, :schema))
     }
 
     if is_nil(topic_epoch) do
@@ -237,9 +192,11 @@ defmodule Pulsar.Producer.Worker do
       Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
     end
 
-    total_startup_delay = startup_delay_ms + startup_jitter_ms
+    # Absent on purpose so that the application environment still wins.
+    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, Config.startup_delay())
+    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, Config.startup_jitter())
 
-    if total_startup_delay > 0 do
+    if startup_delay_ms + startup_jitter_ms > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms}}}
     else
       {:ok, state, {:continue, :register_producer}}

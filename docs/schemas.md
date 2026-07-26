@@ -60,7 +60,7 @@ end
 
 ```elixir
 children = [
-  {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+  {Pulsar.Client, host: "pulsar://localhost:6650"},
   {Pulsar.Producer,
    topic: "users",
    name: :user_producer,

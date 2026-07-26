@@ -65,7 +65,7 @@ defmodule Main do
   def run do
     children =
       [
-        {Pulsar.Client, name: :default, host: @broker},
+        {Pulsar.Client, host: @broker},
         {Pulsar.Producer, topic: @topic, name: :game_master}
       ] ++ consumers(@num_players, @card_size, @topic)
 

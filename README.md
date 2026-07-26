@@ -56,7 +56,7 @@ Start a client, a consumer and a producer from your own supervision tree:
 
 ```elixir
 children = [
-  {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+  {Pulsar.Client, host: "pulsar://localhost:6650"},
   {Pulsar.Consumer,
    topic: "persistent://my-tenant/my-namespace/my-topic",
    subscription_name: "my-subscription",

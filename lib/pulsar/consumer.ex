@@ -5,7 +5,7 @@ defmodule Pulsar.Consumer do
   Start one from your own supervision tree:
 
       children = [
-        {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+        {Pulsar.Client, host: "pulsar://localhost:6650"},
         {Pulsar.Consumer,
          topic: "persistent://public/default/orders",
          subscription_name: "order-service",

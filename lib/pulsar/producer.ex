@@ -5,7 +5,7 @@ defmodule Pulsar.Producer do
   Start one from your own supervision tree:
 
       children = [
-        {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+        {Pulsar.Client, host: "pulsar://localhost:6650"},
         {Pulsar.Producer, topic: "persistent://public/default/audit", name: :audit}
       ]
 

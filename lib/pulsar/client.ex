@@ -13,7 +13,7 @@ defmodule Pulsar.Client do
   uses it:
 
       children = [
-        {Pulsar.Client, name: :default, host: "pulsar://localhost:6650"},
+        {Pulsar.Client, host: "pulsar://localhost:6650"},
         {Pulsar.Consumer, topic: topic, subscription_name: "sub", callback_module: MyCallback}
       ]
 

@@ -21,7 +21,7 @@ defmodule Pulsar.Reader do
   Using an external client (recommended for production):
 
       # In your application supervision tree
-      children = [{Pulsar.Client, name: :default, host: "pulsar://localhost:6650"}]
+      children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
 
       # Later, in your code
       Pulsar.Reader.stream("persistent://public/default/my-topic",
