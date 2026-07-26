@@ -42,9 +42,9 @@ defmodule Pulsar.Producer do
   @doc false
   def child_spec(opts) do
     %{
-      id: id(opts),
+      id: {__MODULE__, id(opts)},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :transient,
+      restart: :permanent,
       type: :supervisor
     }
   end
@@ -144,12 +144,19 @@ defmodule Pulsar.Producer do
   A producer in a supervision tree will be restarted by its supervisor; stop those by
   removing them from the tree.
   """
-  @spec stop(pid() | String.t(), keyword()) :: :ok | {:error, :not_found}
+  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
-  def stop(producer, _opts) when is_pid(producer), do: Supervisor.stop(producer)
+  def stop(producer, opts) when is_pid(producer) do
+    client = Keyword.get(opts, :client, @default_client)
 
-  def stop(name, opts) when is_binary(name) do
+    case remove_from(Pulsar.Client.producer_supervisor(client), producer) do
+      :ok -> :ok
+      {:error, :not_found} -> Supervisor.stop(producer)
+    end
+  end
+
+  def stop(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: stop(pid)
   end
 
@@ -169,19 +176,19 @@ defmodule Pulsar.Producer do
   @doc """
   Returns the worker processes behind a producer, across every partition.
   """
-  @spec workers(pid() | String.t(), keyword()) :: [pid()] | {:error, :not_found}
+  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(producer, opts \\ [])
 
   def workers(producer, _opts) when is_pid(producer), do: collect_workers(producer)
 
-  def workers(name, opts) when is_binary(name) do
+  def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
   end
 
   @doc """
   Returns how many partitions a producer covers, or `0` for a non-partitioned topic.
   """
-  @spec partitions(pid() | String.t(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
   def partitions(producer, opts \\ [])
 
   def partitions(producer, _opts) when is_pid(producer) do
@@ -190,7 +197,7 @@ defmodule Pulsar.Producer do
     |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
   end
 
-  def partitions(name, opts) when is_binary(name) do
+  def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
   end
 
@@ -258,6 +265,14 @@ defmodule Pulsar.Producer do
 
   # Resolved by the caller for Pulsar.Producer.start/2, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other producer start.
+  # The pid alone does not say which client owns it, and the named supervisor for the
+  # client we assume may not exist, so a failed lookup falls back to stopping the process.
+  defp remove_from(supervisor, pid) do
+    DynamicSupervisor.terminate_child(supervisor, pid)
+  catch
+    :exit, _reason -> {:error, :not_found}
+  end
+
   defp partition_count(opts, topic, client) do
     case Keyword.fetch(opts, :partitions) do
       {:ok, partitions} -> {:ok, partitions}

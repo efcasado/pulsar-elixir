@@ -61,7 +61,7 @@ defmodule Pulsar.Consumer do
   @doc false
   def child_spec(opts) do
     %{
-      id: id(opts),
+      id: {__MODULE__, id(opts)},
       start: {__MODULE__, :start_link, [opts]},
       restart: :permanent,
       type: :supervisor
@@ -144,19 +144,26 @@ defmodule Pulsar.Consumer do
   A consumer in a supervision tree will be restarted by its supervisor; stop those by
   removing them from the tree.
   """
-  @spec stop(pid() | String.t(), keyword()) :: :ok | {:error, :not_found}
+  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
-  def stop(consumer, _opts) when is_pid(consumer), do: Supervisor.stop(consumer)
+  def stop(consumer, opts) when is_pid(consumer) do
+    client = Keyword.get(opts, :client, @default_client)
 
-  def stop(name, opts) when is_binary(name) do
+    case remove_from(Pulsar.Client.consumer_supervisor(client), consumer) do
+      :ok -> :ok
+      {:error, :not_found} -> Supervisor.stop(consumer)
+    end
+  end
+
+  def stop(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: stop(pid)
   end
 
   @doc """
   Looks up a consumer by name, returning `{:ok, pid}` or `{:error, :not_found}`.
   """
-  @spec lookup(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  @spec lookup(String.t() | atom(), keyword()) :: {:ok, pid()} | {:error, :not_found}
   def lookup(name, opts \\ []) do
     client = Keyword.get(opts, :client, @default_client)
 
@@ -169,21 +176,21 @@ defmodule Pulsar.Consumer do
   @doc """
   Returns the worker processes behind a consumer, across every partition.
   """
-  @spec workers(pid() | String.t(), keyword()) :: [pid()] | {:error, :not_found}
+  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(consumer, opts \\ [])
 
   def workers(consumer, _opts) when is_pid(consumer) do
     collect_workers(consumer)
   end
 
-  def workers(name, opts) when is_binary(name) do
+  def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
   end
 
   @doc """
   Returns how many partitions a consumer covers, or `0` for a non-partitioned topic.
   """
-  @spec partitions(pid() | String.t(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
   def partitions(consumer, opts \\ [])
 
   def partitions(consumer, _opts) when is_pid(consumer) do
@@ -192,7 +199,7 @@ defmodule Pulsar.Consumer do
     |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
   end
 
-  def partitions(name, opts) when is_binary(name) do
+  def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
   end
 
@@ -202,13 +209,13 @@ defmodule Pulsar.Consumer do
   Takes the pid of the consumer that delivered them, which inside a callback is `self()`,
   or the name of a consumer.
   """
-  @spec ack(pid() | String.t(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
+  @spec ack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
           :ok | {:error, term()}
   def ack(consumer, message_ids, opts \\ [])
 
   def ack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
 
-  def ack(name, message_ids, opts) when is_binary(name) do
+  def ack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
     case lookup(name, opts) do
       {:ok, pid} -> Worker.ack(pid, message_ids)
       {:error, :not_found} -> {:error, :consumer_not_found}
@@ -221,13 +228,13 @@ defmodule Pulsar.Consumer do
   Redelivered messages that exceed `:max_redelivery` go to the dead letter topic when
   `:dead_letter_policy` is configured, whether they were acknowledged manually or not.
   """
-  @spec nack(pid() | String.t(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
+  @spec nack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
           :ok | {:error, term()}
   def nack(consumer, message_ids, opts \\ [])
 
   def nack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.nack(consumer, message_ids)
 
-  def nack(name, message_ids, opts) when is_binary(name) do
+  def nack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
     case lookup(name, opts) do
       {:ok, pid} -> Worker.nack(pid, message_ids)
       {:error, :not_found} -> {:error, :consumer_not_found}
@@ -239,12 +246,12 @@ defmodule Pulsar.Consumer do
 
   Only needed when `:flow_initial` is `0`, which turns off automatic flow control.
   """
-  @spec send_flow(pid() | String.t(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
+  @spec send_flow(pid() | String.t() | atom(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
   def send_flow(consumer, permits, opts \\ [])
 
   def send_flow(consumer, permits, _opts) when is_pid(consumer), do: Worker.send_flow(consumer, permits)
 
-  def send_flow(name, permits, opts) when is_binary(name) do
+  def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
     case lookup(name, opts) do
       {:ok, pid} -> Worker.send_flow(pid, permits)
       {:error, :not_found} -> {:error, :consumer_not_found}
@@ -271,6 +278,14 @@ defmodule Pulsar.Consumer do
 
   # Resolved by the caller for Pulsar.Consumer.start/4, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other consumer start.
+  # The pid alone does not say which client owns it, and the named supervisor for the
+  # client we assume may not exist, so a failed lookup falls back to stopping the process.
+  defp remove_from(supervisor, pid) do
+    DynamicSupervisor.terminate_child(supervisor, pid)
+  catch
+    :exit, _reason -> {:error, :not_found}
+  end
+
   defp partition_count(opts, topic, client) do
     case Keyword.fetch(opts, :partitions) do
       {:ok, partitions} -> {:ok, partitions}

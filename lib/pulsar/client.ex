@@ -341,13 +341,30 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
+    # A client started by start/1 is a :permanent child of Pulsar.Supervisor, so it has to
+    # be removed from there rather than merely stopped, or it comes straight back.
+    case_result =
+      case Process.whereis(client_name) do
+        nil -> :ok
+        pid -> DynamicSupervisor.terminate_child(Pulsar.Supervisor, pid)
+      end
+
+    case case_result do
+      :ok -> :ok
+      {:error, :not_found} -> stop_unsupervised(client_name, timeout)
+    end
+
+    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
+    :ok
+  end
+
+  defp stop_unsupervised(client_name, timeout) do
     try do
       Supervisor.stop(client_name, :normal, timeout)
     catch
       :exit, _ -> :ok
     end
 
-    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
     :ok
   end
 

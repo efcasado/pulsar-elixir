@@ -35,7 +35,7 @@ defmodule Pulsar.ChildSpecTest do
 
       assert spec.type == :supervisor
       assert spec.restart == :permanent
-      assert spec.id == "persistent://public/default/orders-svc"
+      assert spec.id == {Pulsar.Consumer, "persistent://public/default/orders-svc"}
     end
 
     test "gives two consumers on one topic distinct ids" do
@@ -58,7 +58,7 @@ defmodule Pulsar.ChildSpecTest do
           name: "orders-consumer"
         )
 
-      assert spec.id == "orders-consumer"
+      assert spec.id == {Pulsar.Consumer, "orders-consumer"}
     end
 
     test "requires the topic, subscription and callback module" do
@@ -81,12 +81,21 @@ defmodule Pulsar.ChildSpecTest do
       spec = Pulsar.Producer.child_spec(topic: "persistent://public/default/audit")
 
       assert spec.type == :supervisor
-      assert spec.restart == :transient
-      assert spec.id == "persistent://public/default/audit-producer"
+      # Permanent so a group that exhausts max_restarts is brought back, rather than the
+      # producer disappearing until someone starts it again.
+      assert spec.restart == :permanent
+      assert spec.id == {Pulsar.Producer, "persistent://public/default/audit-producer"}
     end
 
     test "prefers an explicit name for the id" do
-      assert Pulsar.Producer.child_spec(topic: "t", name: :audit).id == :audit
+      assert Pulsar.Producer.child_spec(topic: "t", name: :audit).id == {Pulsar.Producer, :audit}
+    end
+
+    test "does not collide with a consumer of the same name" do
+      opts = [topic: "t", name: :orders]
+
+      refute Pulsar.Producer.child_spec(opts).id ==
+               Pulsar.Consumer.child_spec(opts ++ [subscription_name: "s", callback_module: MyApp.H]).id
     end
 
     test "requires the topic" do
