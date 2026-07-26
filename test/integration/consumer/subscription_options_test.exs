@@ -69,7 +69,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
       |> Enum.map(fn pid -> :sys.get_state(pid).consumer_name end)
       |> Enum.sort()
 
-    assert names == ["naming-group-consumer-1", "naming-group-consumer-2"]
+    assert names == ["naming-group-1", "naming-group-2"]
   end
 
   test "initial_position latest skips existing messages", %{expected_count: _expected_count} do

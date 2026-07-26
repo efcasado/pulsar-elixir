@@ -2,7 +2,7 @@ defmodule Pulsar.Producer.Worker do
   @moduledoc false
 
   # The GenServer behind a single producer. Pulsar.Producer starts these through
-  # Pulsar.Producer.Group, one per partition and per :producer_count.
+  # Pulsar.Group, one per partition and per :producer_count.
 
   use GenServer
 

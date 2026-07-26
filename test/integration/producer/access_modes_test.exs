@@ -84,7 +84,12 @@ defmodule Pulsar.Integration.AccessModesTest do
     Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
 
     events = Utils.collect_events([:pulsar, :producer, :opened, :stop], producer_names: ["exclusive-2"])
-    assert Enum.any?(events, &match?(%{success: false, error: :producer_fenced, producer_name: "exclusive-2"}, &1))
+
+    assert Enum.any?(
+             events,
+             &(&1.success == false and &1.error == :producer_fenced and
+                 String.starts_with?(&1.producer_name, "exclusive-2"))
+           )
 
     # Stop the first producer to release exclusive lock
     Pulsar.Producer.stop(group_pid_1)
@@ -202,7 +207,9 @@ defmodule Pulsar.Integration.AccessModesTest do
       match?({:ok, _}, Pulsar.Producer.send(group_pid_2, "Probe message", client: @client))
     end)
 
-    fenced? = &match?(%{success: false, error: :producer_fenced, producer_name: "original-exclusive"}, &1)
+    fenced? =
+      &(&1.success == false and &1.error == :producer_fenced and
+          String.starts_with?(&1.producer_name, "original-exclusive"))
 
     # collect_events/2 drains what has arrived so far, so the results are accumulated
     # until the fencing shows up. Asserting an exact count would instead measure how
@@ -224,8 +231,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         end
       end)
 
-    for name <- ["original-exclusive", "fencing-takeover"] do
-      assert Enum.any?(all_events, &match?(%{success: true, producer_name: ^name}, &1))
+    for group <- ["original-exclusive", "fencing-takeover"] do
+      assert Enum.any?(all_events, &(&1.success and String.starts_with?(&1.producer_name, group)))
     end
 
     assert Enum.any?(all_events, fenced?)

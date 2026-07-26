@@ -51,9 +51,7 @@ defmodule Pulsar.Consumer do
   #{Pulsar.Consumer.Options.docs()}
   """
 
-  alias Pulsar.Consumer.Group
   alias Pulsar.Consumer.Options
-  alias Pulsar.Consumer.Partitioned
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
@@ -88,9 +86,19 @@ defmodule Pulsar.Consumer do
       end)
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} -> Group.start_link(opts)
-      {:ok, partitions} -> Partitioned.start_link(Keyword.put(opts, :partitions, partitions))
-      {:error, reason} -> {:error, reason}
+      {:ok, 0} ->
+        Pulsar.Group.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
+
+      {:ok, partitions} ->
+        Pulsar.Partitioned.start_link(
+          Worker,
+          Pulsar.Client.consumer_registry(client),
+          :consumer_count,
+          Keyword.put(opts, :partitions, partitions)
+        )
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

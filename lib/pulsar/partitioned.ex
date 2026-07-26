@@ -1,19 +1,22 @@
-defmodule Pulsar.Producer.Partitioned do
+defmodule Pulsar.Partitioned do
   @moduledoc false
 
-  # Supervises one producer group per partition of a partitioned topic.
-  # Messages are routed to a partition by :partition_key, hashed with
-  # :erlang.phash2/2, or at random when no key is given.
+  # Supervises one group per partition of a partitioned topic, for consumers and for
+  # producers alike: a partition's group differs from its siblings only in its :topic and
+  # :name, which is true whichever kind of group it is.
+  #
+  # Started by Pulsar.Consumer and Pulsar.Producer, which own the option surface and pass
+  # the group module and the registry to register under.
 
   use Supervisor
 
   require Logger
 
-  def start_link(opts) do
+  @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
+  def start_link(worker, registry, count_key, opts) do
     name = Keyword.fetch!(opts, :name)
-    client = Keyword.fetch!(opts, :client)
 
-    Supervisor.start_link(__MODULE__, opts, name: {:via, Registry, {Pulsar.Client.producer_registry(client), name}})
+    Supervisor.start_link(__MODULE__, {worker, registry, count_key, opts}, name: {:via, Registry, {registry, name}})
   end
 
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
@@ -21,13 +24,13 @@ defmodule Pulsar.Producer.Partitioned do
   end
 
   @impl true
-  def init(opts) do
+  def init({worker, registry, count_key, opts}) do
     topic = Keyword.fetch!(opts, :topic)
     partitions = Keyword.fetch!(opts, :partitions)
 
-    Logger.info("Starting partitioned producer for topic #{topic} with #{partitions} partitions")
+    Logger.info("Starting partitioned #{inspect(worker)} for topic #{topic} with #{partitions} partitions")
 
-    build_child_spec = &partition_child_spec(&1, opts)
+    build_child_spec = &partition_child_spec(&1, worker, registry, count_key, opts)
 
     discovery_children =
       Pulsar.PartitionDiscovery.child_specs(self(),
@@ -42,7 +45,7 @@ defmodule Pulsar.Producer.Partitioned do
     Supervisor.init(partition_children ++ discovery_children, strategy: :one_for_one)
   end
 
-  defp partition_child_spec(partition_index, opts) do
+  defp partition_child_spec(partition_index, worker, registry, count_key, opts) do
     partition_topic = Pulsar.PartitionTopic.name(Keyword.fetch!(opts, :topic), partition_index)
 
     partition_opts =
@@ -52,7 +55,7 @@ defmodule Pulsar.Producer.Partitioned do
 
     %{
       id: partition_topic,
-      start: {Pulsar.Producer.Group, :start_link, [partition_opts]},
+      start: {Pulsar.Group, :start_link, [worker, registry, count_key, partition_opts]},
       restart: :permanent,
       type: :supervisor
     }

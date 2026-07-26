@@ -117,10 +117,16 @@ defmodule Pulsar.Test.Support.Utils do
         events
 
       names when is_list(names) ->
-        Enum.filter(events, fn event ->
-          Map.get(event, :producer_name) in names
-        end)
+        Enum.filter(events, &(&1 |> Map.get(:producer_name) |> in_group?(names)))
     end
+  end
+
+  # A group's workers are named after it with an index suffix, so filtering by the group's
+  # name matches every producer in it.
+  defp in_group?(producer_name, names) do
+    Enum.any?(names, fn name ->
+      producer_name == name or String.starts_with?(to_string(producer_name), "#{name}-")
+    end)
   end
 
   defp aggregate_success_stats(events) do

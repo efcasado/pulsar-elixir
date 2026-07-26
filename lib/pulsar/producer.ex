@@ -32,9 +32,7 @@ defmodule Pulsar.Producer do
   #{Pulsar.Producer.Options.docs()}
   """
 
-  alias Pulsar.Producer.Group
   alias Pulsar.Producer.Options
-  alias Pulsar.Producer.Partitioned
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
@@ -65,9 +63,19 @@ defmodule Pulsar.Producer do
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
     case partition_count(opts, topic, client) do
-      {:ok, 0} -> Group.start_link(opts)
-      {:ok, partitions} -> Partitioned.start_link(Keyword.put(opts, :partitions, partitions))
-      {:error, reason} -> {:error, reason}
+      {:ok, 0} ->
+        Pulsar.Group.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
+
+      {:ok, partitions} ->
+        Pulsar.Partitioned.start_link(
+          Worker,
+          Pulsar.Client.producer_registry(client),
+          :producer_count,
+          Keyword.put(opts, :partitions, partitions)
+        )
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

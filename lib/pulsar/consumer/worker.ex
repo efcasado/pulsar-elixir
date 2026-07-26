@@ -2,7 +2,7 @@ defmodule Pulsar.Consumer.Worker do
   @moduledoc false
 
   # The GenServer behind a single consumer. Pulsar.Consumer starts these through
-  # Pulsar.Consumer.Group, one per partition and per :consumer_count.
+  # Pulsar.Group, one per partition and per :consumer_count.
 
   use GenServer
 

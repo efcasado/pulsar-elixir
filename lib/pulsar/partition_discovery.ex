@@ -9,8 +9,8 @@ defmodule Pulsar.PartitionDiscovery do
   not larger than the current one (including a transient lookup error) is
   ignored.
 
-  This runs as a `:worker` child of the `Pulsar.Consumer.Partitioned` /
-  `Pulsar.Producer.Partitioned` supervisor it manages, and adds new partition
+  This runs as a `:worker` child of the `Pulsar.Partitioned` supervisor it manages,
+  and adds new partition
   children to that same supervisor via `Supervisor.start_child/2`.
   """
 
