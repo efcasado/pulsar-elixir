@@ -2,6 +2,8 @@ defmodule Pulsar.BrokerTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Broker
+  alias Pulsar.Protocol
+  alias Pulsar.Protocol.Binary.Pulsar.Proto
 
   test "only buffers data from the current socket" do
     broker = %Broker{
@@ -19,6 +21,31 @@ defmodule Pulsar.BrokerTest do
 
     assert :keep_state_and_data =
              Broker.connected(:info, {:tcp, :stale_socket, fragment}, broker)
+  end
+
+  test "drops a half-read frame when the connection goes" do
+    broker = %Broker{
+      socket: :dead_socket,
+      socket_module: :gen_tcp,
+      # four bytes claiming a 99-byte frame that never arrived
+      buffer: {<<0, 0, 0, 99>>, [], 4},
+      prev_backoff: 0,
+      requests: %{},
+      consumers: %{},
+      producers: %{},
+      max_frame_size: 5_000_000
+    }
+
+    assert {:keep_state, cleared, _actions} = Broker.disconnected(:enter, :connected, broker)
+    assert buffered(cleared.buffer) == <<>>
+
+    # Were the stale prefix still there, it would be read as the head of the next
+    # frame and desynchronise everything after it.
+    ping = Protocol.encode(%Proto.CommandPing{})
+    reconnected = %{cleared | socket: :new_socket}
+
+    assert {:keep_state, _broker, actions} = Broker.connected(:info, {:tcp, :new_socket, ping}, reconnected)
+    assert [{:next_event, :internal, {:command, %Proto.CommandPing{}}}] = actions
   end
 
   defp buffered({head, pending, _size}), do: :erlang.iolist_to_binary([head | pending])
