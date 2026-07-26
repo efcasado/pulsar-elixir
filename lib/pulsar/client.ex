@@ -59,8 +59,12 @@ defmodule Pulsar.Client do
       """
     ],
     socket_opts: [
-      type: :keyword_list,
-      doc: "Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`."
+      type: {:list, :any},
+      doc: """
+      Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`. Not a keyword list:
+      bare atoms such as `:inet6` and tuples such as `{:raw, level, opt, value}` are
+      valid entries.
+      """
     ]
   ]
 

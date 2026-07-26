@@ -30,4 +30,18 @@ defmodule Pulsar.ReaderOptionsTest do
       start(host: "pulsar://127.0.0.1:1", client: :other)
     end
   end
+
+  describe "socket options" do
+    test "accepts options that are not keyword pairs" do
+      # The :host/:client conflict is checked after the schema, so reaching it proves
+      # these got through validation.
+      assert_raise ArgumentError, ~r/cannot specify both :host and :client/, fn ->
+        start(host: "pulsar://127.0.0.1:1", client: :other, socket_opts: [:inet6, {:raw, 6, 1, <<1::32>>}])
+      end
+    end
+
+    test "still rejects socket options that are not a list" do
+      assert_raise NimbleOptions.ValidationError, ~r/:socket_opts/, fn -> start(socket_opts: :inet6) end
+    end
+  end
 end

@@ -80,4 +80,22 @@ defmodule Pulsar.ClientTest do
       refute :clients in Client.supported_options()
     end
   end
+
+  describe "socket options" do
+    test "accepts options that are not keyword pairs" do
+      # :inet6 and {:raw, ...} are valid for :gen_tcp.connect/4 and :ssl.connect/4,
+      # and neither is a keyword pair.
+      opts = [:inet6, {:raw, 6, 1, <<1::32>>}, {:nodelay, true}]
+
+      start_supervised!({Client, name: :raw_socket_opts, host: "pulsar://127.0.0.1:6650", socket_opts: opts})
+
+      assert Client.get_broker_opts(:raw_socket_opts)[:socket_opts] == opts
+    end
+
+    test "still rejects socket options that are not a list" do
+      assert_raise NimbleOptions.ValidationError, ~r/:socket_opts/, fn ->
+        Client.start_link(name: :bad_socket_opts, host: "pulsar://127.0.0.1:6650", socket_opts: :inet6)
+      end
+    end
+  end
 end

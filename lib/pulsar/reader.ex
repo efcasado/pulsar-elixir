@@ -135,8 +135,8 @@ defmodule Pulsar.Reader do
       doc: "Authentication for the client started from `:host`."
     ],
     socket_opts: [
-      type: :keyword_list,
-      doc: "Socket options for the client started from `:host`."
+      type: {:list, :any},
+      doc: "Socket options for the client started from `:host`. Not necessarily a keyword list."
     ],
     start_position: [
       type: {:in, [:earliest, :latest]},

@@ -73,6 +73,8 @@ defmodule Pulsar.Broker do
     producers: %{}
   }
 
+  @ssl_only_opts [:verify, :cacerts, :cacertfile, :certfile, :keyfile]
+
   ## Public API
 
   @doc """
@@ -322,14 +324,10 @@ defmodule Pulsar.Broker do
 
     host_charlist = String.to_charlist(host)
 
-    # Filter SSL-specific options for TCP connections
     filtered_socket_opts =
       case mod do
-        :gen_tcp ->
-          Keyword.drop(socket_opts, [:verify, :cacerts, :cacertfile, :certfile, :keyfile])
-
-        :ssl ->
-          socket_opts
+        :gen_tcp -> drop_ssl_opts(socket_opts)
+        :ssl -> socket_opts
       end
 
     full_socket_opts =
@@ -878,6 +876,14 @@ defmodule Pulsar.Broker do
   end
 
   ## Private Functions
+
+  # Socket option lists are not keyword lists: `:inet6` and `{:raw, level, opt, value}`
+  # are both valid and match neither `{key, value}` nor `Keyword.drop/2`.
+  @doc false
+  @spec drop_ssl_opts([:gen_tcp.connect_option()]) :: [:gen_tcp.connect_option()]
+  def drop_ssl_opts(socket_opts) do
+    Enum.reject(socket_opts, &match?({key, _value} when key in @ssl_only_opts, &1))
+  end
 
   defp restart_consumers_and_producers(broker) do
     # Exit all consumer processes - supervision trees will restart them
