@@ -66,17 +66,17 @@ defmodule Pulsar.Client do
       """
     ],
     ping_interval: [
-      type: :timeout,
+      type: :pos_integer,
       default: 60_000,
       doc: "Milliseconds between keepalive pings to each broker in this cluster."
     ],
     cleanup_interval: [
-      type: :timeout,
+      type: :pos_integer,
       default: 30_000,
       doc: "Milliseconds between sweeps for requests that never got a response."
     ],
     request_timeout: [
-      type: :timeout,
+      type: :pos_integer,
       default: 60_000,
       doc: "Milliseconds after which a request without a response is failed."
     ],

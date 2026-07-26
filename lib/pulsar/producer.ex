@@ -77,7 +77,9 @@ defmodule Pulsar.Producer do
   For producers created at runtime. Prefer `{Pulsar.Producer, opts}` in a supervision tree
   otherwise, so that the producer's lifetime is tied to the code depending on it.
   """
-  @spec start(keyword()) :: DynamicSupervisor.on_start_child()
+  @spec start(keyword() | String.t()) :: DynamicSupervisor.on_start_child()
+  def start(topic) when is_binary(topic), do: start(topic: topic)
+
   def start(opts) when is_list(opts) do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
@@ -103,7 +105,8 @@ defmodule Pulsar.Producer do
 
   ## Options
 
-  - `:key` - partition key, which decides the partition of a partitioned topic
+  - `:partition_key` - decides the partition of a partitioned topic, and is carried
+    with the message so a `Key_Shared` subscription can use it
   - `:properties` - a map of user properties carried with the message
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery
@@ -112,7 +115,7 @@ defmodule Pulsar.Producer do
   ## Examples
 
       {:ok, message_id} = Pulsar.Producer.send(:audit, "payload")
-      {:ok, message_id} = Pulsar.Producer.send(:audit, "payload", key: "tenant-1")
+      {:ok, message_id} = Pulsar.Producer.send(:audit, "payload", partition_key: "tenant-1")
   """
   @spec send(pid() | String.t() | atom(), binary(), keyword()) ::
           {:ok, MessageIdData.t()} | {:error, term()}
@@ -190,16 +193,25 @@ defmodule Pulsar.Producer do
       [] -> send_to_worker(collect_workers(producer), message, opts)
       groups -> route(groups, message, opts)
     end
+  catch
+    # The producer went away while we were looking at it, which is what a caller holding
+    # a stale pid sees; it reads the same as a worker dying mid-send.
+    :exit, reason -> {:error, {:producer_died, reason}}
   end
 
   defp route(groups, message, opts) do
-    # Routing uses the partition index parsed from the topic suffix rather than a
-    # position in a sorted list: sorting names lexicographically misorders partitions
-    # once there are ten or more ("...-partition-10" before "...-partition-2").
+    # The modulus is every configured partition, including any whose group is currently
+    # restarting: hashing over only the live ones would move a key to another partition
+    # for the duration of a restart, breaking per-key ordering.
+    #
+    # Routing then resolves the partition index parsed from the topic suffix rather than a
+    # position in a sorted list: sorting names lexicographically misorders partitions once
+    # there are ten or more ("...-partition-10" before "...-partition-2").
     index = select_partition(opts, length(groups))
 
     case Enum.find(groups, fn {topic, _pid} -> Pulsar.PartitionTopic.index(topic) == index end) do
-      {_topic, group} -> send_to_worker(collect_workers(group), message, opts)
+      {_topic, group} when is_pid(group) -> send_to_worker(collect_workers(group), message, opts)
+      {_topic, _restarting} -> {:error, :no_producers_available}
       nil -> {:error, {:partition_not_found, index}}
     end
   end
@@ -215,14 +227,12 @@ defmodule Pulsar.Producer do
 
   defp send_to_worker([worker | _rest], message, opts) do
     Worker.send_message(worker, message, opts)
-  catch
-    :exit, reason -> {:error, {:producer_died, reason}}
   end
 
   defp partition_groups(producer) do
     producer
     |> Supervisor.which_children()
-    |> Enum.filter(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
+    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
     |> Enum.map(fn {topic, pid, _type, _modules} -> {topic, pid} end)
   end
 
