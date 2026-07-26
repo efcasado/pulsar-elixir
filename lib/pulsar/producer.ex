@@ -11,8 +11,9 @@ defmodule Pulsar.Producer do
 
       Supervisor.start_link(children, strategy: :rest_for_one)
 
-  `:rest_for_one` is deliberate. A producer resolves its brokers through the registries
-  its client owns, so it has to be restarted when the client is.
+  Order matters: a producer resolves its brokers through the registries its client owns, so
+  the client has to be started first. `:rest_for_one` additionally restarts producers with
+  their client, which is tidy but not required.
 
   Then publish through the name it was registered under:
 

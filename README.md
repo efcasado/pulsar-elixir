@@ -69,8 +69,9 @@ children = [
 Supervisor.start_link(children, strategy: :rest_for_one)
 ```
 
-`:rest_for_one` matters: consumers and producers resolve brokers through registries
-their client owns, so they have to be restarted when the client is.
+Order matters: consumers and producers resolve brokers through registries their client
+owns, so the client has to be started first. `:rest_for_one` additionally restarts them with
+their client, which is tidy but not required.
 
 Sending a message using the configured producer can be done as follows:
 

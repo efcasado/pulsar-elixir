@@ -14,9 +14,10 @@ defmodule Pulsar.Consumer do
 
       Supervisor.start_link(children, strategy: :rest_for_one)
 
-  `:rest_for_one` is deliberate. A consumer resolves its brokers through the registries
-  its client owns, so it has to be restarted when the client is; under `:one_for_one` it
-  would survive a client restart holding references to registries that no longer exist.
+  Order matters: a consumer resolves its brokers through the registries its client owns, so
+  the client has to be started first. `:rest_for_one` additionally restarts consumers with
+  their client, which is tidy but not required — a consumer whose broker dies is told by the
+  monitor it holds and is restarted by its own supervisor.
 
   A consumer is a supervisor over one worker per partition and per `:consumer_count`, so
   a partitioned topic needs nothing special at the call site. Partition count is resolved
