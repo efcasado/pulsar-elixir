@@ -148,10 +148,8 @@ defmodule Pulsar.Consumer do
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
-  def stop(consumer, opts) when is_pid(consumer) do
-    client = Keyword.get(opts, :client, @default_client)
-
-    case remove_from(Pulsar.Client.consumer_supervisor(client), consumer) do
+  def stop(consumer, _opts) when is_pid(consumer) do
+    case remove_from(owning_supervisor(consumer), consumer) do
       :ok -> :ok
       {:error, :not_found} -> Supervisor.stop(consumer)
     end
@@ -261,6 +259,18 @@ defmodule Pulsar.Consumer do
   # do not run inside the client's supervisor and block every other consumer start.
   # The pid alone does not say which client owns it, and the named supervisor for the
   # client we assume may not exist, so a failed lookup falls back to stopping the process.
+  # Asking the process which supervisor owns it, rather than deriving one from `:client`:
+  # a pid carries no clue which client it belongs to, and stopping a permanent child any
+  # other way just has its supervisor start it again.
+  defp owning_supervisor(pid) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
+      nil -> nil
+    end
+  end
+
+  defp remove_from(nil, _pid), do: {:error, :not_found}
+
   defp remove_from(supervisor, pid) do
     DynamicSupervisor.terminate_child(supervisor, pid)
   catch

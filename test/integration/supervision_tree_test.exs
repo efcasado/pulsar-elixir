@@ -78,9 +78,12 @@ defmodule Pulsar.Integration.SupervisionTreeTest do
 
     [{_, before, _, _}] = DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
 
-    ref = Process.monitor(Process.whereis(client))
-    Process.exit(Process.whereis(client), :kill)
-    assert_receive {:DOWN, ^ref, :process, _, :killed}, 5_000
+    # Not Process.exit/2: a supervisor traps exits, so an abnormal signal is ignored and
+    # :kill skips the shutdown that releases its children's registered names.
+    client_pid = Process.whereis(client)
+    ref = Process.monitor(client_pid)
+    Supervisor.stop(client, :shutdown)
+    assert_receive {:DOWN, ^ref, :process, _, :shutdown}, 5_000
 
     assert eventually(fn ->
              match?([{_, pid, _, _}] when is_pid(pid) and pid != before, consumer_children(client))
