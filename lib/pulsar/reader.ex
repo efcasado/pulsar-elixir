@@ -15,12 +15,28 @@ defmodule Pulsar.Reader do
       |> Stream.each(&IO.inspect(&1.payload))
       |> Stream.run()
 
-  `:client` selects one when there is more than the default. Reading always uses a
-  non-durable subscription, so a reader keeps no position and starts fresh each time.
+  Reading always uses a non-durable subscription, so a reader keeps no position and
+  starts fresh each time.
 
+  Selecting a client, when there is more than the default:
+
+      Pulsar.Reader.stream(topic, client: :analytics)
+      |> Stream.map(&process/1)
+      |> Stream.run()
+
+  With custom flow control:
+
+      # Request 50 messages at a time
       Pulsar.Reader.stream(topic, flow_permits: 50) |> Enum.take(100)
 
+  Reading from a specific message:
+
+      # {ledger_id, entry_id}
       Pulsar.Reader.stream(topic, start_message_id: {123, 456}) |> Enum.take(10)
+
+  ## Options
+
+  See `stream/2`.
 
   ## Partitioned Topics
 

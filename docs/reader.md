@@ -55,8 +55,75 @@ Pulsar.Reader.stream(topic, client: :analytics)
 
 The client outlives the stream, so several streams can share one connection.
 
+## Start Positions
+
+You can control where the Reader starts consuming messages:
+
+### From Earliest/Latest
+```elixir
+# Start from the oldest available message (default)
+Pulsar.Reader.stream(topic, start_position: :earliest)
+
+# Start only with new messages published after the reader starts
+Pulsar.Reader.stream(topic, start_position: :latest)
+```
+
+### From Specific Message ID
+Resume reading from a specific message (inclusive):
+
+```elixir
+message_id = {ledger_id, entry_id} # e.g. {123, 456}
+
+Pulsar.Reader.stream(topic, start_message_id: message_id)
+```
+
+### From Timestamp
+Read messages published at or after a specific timestamp (Unix timestamp in milliseconds):
+
+```elixir
+timestamp = :os.system_time(:millisecond) - 3600_000 # 1 hour ago
+
+Pulsar.Reader.stream(topic, start_timestamp: timestamp)
+```
+
+## Stream Processing Examples
+
+### Filter and Map
+Read messages, filter for interesting ones, and transform them:
+
+```elixir
+topic
+|> Pulsar.Reader.stream()
+|> Stream.map(fn msg -> Jason.decode!(msg.payload) end)
+|> Stream.filter(fn event -> event["type"] == "user_signup" end)
+|> Stream.map(fn event -> event["user_id"] end)
+|> Enum.each(&IO.inspect/1)
+```
+
+### Batch Processing
+Process messages in chunks using `Stream.chunk_every/2`:
+
+```elixir
+topic
+|> Pulsar.Reader.stream()
+|> Stream.chunk_every(100)
+|> Enum.each(fn batch ->
+  # Insert batch of 100 messages into database
+  Repo.insert_all(User, batch)
+end)
+```
+
+### Timeout Handling
+By default, the stream waits up to 60 seconds for new messages before terminating. You can adjust this with `:timeout`:
+
+```elixir
+topic
+|> Pulsar.Reader.stream(timeout: 5000) # 5s timeout
+|> Enum.to_list()
+```
+
 ### Error Handling
-If initialization fails (e.g., invalid topic, connection error), the stream emits `{:error, reason}` as its first and only element:
+If initialization fails (e.g., invalid topic, connection error, or a client that is not running), the stream emits `{:error, reason}` as its first and only element:
 
 ```elixir
 topic
