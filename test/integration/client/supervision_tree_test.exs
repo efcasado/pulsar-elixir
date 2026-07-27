@@ -1,4 +1,4 @@
-defmodule Pulsar.Integration.SupervisionTreeTest do
+defmodule Pulsar.Integration.Client.SupervisionTreeTest do
   use ExUnit.Case, async: false
 
   alias Pulsar.Test.Support.System
