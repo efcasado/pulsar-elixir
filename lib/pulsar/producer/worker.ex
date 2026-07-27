@@ -68,55 +68,10 @@ defmodule Pulsar.Producer.Worker do
   ## Public API
 
   @doc """
-  Starts a producer process.
+  Starts one producer process.
 
-  ## Parameters
-
-  - `topic` - The topic to publish to
-  - `opts` - Additional options:
-    - `:name` - Producer name (optional, will be auto-generated if not provided)
-    - `:access_mode` - Producer access mode (default: `:Shared`). Available modes:
-      - `:Shared` - Multiple producers can publish on the topic (default)
-      - `:Exclusive` - Only one producer can publish. If another producer tries to connect,
-        it will receive an error immediately. The old producer is evicted if it experiences
-        a network partition with the broker.
-      - `:WaitForExclusive` - If there is already a producer, wait until exclusive access is granted
-      - `:ExclusiveWithFencing` - If there is already a producer, it will be removed (fenced out)
-    - `:compression` - Compression algorithm (default: :NONE)
-    - `:chunking_enabled` - Enable message chunking for large messages (default: false)
-    - `:max_message_size` - Maximum size of each chunk in bytes when chunking is enabled (default: 5_242_880, which is 5MB)
-    - `:schema` - Schema configuration as keyword list (optional):
-      - `:type` - (required) Schema type (e.g., :Json, :String, :Avro)
-      - `:definition` - Schema definition (required for non-primitive types like Json, Avro)
-      - `:name` - Optional schema name
-      - `:properties` - Optional metadata properties as a map
-    - `:startup_delay_ms` - Fixed startup delay in milliseconds before producer initialization (default: 1000, matches broker conn_timeout)
-    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
-
-  The total startup delay is `startup_delay_ms + random(0, startup_jitter_ms)`, applied on every producer start/restart.
-  The default `startup_delay_ms` matches the broker's `conn_timeout` to ensure the broker has time to reconnect
-  before producers start requesting topic lookups.
-
-  The producer will automatically use service discovery to find the broker.
-  If no name is provided, the broker will assign a unique producer name.
-
-  ## Examples
-
-      # Default shared mode
-      {:ok, producer} = Producer.start_link("persistent://public/default/my-topic")
-
-      # With custom name and exclusive mode
-      {:ok, producer} = Producer.start_link(
-        "persistent://public/default/my-topic",
-        name: "my-producer",
-        access_mode: :Exclusive
-      )
-
-      # With schema
-      {:ok, producer} = Producer.start_link(
-        "persistent://public/default/my-topic",
-        schema: [type: :Json, definition: json_schema_def]
-      )
+  Takes `Pulsar.Producer`'s options, already validated against `Pulsar.Producer.Options`
+  and given the `:name` of this worker within its group.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -129,22 +84,12 @@ defmodule Pulsar.Producer.Worker do
   end
 
   @doc """
-  Sends a message through this producer.
-  Waits for acknowledgment from the broker.
-  Returns `{:ok, message_id}` on success or `{:error, reason}` on failure.
+  Publishes a message and waits for the broker to acknowledge it. Backs
+  `Pulsar.Producer.send/3`, which documents the message options.
 
-  ## Parameters
-
-  - `producer_pid` - The producer process PID
-  - `message` - Binary message payload
-  - `opts` - Optional parameters:
-    - `:timeout` - Timeout in milliseconds (default: 5000)
-    - `:partition_key` - Partition routing key (string)
-    - `:ordering_key` - Key for ordering in Key_Shared subscriptions (binary)
-    - `:properties` - Custom message metadata as a map (e.g., `%{"trace_id" => "abc"}`)
-    - `:event_time` - Application event timestamp (DateTime or milliseconds since epoch)
-    - `:deliver_at_time` - Absolute delayed delivery time (DateTime or milliseconds since epoch)
-    - `:deliver_after` - Relative delayed delivery in milliseconds from now
+  Two are not part of that public surface: `:timeout`, the call timeout in milliseconds
+  (default 5000), and `:ordering_key`, which orders within a `Key_Shared` subscription
+  without affecting which partition the message lands on.
   """
   @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def send_message(producer_pid, message, opts \\ []) do

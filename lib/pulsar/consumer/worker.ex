@@ -82,37 +82,10 @@ defmodule Pulsar.Consumer.Worker do
   ## Public API
 
   @doc """
-  Starts a consumer process with explicit parameters.
+  Starts one consumer process.
 
-  ## Parameters
-
-  - `topic` - The topic to subscribe to
-  - `subscription_name` - Name of the subscription
-  - `subscription_type` - Type of subscription (e.g., :Exclusive, :Shared)
-  - `callback_module` - Module that uses `Pulsar.Consumer.Callback`
-  - `opts` - Additional options:
-    - `:init_args` - Arguments passed to callback module's init/1 function
-    - `:flow_initial` - Initial flow permits (default: 100). Set to 0 to disable automatic flow control and use `send_flow/2` manually.
-    - `:flow_threshold` - Flow permits threshold for automatic refill (default: 50). Ignored when `:flow_initial` is 0.
-    - `:flow_refill` - Flow permits refill amount (default: 50). Ignored when `:flow_initial` is 0.
-    - `:initial_position` - Initial position for subscription (`:latest` or `:earliest`, defaults to `:latest`)
-    - `:read_compacted` - If true, only reads non-compacted messages from compacted topics (default: false)
-    - `:name` - Name for the consumer on the remote broker (default: nil, no name). If provided, will be visible in broker's consumer list.
-    - `:redelivery_interval` - Interval in milliseconds for redelivering NACKed messages (default: nil, disabled)
-  - `:dead_letter_policy` - Dead letter policy configuration (default: nil, disabled):
-      - `:max_redelivery` - Maximum number of redeliveries before sending to dead letter topic (must be >= 1)
-      - `:topic` - Dead letter topic (optional, defaults to `<topic>-<subscription>-DLQ`)
-    - `:max_pending_chunked_messages` - Maximum number of concurrent chunked messages to buffer (default: 10)
-    - `:expire_incomplete_chunked_message_after` - Timeout in milliseconds for incomplete chunked messages (default: 60_000)
-    - `:chunk_cleanup_interval` - Interval in milliseconds for checking expired chunked messages (default: 30_000)
-    - `:startup_delay_ms` - Fixed startup delay in milliseconds before consumer initialization (default: 1000, matches broker conn_timeout)
-    - `:startup_jitter_ms` - Maximum random startup delay in milliseconds to avoid thundering herd (default: 1000)
-
-  The total startup delay is `startup_delay_ms + random(0, startup_jitter_ms)`, applied on every consumer start/restart.
-  The default `startup_delay_ms` matches the broker's `conn_timeout` to ensure the broker has time to reconnect
-  before consumers start requesting topic lookups.
-
-  The consumer will automatically use any available broker for service discovery.
+  Takes `Pulsar.Consumer`'s options, already validated against `Pulsar.Consumer.Options`
+  and given the `:name` of this worker within its group.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -129,7 +102,7 @@ defmodule Pulsar.Consumer.Worker do
 
   For partitioned topics, this returns the specific partition topic
   (e.g. `persistent://public/default/my-topic-partition-0`) rather than
-  the base topic name passed to `start_link/5`.
+  the base topic name it was started with.
   """
   @spec topic(GenServer.server()) :: String.t()
   def topic(consumer) do
@@ -137,34 +110,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @doc """
-  Sends a flow command to request more messages from the broker.
-
-  Use this function when you've disabled automatic flow control by setting
-  `:flow_initial` to 0. This allows you to implement custom flow control,
-  such as integrating with Broadway's demand mechanism.
-
-  ## Parameters
-
-  - `consumer` - The consumer process PID
-  - `permits` - Number of message permits to request
-
-  ## Examples
-
-      {:ok, _consumer} = Pulsar.Consumer.start(
-        topic,
-        subscription,
-        MyCallback,
-        name: :orders,
-        flow_initial: 0
-      )
-
-      Pulsar.Consumer.send_flow(:orders, 10)
-
-      # Example with Broadway demand
-      def handle_demand(demand, state) do
-        Pulsar.Consumer.send_flow(state.consumer, demand)
-        # ... rest of logic
-      end
+  Grants this worker more flow permits. Backs `Pulsar.Consumer.send_flow/3`.
   """
   @spec send_flow(pid(), non_neg_integer()) :: :ok | {:error, term()}
   def send_flow(consumer, permits) when is_integer(permits) and permits > 0 do
@@ -172,30 +118,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @doc """
-  Manually acknowledges one or more messages.
-
-  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
-  Supports batching multiple message IDs in a single ACK command for better performance.
-
-  ## Parameters
-
-  - `consumer` - The consumer process PID
-  - `message_ids` - A single message ID or a list of message IDs to acknowledge
-
-  ## Examples
-
-      def handle_message(message, state) do
-        consumer = self()
-
-        spawn(fn ->
-          Pulsar.Consumer.ack(consumer, message.message_id_to_ack)
-        end)
-
-        {:noreply, state}
-      end
-
-      # Acknowledge multiple messages in batch (more efficient)
-      Pulsar.Consumer.ack(self(), [message_id1, message_id2, message_id3])
+  Acknowledges one or more messages, batching a list into a single ACK command.
+  Backs `Pulsar.Consumer.ack/2`.
   """
   @spec ack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_list(message_ids) do
@@ -207,36 +131,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @doc """
-  Manually negatively acknowledges one or more messages.
-
-  Use this when your callback returns `{:noreply, state}` to manually control acknowledgment.
-  Supports batching multiple message IDs in a single NACK for better performance.
-
-  The messages will be tracked for redelivery if `:redelivery_interval` is configured.
-  When the messages are redelivered and the redelivery count exceeds `:max_redelivery`,
-  they will automatically be sent to the dead letter queue (if `:dead_letter_policy` is configured),
-  regardless of whether you use manual or automatic acknowledgment.
-
-  ## Parameters
-
-  - `consumer` - The consumer process PID
-  - `message_ids` - A single message ID or a list of message IDs to negatively acknowledge
-
-  ## Examples
-
-      def handle_message(message, state) do
-        message_id = message.message_id_to_ack
-
-        case process_message() do
-          :ok -> Pulsar.Consumer.ack(self(), message_id)
-          {:error, _reason} -> Pulsar.Consumer.nack(self(), message_id)
-        end
-
-        {:noreply, state}
-      end
-
-      # NACK multiple messages in batch (more efficient)
-      Pulsar.Consumer.nack(self(), [message_id1, message_id2, message_id3])
+  Negatively acknowledges one or more messages, tracking them for redelivery when
+  `:redelivery_interval` is set. Backs `Pulsar.Consumer.nack/2`.
   """
   @spec nack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
   def nack(consumer, message_ids) when is_list(message_ids) do
