@@ -28,11 +28,10 @@ end
 ## Quick Start
 
 Assuming you have Pulsar running on `localhost:6650`, the quickest way to consume messages
-from a Pulsar topic is using the Reader interface, reading through a client in your
-supervision tree:
+from a Pulsar topic is using the Reader interface, reading through a client:
 
 ```elixir
-{:ok, _} = Supervisor.start_link([{Pulsar.Client, host: "pulsar://localhost:6650"}], strategy: :one_for_one)
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
 
 "persistent://my-tenant/my-namespace/my-topic"
 |> Pulsar.Reader.stream(timeout: 100)

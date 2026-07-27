@@ -63,14 +63,12 @@ defmodule Main do
   end
 
   def run do
-    children = [
-      {Pulsar.Client,
-       host: @broker,
-       producers: [[topic: @topic, name: :game_master]],
-       consumers: consumers(@num_players, @card_size, @topic)}
-    ]
-
-    {:ok, _pid} = Supervisor.start_link(children, strategy: :one_for_one)
+    {:ok, _pid} =
+      Pulsar.Client.start_link(
+        host: @broker,
+        producers: [[topic: @topic, name: :game_master]],
+        consumers: consumers(@num_players, @card_size, @topic)
+      )
 
     spawn(fn -> call_numbers(1..99, :game_master) end)
 
