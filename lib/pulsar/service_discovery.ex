@@ -63,6 +63,8 @@ defmodule Pulsar.ServiceDiscovery do
     end
   end
 
+  defp do_partition_count(nil, _topic), do: {:error, :no_broker_available}
+
   defp do_partition_count(broker, topic) do
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
       {:ok, %{response: :Success, partitions: partitions}} ->

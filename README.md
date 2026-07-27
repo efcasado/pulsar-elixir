@@ -28,11 +28,14 @@ end
 ## Quick Start
 
 Assuming you have Pulsar running on `localhost:6650`, the quickest way to consume messages
-from a Pulsar topic is using the Reader interace as shown below
+from a Pulsar topic is using the Reader interface, reading through a client in your
+supervision tree:
 
 ```elixir
+children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
+
 "persistent://my-tenant/my-namespace/my-topic"
-|> Pulsar.Reader.stream(host: "pulsar://localhost:6650", timeout: 100)
+|> Pulsar.Reader.stream(timeout: 100)
 |> Enum.map(fn msg -> String.to_integer(msg.payload) end)
 |> Enum.filter(fn n -> rem(n, 2) == 0 end)
 |> Enum.map(fn n -> n * 2 end)
@@ -79,31 +82,23 @@ Sending a message using the configured producer can be done as follows:
 Pulsar.Producer.send(:my_producer, "Hello, Pulsar!")
 ```
 
-By default, brokers, consumers and producers are started within the scope of the
-`:default` client, but you can also configure multiple clients (which may come in
-handy if you need to connect to multiple clusters).
+Brokers, consumers and producers belong to the `:default` client unless told otherwise.
+Several clients can coexist, which is useful when connecting to more than one cluster:
 
 ```elixir
-clients: [
-  client_1: [
-      host: "pulsar://host.cluster1.com:6650"
-  ],
-  client_2: [
-      host: "pulsar://host.cluster2.com:6650"
-  ]
+children = [
+  {Pulsar.Client, name: :client_1, host: "pulsar://host.cluster1.com:6650"},
+  {Pulsar.Client, name: :client_2, host: "pulsar://host.cluster2.com:6650"}
 ]
 ```
 
-Then, you can specify the client in the consumer or producer configuration using
-the `client` key, eg. `client: :client_1`.
+A consumer or producer picks one with `:client`:
 
 ```elixir
-producers: [
-  my_producer_1: [
-    client: :client_1
-    topic: "persistent://my-tenant/my-namespace/my-topic"
-  ]
-]
+{Pulsar.Producer,
+ client: :client_1,
+ topic: "persistent://my-tenant/my-namespace/my-topic",
+ name: :my_producer_1}
 ```
 
 If your Pulsar cluster requires authentication, you can configure it in the client

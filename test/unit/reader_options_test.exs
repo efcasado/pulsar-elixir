@@ -7,10 +7,7 @@ defmodule Pulsar.ReaderOptionsTest do
   defp start(opts), do: "persistent://public/default/unread" |> Pulsar.Reader.stream(opts) |> Enum.take(1)
 
   test "warns about unknown options rather than raising, as the other surfaces do" do
-    log =
-      capture_log(fn ->
-        assert_raise ArgumentError, fn -> start(timeut: 5, host: "pulsar://127.0.0.1:1", client: :other) end
-      end)
+    log = capture_log(fn -> assert_raise NimbleOptions.ValidationError, fn -> start(timeut: 5, timeout: :soon) end end)
 
     assert log =~ "Pulsar.Reader ignoring unknown options"
     assert log =~ ":timeut"
@@ -19,29 +16,15 @@ defmodule Pulsar.ReaderOptionsTest do
   test "rejects an option of the wrong type" do
     assert_raise NimbleOptions.ValidationError, ~r/:timeout/, fn -> start(timeout: :soon) end
     assert_raise NimbleOptions.ValidationError, ~r/:flow_permits/, fn -> start(flow_permits: 0) end
-
-    assert_raise NimbleOptions.ValidationError, ~r/:start_message_id/, fn ->
-      start(start_message_id: 1)
-    end
+    assert_raise NimbleOptions.ValidationError, ~r/:start_message_id/, fn -> start(start_message_id: 1) end
   end
 
-  test "still refuses a host and a client together" do
-    assert_raise ArgumentError, ~r/cannot specify both :host and :client/, fn ->
-      start(host: "pulsar://127.0.0.1:1", client: :other)
-    end
-  end
+  test "no longer takes the options that configured an implicit client" do
+    # A reader reads through a client someone else started, so :host, :auth and
+    # :socket_opts are the client's business rather than the reader's.
+    docs = Pulsar.Reader.stream_options_docs()
 
-  describe "socket options" do
-    test "accepts options that are not keyword pairs" do
-      # The :host/:client conflict is checked after the schema, so reaching it proves
-      # these got through validation.
-      assert_raise ArgumentError, ~r/cannot specify both :host and :client/, fn ->
-        start(host: "pulsar://127.0.0.1:1", client: :other, socket_opts: [:inet6, {:raw, 6, 1, <<1::32>>}])
-      end
-    end
-
-    test "still rejects socket options that are not a list" do
-      assert_raise NimbleOptions.ValidationError, ~r/:socket_opts/, fn -> start(socket_opts: :inet6) end
-    end
+    for gone <- ["`:host`", "`:auth`", "`:socket_opts`"], do: refute(docs =~ gone)
+    assert docs =~ "`:client`"
   end
 end

@@ -6,77 +6,21 @@ defmodule Pulsar.Reader do
 
   ## Usage
 
-  Basic usage with automatic connection:
+  A reader reads through a client, which belongs in your supervision tree:
 
-      # Read 10 messages from earliest
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        start_position: :earliest
-      )
-      |> Stream.take(10)
-      |> Enum.each(fn message ->
-        IO.inspect(message.payload)
-      end)
-
-  Using an external client (recommended for production):
-
-      # In your application supervision tree
       children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
 
-      # Later, in your code
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        client: :default,
-        start_position: :earliest
-      )
-      |> Stream.map(fn message -> process(message) end)
+      Pulsar.Reader.stream("persistent://public/default/my-topic", start_position: :earliest)
+      |> Stream.take(10)
+      |> Stream.each(&IO.inspect(&1.payload))
       |> Stream.run()
 
-  With custom flow control:
+  `:client` selects one when there is more than the default. Reading always uses a
+  non-durable subscription, so a reader keeps no position and starts fresh each time.
 
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        flow_permits: 50  # Request 50 messages at a time
-      )
-      |> Enum.take(100)
+      Pulsar.Reader.stream(topic, flow_permits: 50) |> Enum.take(100)
 
-  Reading from a specific message:
-
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        start_message_id: {123, 456}  # {ledger_id, entry_id}
-      )
-      |> Stream.each(&process/1)
-      |> Stream.run()
-
-  ## Options
-
-  See `stream/2`.
-
-  ## Connection Management
-
-  ### Internal Client Mode (host)
-  When `:host` is provided, the stream creates a temporary client that lives
-  only for the duration of the stream. The connection is automatically closed when
-  the stream completes or is halted.
-
-      Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650")
-      |> Enum.take(10)
-      # Connection automatically closed after consuming 10 messages
-
-  ### External Client Mode (client)
-  When `:client` is provided (or defaulted), the stream uses an existing client
-  from your application's supervision tree. The client remains running after
-  the stream completes.
-
-      # In your application.ex
-      children = [
-        {Pulsar, host: "pulsar://localhost:6650"}
-      ]
-
-      # Use the existing client
-      Pulsar.Reader.stream(topic, client: :default)
-      |> Enum.take(10)
-      # Client remains running
+      Pulsar.Reader.stream(topic, start_message_id: {123, 456}) |> Enum.take(10)
 
   ## Partitioned Topics
 
@@ -113,30 +57,10 @@ defmodule Pulsar.Reader do
   @default_flow_permits 100
 
   @schema [
-    host: [
-      type: :string,
-      doc: """
-      Broker URL for a client the stream starts and stops itself, e.g.
-      `pulsar://localhost:6650`. Mutually exclusive with `:client`.
-      """
-    ],
     client: [
       type: :atom,
       default: :default,
-      doc: "An already running client to read through. Mutually exclusive with `:host`."
-    ],
-    name: [
-      type: :atom,
-      default: :default,
-      doc: "Name for the client started from `:host`. Ignored when reading through `:client`."
-    ],
-    auth: [
-      type: :keyword_list,
-      doc: "Authentication for the client started from `:host`."
-    ],
-    socket_opts: [
-      type: {:list, :any},
-      doc: "Socket options for the client started from `:host`. Not necessarily a keyword list."
+      doc: "The client to read through."
     ],
     start_position: [
       type: {:in, [:earliest, :latest]},
@@ -184,34 +108,26 @@ defmodule Pulsar.Reader do
   Returns a `Stream` that yields `Pulsar.Message` structs. If initialization
   fails, the stream emits `{:error, reason}` as the first (and only) element.
 
-  The stream handles connection lifecycle automatically based on whether
-  you provide `:host` or `:client`.
-
   ## Options
 
   #{NimbleOptions.docs(@schema)}
 
   ## Examples
 
-      # Read with internal connection (closes automatically)
-      Pulsar.Reader.stream("persistent://public/default/topic",
-        host: "pulsar://localhost:6650",
-        start_position: :earliest
-      )
+      # Read from the earliest message
+      Pulsar.Reader.stream("persistent://public/default/topic", start_position: :earliest)
       |> Enum.take(5)
 
-      # Read with external client (remains open)
+      # Read through a named client, filtering as you go
       Pulsar.Reader.stream("persistent://public/default/topic",
-        client: :default,
+        client: :analytics,
         start_position: :latest
       )
       |> Stream.filter(&interesting?/1)
       |> Enum.to_list()
 
       # Handle errors (emitted as first element if initialization fails)
-      Pulsar.Reader.stream("persistent://public/default/topic",
-        host: "pulsar://invalid:6650"
-      )
+      Pulsar.Reader.stream("persistent://public/default/topic", client: :not_running)
       |> Enum.take(1)
       |> case do
         [{:error, reason}] -> Logger.error("Failed: \#{inspect(reason)}")
@@ -230,34 +146,12 @@ defmodule Pulsar.Reader do
   defp start_reader(topic, opts) do
     opts = validate_options!(opts)
 
-    {connection_mode, client_name} = resolve_connection_mode(opts)
-
-    with :ok <- ensure_client_started(connection_mode, client_name, opts),
-         {:ok, state} <- start_consumer(topic, connection_mode, client_name, opts) do
+    with {:ok, state} <- start_consumer(topic, Keyword.fetch!(opts, :client), opts) do
       state
     end
   end
 
-  defp ensure_client_started(:external, _client_name, _opts), do: :ok
-
-  defp ensure_client_started(:internal, client_name, opts) do
-    host = Keyword.fetch!(opts, :host)
-    auth = Keyword.get(opts, :auth)
-    socket_opts = Keyword.get(opts, :socket_opts)
-
-    client_opts =
-      [name: client_name, host: host]
-      |> maybe_put(:auth, auth)
-      |> maybe_put(:socket_opts, socket_opts)
-
-    case Pulsar.Client.start_link(client_opts) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, {:client_start_failed, reason}}
-    end
-  end
-
-  defp start_consumer(topic, connection_mode, client_name, opts) do
+  defp start_consumer(topic, client_name, opts) do
     flow_permits = Keyword.get(opts, :flow_permits, @default_flow_permits)
     start_position = Keyword.get(opts, :start_position, :earliest)
     start_message_id = Keyword.get(opts, :start_message_id)
@@ -290,15 +184,14 @@ defmodule Pulsar.Reader do
 
     case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
       {:ok, consumer_group_pid} ->
-        {:ok, build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout)}
+        {:ok, build_reader_state(consumer_group_pid, reader_ref, client_name, flow_permits, timeout)}
 
       {:error, reason} ->
-        cleanup_client_on_error(connection_mode, client_name)
         {:error, reason}
     end
   end
 
-  defp build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout) do
+  defp build_reader_state(consumer_group_pid, reader_ref, client_name, flow_permits, timeout) do
     consumer_pids = wait_for_consumers_ready(consumer_group_pid, reader_ref)
 
     Enum.each(consumer_pids, fn pid ->
@@ -311,7 +204,6 @@ defmodule Pulsar.Reader do
       consumer_pids: consumer_pids,
       consumer_group_pid: consumer_group_pid,
       client_name: client_name,
-      connection_mode: connection_mode,
       flow_permits: flow_permits,
       permits_by_consumer: permits_by_consumer,
       timeout: timeout,
@@ -319,9 +211,6 @@ defmodule Pulsar.Reader do
       buffer: :queue.new()
     }
   end
-
-  defp cleanup_client_on_error(:internal, client_name), do: Pulsar.Client.stop(client_name)
-  defp cleanup_client_on_error(:external, _client_name), do: :ok
 
   defp next_message({:error, reason}) do
     {[{:error, reason}], :halted}
@@ -360,35 +249,12 @@ defmodule Pulsar.Reader do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
-
-    case state.connection_mode do
-      :internal ->
-        Pulsar.Client.stop(state.client_name)
-
-      _ ->
-        :ok
-    end
   end
 
-  defp resolve_connection_mode(opts) do
-    host = Keyword.get(opts, :host)
-    name = Keyword.get(opts, :name, :default)
-    client = Keyword.get(opts, :client, :default)
+  @doc false
+  @spec stream_options_docs() :: String.t()
+  def stream_options_docs, do: NimbleOptions.docs(@schema)
 
-    cond do
-      host && client != :default ->
-        raise ArgumentError, "cannot specify both :host and :client options"
-
-      host ->
-        {:internal, name}
-
-      true ->
-        {:external, client}
-    end
-  end
-
-  # Unknown options are only warned about for now, and will be rejected in the next
-  # major version.
   defp validate_options!(opts) do
     {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
 

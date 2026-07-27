@@ -238,9 +238,7 @@ defmodule Pulsar.Client do
   """
   @spec random_broker(atom()) :: pid() | nil
   def random_broker(client_name \\ :default) do
-    broker_supervisor = broker_supervisor(client_name)
-
-    case Supervisor.which_children(broker_supervisor) do
+    case children_of(broker_supervisor(client_name)) do
       [] ->
         nil
 
@@ -248,6 +246,14 @@ defmodule Pulsar.Client do
         {_id, pid, _, _} = Enum.random(children)
         pid
     end
+  end
+
+  # A client that was never started has no supervisor to ask, which reads the same as a
+  # client with no brokers rather than exiting whoever asked.
+  defp children_of(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, _reason -> []
   end
 
   @doc """
