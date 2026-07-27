@@ -2,18 +2,20 @@ defmodule Pulsar.Producer do
   @moduledoc """
   A producer publishes messages to a topic.
 
-  Start one from your own supervision tree:
+  Declare one on the client it belongs to:
 
       children = [
-        {Pulsar.Client, host: "pulsar://localhost:6650"},
-        {Pulsar.Producer, topic: "persistent://public/default/audit", name: :audit}
+        {Pulsar.Client,
+         host: "pulsar://localhost:6650",
+         producers: [
+           [topic: "persistent://public/default/audit", name: :audit]
+         ]}
       ]
 
-      Supervisor.start_link(children, strategy: :rest_for_one)
+      Supervisor.start_link(children, strategy: :one_for_one)
 
-  Order matters: a producer resolves its brokers through the registries its client owns, so
-  the client has to be started first. `:rest_for_one` additionally restarts producers with
-  their client, which is tidy but not required.
+  A producer resolves its brokers through the registries its client owns, so it runs under
+  that client and is started again whenever the client restarts.
 
   Then publish through the name it was registered under:
 
@@ -23,9 +25,9 @@ defmodule Pulsar.Producer do
   a partitioned topic needs nothing special at the call site. Messages are routed across
   partitions, honouring a message's partition key when one is set.
 
-  Producers can also be started and stopped at runtime with `Pulsar.Producer.start/2`
-  and `Pulsar.Producer.stop/2`, which put them under their client's supervisor instead of
-  yours.
+  For sets that are only known at runtime, `start/1` and `stop/2` add and remove producers
+  against a running client. Those are not recreated if the client restarts; declared ones
+  are.
 
   ## Options
 

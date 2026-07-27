@@ -55,31 +55,40 @@ defmodule MyPulsarConsumer do
 end
 ```
 
-Start a client, a consumer and a producer from your own supervision tree:
+Put a client in your supervision tree and declare its consumers and producers on it:
 
 ```elixir
 children = [
-  {Pulsar.Client, host: "pulsar://localhost:6650"},
-  {Pulsar.Consumer,
-   topic: "persistent://my-tenant/my-namespace/my-topic",
-   subscription_name: "my-subscription",
-   callback_module: MyPulsarConsumer},
-  {Pulsar.Producer,
-   topic: "persistent://my-tenant/my-namespace/my-topic",
-   name: :my_producer}
+  {Pulsar.Client,
+   host: "pulsar://localhost:6650",
+   producers: [
+     [topic: "persistent://my-tenant/my-namespace/my-topic", name: :my_producer]
+   ],
+   consumers: [
+     [topic: "persistent://my-tenant/my-namespace/my-topic",
+      subscription_name: "my-subscription",
+      callback_module: MyPulsarConsumer]
+   ]}
 ]
 
-Supervisor.start_link(children, strategy: :rest_for_one)
+Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
-Order matters: consumers and producers resolve brokers through registries their client
-owns, so the client has to be started first. `:rest_for_one` additionally restarts them with
-their client, which is tidy but not required.
+Consumers and producers resolve brokers through registries their client owns, so they run
+under that client and are started again whenever it restarts. Sets that are only known at
+runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
 
 Sending a message using the configured producer can be done as follows:
 
 ```elixir
 Pulsar.Producer.send(:my_producer, "Hello, Pulsar!")
+```
+
+In a script or an IEx session, start the client directly and add to it as you go:
+
+```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+{:ok, _pid} = Pulsar.Producer.start(topic: "persistent://public/default/t", name: :p)
 ```
 
 Brokers, consumers and producers belong to the `:default` client unless told otherwise.
@@ -92,13 +101,15 @@ children = [
 ]
 ```
 
-A consumer or producer picks one with `:client`:
+Anything declared on a client belongs to it. A consumer or producer added at runtime picks
+one with `:client`:
 
 ```elixir
-{Pulsar.Producer,
- client: :client_1,
- topic: "persistent://my-tenant/my-namespace/my-topic",
- name: :my_producer_1}
+Pulsar.Producer.start(
+  client: :client_1,
+  topic: "persistent://my-tenant/my-namespace/my-topic",
+  name: :my_producer_1
+)
 ```
 
 If your Pulsar cluster requires authentication, you can configure it in the client

@@ -63,13 +63,14 @@ defmodule Main do
   end
 
   def run do
-    children =
-      [
-        {Pulsar.Client, host: @broker},
-        {Pulsar.Producer, topic: @topic, name: :game_master}
-      ] ++ consumers(@num_players, @card_size, @topic)
+    children = [
+      {Pulsar.Client,
+       host: @broker,
+       producers: [[topic: @topic, name: :game_master]],
+       consumers: consumers(@num_players, @card_size, @topic)}
+    ]
 
-    {:ok, _pid} = Supervisor.start_link(children, strategy: :rest_for_one)
+    {:ok, _pid} = Supervisor.start_link(children, strategy: :one_for_one)
 
     spawn(fn -> call_numbers(1..99, :game_master) end)
 
@@ -79,16 +80,16 @@ defmodule Main do
   defp consumers(num_players, card_size, topic) do
     Enum.map(1..num_players, fn player_number ->
       name = "player-#{player_number}"
-      atom_name = String.to_atom(name)
 
-      {Pulsar.Consumer,
-       name: atom_name,
-       topic: topic,
-       subscription_name: name,
-       subscription_type: :Exclusive,
-       callback_module: BingoPlayer,
-       durable: false,
-       init_args: [self(), card_size]}
+      [
+        name: name,
+        topic: topic,
+        subscription_name: name,
+        subscription_type: :Exclusive,
+        callback_module: BingoPlayer,
+        durable: false,
+        init_args: [self(), card_size]
+      ]
     end)
   end
 

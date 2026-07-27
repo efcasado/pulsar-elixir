@@ -21,33 +21,85 @@ defmodule Pulsar.Integration.SupervisionTreeTest do
     end
   end
 
-  test "a client, consumer and producer start from a host supervision tree" do
+  defp host_tree(client, opts) do
     broker = System.broker()
 
-    children = [
-      {Pulsar.Client, name: :supervision_tree_client, host: broker.service_url},
-      {Pulsar.Producer, topic: @topic, name: :supervision_tree_producer, client: :supervision_tree_client},
-      {Pulsar.Consumer,
-       topic: @topic,
-       subscription_name: "supervision-tree-sub",
-       callback_module: Handler,
-       client: :supervision_tree_client,
-       initial_position: :earliest,
-       init_args: [self()]}
-    ]
+    children = [{Pulsar.Client, [name: client, host: broker.service_url] ++ opts}]
+
+    start_supervised!(%{
+      id: :host_tree,
+      start: {Supervisor, :start_link, [children, [strategy: :one_for_one]]},
+      type: :supervisor
+    })
+  end
+
+  test "a client starts the consumers and producers declared on it" do
+    client = :supervision_tree_client
 
     supervisor =
-      start_supervised!(%{
-        id: :host_tree,
-        start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
-        type: :supervisor
-      })
+      host_tree(client,
+        producers: [[topic: @topic, name: :supervision_tree_producer]],
+        consumers: [
+          [
+            topic: @topic,
+            subscription_name: "supervision-tree-sub",
+            callback_module: Handler,
+            initial_position: :earliest,
+            init_args: [self()]
+          ]
+        ]
+      )
 
-    assert [_client, _producer, _consumer] = Supervisor.which_children(supervisor)
+    assert [_client] = Supervisor.which_children(supervisor)
 
-    {:ok, _message_id} =
-      Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: :supervision_tree_client)
+    assert [_producer] = DynamicSupervisor.which_children(Pulsar.Client.producer_supervisor(client))
+    assert [_consumer] = DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
+
+    {:ok, _message_id} = Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: client)
 
     assert_receive {:received, "from the tree"}, 15_000
+  end
+
+  test "declared resources come back when the client restarts" do
+    client = :supervision_tree_restart_client
+
+    supervisor =
+      host_tree(client,
+        consumers: [
+          [
+            topic: @topic,
+            subscription_name: "supervision-tree-restart-sub",
+            callback_module: Handler,
+            initial_position: :earliest,
+            init_args: [self()]
+          ]
+        ]
+      )
+
+    [{_, before, _, _}] = DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
+
+    ref = Process.monitor(Process.whereis(client))
+    Process.exit(Process.whereis(client), :kill)
+    assert_receive {:DOWN, ^ref, :process, _, :killed}, 5_000
+
+    assert eventually(fn ->
+             match?([{_, pid, _, _}] when is_pid(pid) and pid != before, consumer_children(client))
+           end)
+
+    assert [_client] = Supervisor.which_children(supervisor)
+  end
+
+  defp consumer_children(client) do
+    DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
+  catch
+    :exit, _ -> []
+  end
+
+  defp eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> true
+      attempts == 0 -> false
+      true -> Process.sleep(100) && eventually(fun, attempts - 1)
+    end
   end
 end

@@ -9,8 +9,8 @@ defmodule Pulsar.Integration.Client.CommonTest do
     client_one = :common_client_1
     client_two = :common_client_2
 
-    {:ok, _pid} = Pulsar.Client.start(name: client_one, host: System.broker().service_url)
-    {:ok, _pid} = Pulsar.Client.start(name: client_two, host: System.broker().service_url)
+    {:ok, _pid} = Pulsar.Client.start_link(name: client_one, host: System.broker().service_url)
+    {:ok, _pid} = Pulsar.Client.start_link(name: client_two, host: System.broker().service_url)
 
     assert Process.alive?(Process.whereis(client_one))
     assert Process.alive?(Process.whereis(client_two))

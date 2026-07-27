@@ -2,30 +2,31 @@ defmodule Pulsar.Consumer do
   @moduledoc """
   A consumer subscribes to a topic and hands each message to a callback module.
 
-  Start one from your own supervision tree:
+  Declare one on the client it belongs to:
 
       children = [
-        {Pulsar.Client, host: "pulsar://localhost:6650"},
-        {Pulsar.Consumer,
-         topic: "persistent://public/default/orders",
-         subscription_name: "order-service",
-         callback_module: MyApp.OrderHandler}
+        {Pulsar.Client,
+         host: "pulsar://localhost:6650",
+         consumers: [
+           [topic: "persistent://public/default/orders",
+            subscription_name: "order-service",
+            callback_module: MyApp.OrderHandler]
+         ]}
       ]
 
-      Supervisor.start_link(children, strategy: :rest_for_one)
+      Supervisor.start_link(children, strategy: :one_for_one)
 
-  Order matters: a consumer resolves its brokers through the registries its client owns, so
-  the client has to be started first. `:rest_for_one` additionally restarts consumers with
-  their client, which is tidy but not required — a consumer whose broker dies is told by the
-  monitor it holds and is restarted by its own supervisor.
+  A consumer resolves its brokers through the registries its client owns, so it runs under
+  that client and is started again whenever the client restarts.
 
   A consumer is a supervisor over one worker per partition and per `:consumer_count`, so
   a partitioned topic needs nothing special at the call site. Partition count is resolved
   at startup, and new partitions are picked up by `:partition_discovery_interval_ms`.
 
-  Consumers can also be started and stopped at runtime with `Pulsar.Consumer.start/4`
-  and `Pulsar.Consumer.stop/2`, which put them under their client's supervisor instead of
-  yours.
+  For sets that are only known at runtime — a consumer per tenant, say — `start/1` and
+  `stop/2` add and remove them against a running client. Those are not recreated if the
+  client restarts, because a `DynamicSupervisor` cannot list children it should bring back;
+  declared consumers are.
 
   ## Callback module
 

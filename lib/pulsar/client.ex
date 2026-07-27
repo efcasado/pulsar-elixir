@@ -9,15 +9,22 @@ defmodule Pulsar.Client do
 
   ## Usage
 
-  A client belongs in the host application's supervision tree, ahead of anything that
-  uses it:
+  The client is the only thing that belongs in the host application's supervision tree.
+  Consumers and producers are declared on it and run underneath it:
 
       children = [
-        {Pulsar.Client, host: "pulsar://localhost:6650"},
-        {Pulsar.Consumer, topic: topic, subscription_name: "sub", callback_module: MyCallback}
+        {Pulsar.Client,
+         host: "pulsar://localhost:6650",
+         consumers: [
+           [topic: topic, subscription_name: "sub", callback_module: MyCallback]
+         ]}
       ]
 
-      Supervisor.start_link(children, strategy: :rest_for_one)
+      Supervisor.start_link(children, strategy: :one_for_one)
+
+  Declaring them here rather than beside the client means the tree matches the dependency:
+  a consumer resolves brokers through registries the client owns, and cannot outlive a
+  client restart holding a registration the replacement registries know nothing about.
 
   Several clients can coexist, each with its own connections and registries:
 
@@ -26,19 +33,21 @@ defmodule Pulsar.Client do
         {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
       ]
 
-  Consumers and producers pick one with `:client`, defaulting to `:default`:
+  Anything declared on a client belongs to it. `Pulsar.Consumer.start/1` and
+  `Pulsar.Producer.start/1` add to one at runtime, picking it with `:client`:
 
-      {Pulsar.Consumer,
-       topic: topic,
-       subscription_name: "sub",
-       callback_module: MyCallback,
-       client: :analytics}
+      Pulsar.Consumer.start(
+        topic: topic,
+        subscription_name: "sub",
+        callback_module: MyCallback,
+        client: :analytics
+      )
 
-  Clients can also be started at runtime with `Pulsar.Client.start/1`, which supervises
-  them under `:pulsar` rather than under the caller.
   """
 
   use Supervisor
+
+  alias Pulsar.Client.Bootstrap
 
   require Logger
 
@@ -109,6 +118,25 @@ defmodule Pulsar.Client do
               type: :string,
               required: true,
               doc: "Bootstrap broker URL, e.g. `pulsar://localhost:6650`."
+            ],
+            consumers: [
+              type: {:list, :keyword_list},
+              default: [],
+              doc: """
+              Consumers to run under this client, each a keyword list of `Pulsar.Consumer`
+              options. Their `:client` is set to this one. They are started again whenever
+              the client restarts, unlike consumers added later with `Pulsar.Consumer.start/1`.
+              A consumer that fails to start is logged and skipped; it does not stop the client.
+              """
+            ],
+            producers: [
+              type: {:list, :keyword_list},
+              default: [],
+              doc: """
+              Producers to run under this client, each a keyword list of `Pulsar.Producer`
+              options, on the same terms as `:consumers`. Started before the consumers, so a
+              callback that publishes has its producer available.
+              """
             ]
           ] ++ @broker_opts
 
@@ -140,34 +168,11 @@ defmodule Pulsar.Client do
     # of the machine, not of the compiled library.
     opts = Keyword.put_new(opts, :socket_opts, verify: :verify_peer, cacertfile: CAStore.file_path())
     name = Keyword.fetch!(opts, :name)
-    bootstrap_host = Keyword.fetch!(opts, :host)
 
     case Supervisor.start_link(__MODULE__, opts, name: name) do
-      {:ok, pid} = result ->
-        # Start the bootstrap broker after supervisor is running
-        case start_broker(bootstrap_host, client: name) do
-          {:ok, _broker_pid} ->
-            result
-
-          {:error, reason} ->
-            Supervisor.stop(pid)
-            {:error, {:broker_startup_failed, reason}}
-        end
-
-      error ->
-        error
+      {:error, {:shutdown, {:failed_to_start_child, Bootstrap, reason}}} -> {:error, reason}
+      result -> result
     end
-  end
-
-  @doc """
-  Starts a client under `:pulsar`'s own supervisor rather than the caller's.
-
-  For clients created at runtime. Prefer `{Pulsar.Client, opts}` in a supervision tree
-  otherwise, so that the client's lifetime is tied to the code depending on it.
-  """
-  @spec start(keyword()) :: DynamicSupervisor.on_start_child()
-  def start(opts) do
-    DynamicSupervisor.start_child(Pulsar.Supervisor, {__MODULE__, opts})
   end
 
   @impl true
@@ -186,10 +191,12 @@ defmodule Pulsar.Client do
       {Registry, keys: :unique, name: producer_registry(client_name)},
       {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client_name)},
       {DynamicSupervisor, strategy: :one_for_one, name: consumer_supervisor(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: producer_supervisor(client_name)}
+      {DynamicSupervisor, strategy: :one_for_one, name: producer_supervisor(client_name)},
+      {Bootstrap, opts}
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # :one_for_one would let a registry come back empty with its registrations still alive.
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 
   ## Registry and Supervisor Name Helpers
@@ -347,30 +354,13 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
-    # A client started by start/1 is a :permanent child of Pulsar.Supervisor, so it has to
-    # be removed from there rather than merely stopped, or it comes straight back.
-    case_result =
-      case Process.whereis(client_name) do
-        nil -> :ok
-        pid -> DynamicSupervisor.terminate_child(Pulsar.Supervisor, pid)
-      end
-
-    case case_result do
-      :ok -> :ok
-      {:error, :not_found} -> stop_unsupervised(client_name, timeout)
-    end
-
-    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
-    :ok
-  end
-
-  defp stop_unsupervised(client_name, timeout) do
     try do
       Supervisor.stop(client_name, :normal, timeout)
     catch
-      :exit, _ -> :ok
+      :exit, _reason -> :ok
     end
 
+    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
     :ok
   end
 
@@ -385,7 +375,21 @@ defmodule Pulsar.Client do
       Logger.warning("Pulsar.Client ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
     end
 
-    NimbleOptions.validate!(known, @schema)
+    known
+    |> NimbleOptions.validate!(@schema)
+    |> validate_resources!()
+  end
+
+  defp validate_resources!(opts) do
+    client = Keyword.fetch!(opts, :name)
+
+    opts
+    |> Keyword.update!(:consumers, &validate_each!(&1, Pulsar.Consumer.Options, client))
+    |> Keyword.update!(:producers, &validate_each!(&1, Pulsar.Producer.Options, client))
+  end
+
+  defp validate_each!(entries, options, client) do
+    Enum.map(entries, &options.validate!(Keyword.put(&1, :client, client)))
   end
 
   defp build_broker_opts(opts) do

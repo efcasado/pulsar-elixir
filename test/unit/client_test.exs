@@ -47,6 +47,61 @@ defmodule Pulsar.ClientTest do
     end
   end
 
+  describe "declared consumers and producers" do
+    test "defaults to none" do
+      start_supervised!({Client, name: :no_resources, host: "pulsar://127.0.0.1:1"})
+
+      assert DynamicSupervisor.which_children(Client.consumer_supervisor(:no_resources)) == []
+      assert DynamicSupervisor.which_children(Client.producer_supervisor(:no_resources)) == []
+    end
+
+    test "rejects a consumer option the consumer schema does not accept" do
+      assert_raise NimbleOptions.ValidationError, ~r/invalid value for :subscription_type/, fn ->
+        Client.start_link(
+          name: :bad_consumer,
+          host: "pulsar://127.0.0.1:1",
+          consumers: [
+            [topic: "t", subscription_name: "s", callback_module: MyApp.H, subscription_type: :Nonsense]
+          ]
+        )
+      end
+    end
+
+    test "rejects a consumer entry missing a required option" do
+      assert_raise NimbleOptions.ValidationError, ~r/required :callback_module option not found/, fn ->
+        Client.start_link(
+          name: :incomplete_consumer,
+          host: "pulsar://127.0.0.1:1",
+          consumers: [[topic: "t", subscription_name: "s"]]
+        )
+      end
+    end
+
+    test "rejects a producer option the producer schema does not accept" do
+      assert_raise NimbleOptions.ValidationError, ~r/invalid value for :producer_count/, fn ->
+        Client.start_link(
+          name: :bad_producer,
+          host: "pulsar://127.0.0.1:1",
+          producers: [[topic: "t", producer_count: :many]]
+        )
+      end
+    end
+
+    test "rejects entries that are not keyword lists" do
+      assert_raise NimbleOptions.ValidationError, ~r/invalid list in :consumers option/, fn ->
+        Client.start_link(name: :bad_shape, host: "pulsar://127.0.0.1:1", consumers: ["a topic"])
+      end
+    end
+
+    test "raises before starting anything" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Client.start_link(name: :never_started, host: "pulsar://127.0.0.1:1", producers: [[]])
+      end
+
+      refute is_pid(Process.whereis(:never_started))
+    end
+  end
+
   describe "broker options" do
     test "carries the connection tunables to the broker with their defaults" do
       start_supervised!({Client, name: :broker_defaults, host: "pulsar://127.0.0.1:1"})

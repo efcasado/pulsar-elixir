@@ -60,19 +60,22 @@ end
 
 ```elixir
 children = [
-  {Pulsar.Client, host: "pulsar://localhost:6650"},
-  {Pulsar.Producer,
-   topic: "users",
-   name: :user_producer,
-   schema: [type: :Json, definition: user_schema_def]},
-  {Pulsar.Consumer,
-   topic: "users",
-   subscription_name: "my-sub",
-   callback_module: MyCallback,
-   schema: [type: :Json, definition: user_schema_def]}
+  {Pulsar.Client,
+   host: "pulsar://localhost:6650",
+   producers: [
+     [topic: "users",
+      name: :user_producer,
+      schema: [type: :Json, definition: user_schema_def]]
+   ],
+   consumers: [
+     [topic: "users",
+      subscription_name: "my-sub",
+      callback_module: MyCallback,
+      schema: [type: :Json, definition: user_schema_def]]
+   ]}
 ]
 
-Supervisor.start_link(children, strategy: :rest_for_one)
+Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
 **Schema options:**
