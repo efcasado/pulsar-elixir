@@ -19,6 +19,7 @@ defmodule Pulsar.Broker do
 
   @behaviour :gen_statem
 
+  alias Pulsar.Broker.Options
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -91,6 +92,10 @@ defmodule Pulsar.Broker do
   The target Pulsar broker is expected to be specified in the form of: `<scheme>://<host>[:<port>]`,
   where `scheme` can be either `pulsar` or `pulsar+ssl` and `port` is an optional field that
   defaults to `6650` and `6651`, respectively.
+
+  ## Options
+
+  #{Options.docs()}
   """
   @spec start_link(String.t(), keyword()) :: {:ok, pid()} | :ignore | {:error, term()}
   def start_link(broker_url, opts \\ []) do
@@ -221,6 +226,7 @@ defmodule Pulsar.Broker do
 
   @impl true
   def init(opts) do
+    opts = Options.validate!(opts)
     name = Keyword.get(opts, :name)
     uri = URI.parse(Keyword.fetch!(opts, :url))
     host = Map.get(uri, :host, "localhost")
