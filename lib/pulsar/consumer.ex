@@ -151,7 +151,7 @@ defmodule Pulsar.Consumer do
   def stop(consumer, _opts) when is_pid(consumer) do
     case remove_from(owning_supervisor(consumer), consumer) do
       :ok -> :ok
-      {:error, :not_found} -> Supervisor.stop(consumer)
+      {:error, :not_found} -> stop_directly(consumer)
     end
   end
 
@@ -267,6 +267,14 @@ defmodule Pulsar.Consumer do
       {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
       nil -> nil
     end
+  end
+
+  # A consumer that is already gone reads as stopped, which is also what a caller holding a
+  # pid replaced by a restart sees.
+  defp stop_directly(pid) do
+    Supervisor.stop(pid)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp remove_from(nil, _pid), do: {:error, :not_found}

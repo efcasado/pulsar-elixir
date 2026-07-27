@@ -152,7 +152,7 @@ defmodule Pulsar.Producer do
   def stop(producer, _opts) when is_pid(producer) do
     case remove_from(owning_supervisor(producer), producer) do
       :ok -> :ok
-      {:error, :not_found} -> Supervisor.stop(producer)
+      {:error, :not_found} -> stop_directly(producer)
     end
   end
 
@@ -275,6 +275,14 @@ defmodule Pulsar.Producer do
       {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
       nil -> nil
     end
+  end
+
+  # A producer that is already gone reads as stopped, which is also what a caller holding a
+  # pid replaced by a restart sees.
+  defp stop_directly(pid) do
+    Supervisor.stop(pid)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp remove_from(nil, _pid), do: {:error, :not_found}
