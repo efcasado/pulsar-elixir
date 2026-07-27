@@ -82,10 +82,10 @@ defmodule Pulsar.Producer do
   end
 
   @doc """
-  Starts a producer under its client's supervisor rather than the caller's.
+  Adds a producer to a running client.
 
-  For producers created at runtime. Prefer `{Pulsar.Producer, opts}` in a supervision tree
-  otherwise, so that the producer's lifetime is tied to the code depending on it.
+  For producers whose set is only known at runtime. Prefer the client's `:producers` for
+  ones known up front: a producer added here is not recreated if the client restarts.
   """
   @spec start(keyword() | String.t()) :: DynamicSupervisor.on_start_child()
   def start(topic) when is_binary(topic), do: start(topic: topic)

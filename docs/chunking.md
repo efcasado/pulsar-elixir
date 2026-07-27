@@ -89,27 +89,33 @@ For non-chunked messages, these fields contain single values.
 ### Producer Configuration
 
 ```elixir
-{Pulsar.Producer,
- topic: "my-topic",
- name: :my_producer,
- chunking_enabled: true,        # Enable chunking (default: false)
- max_message_size: 1024 * 1024  # Split messages larger than 1MB (default: 5MB)
-}
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ producers: [
+   [topic: "my-topic",
+    name: :my_producer,
+    chunking_enabled: true,        # Enable chunking (default: false)
+    max_message_size: 1024 * 1024  # Split messages larger than 1MB (default: 5MB)
+   ]
+ ]}
 ```
 
 ### Consumer Configuration
 
 ```elixir
-{Pulsar.Consumer,
- topic: "my-topic",
- subscription_name: "my-sub",
- callback_module: MyConsumer,
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ consumers: [
+   [topic: "my-topic",
+    subscription_name: "my-sub",
+    callback_module: MyConsumer,
 
- # Chunking-related options:
- max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
- expire_incomplete_chunked_message_after: 60_000,         # Timeout in ms (default: 60s)
- chunk_cleanup_interval: 30_000                           # Cleanup check interval in ms (default: 30s)
-}
+    # Chunking-related options:
+    max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
+    expire_incomplete_chunked_message_after: 60_000,         # Timeout in ms (default: 60s)
+    chunk_cleanup_interval: 30_000                           # Cleanup check interval in ms (default: 30s)
+   ]
+ ]}
 ```
 
 #### Configuration Details

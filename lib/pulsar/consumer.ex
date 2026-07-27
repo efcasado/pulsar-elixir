@@ -104,10 +104,10 @@ defmodule Pulsar.Consumer do
   end
 
   @doc """
-  Starts a consumer under its client's supervisor rather than the caller's.
+  Adds a consumer to a running client.
 
-  For consumers created at runtime. Prefer `{Pulsar.Consumer, opts}` in a supervision tree
-  otherwise, so that the consumer's lifetime is tied to the code depending on it.
+  For consumers whose set is only known at runtime. Prefer the client's `:consumers` for
+  ones known up front: a consumer added here is not recreated if the client restarts.
   """
   @spec start(keyword()) :: DynamicSupervisor.on_start_child()
   def start(opts) when is_list(opts) do
