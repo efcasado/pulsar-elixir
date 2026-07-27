@@ -150,16 +150,15 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Examples
 
-      # Start consumer with no automatic flow control
-      {:ok, consumer_pid} = Pulsar.Consumer.start(
+      {:ok, _consumer} = Pulsar.Consumer.start(
         topic,
         subscription,
         MyCallback,
-        flow_initial: 0  # Disable automatic flow
+        name: :orders,
+        flow_initial: 0
       )
 
-      # Manually request messages based on your own demand
-      Pulsar.Consumer.send_flow(consumer_pid, 10)
+      Pulsar.Consumer.send_flow(:orders, 10)
 
       # Example with Broadway demand
       def handle_demand(demand, state) do
@@ -185,19 +184,18 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Examples
 
-      # Acknowledge a single message
-      def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
-        message_id = command.message_id
-        # Process message...
+      def handle_message(message, state) do
+        consumer = self()
+
         spawn(fn ->
-          # Do async processing
-          Pulsar.Consumer.ack(consumer_pid, message_id)
+          Pulsar.Consumer.ack(consumer, message.message_id_to_ack)
         end)
+
         {:noreply, state}
       end
 
       # Acknowledge multiple messages in batch (more efficient)
-      Pulsar.Consumer.ack(consumer_pid, [message_id1, message_id2, message_id3])
+      Pulsar.Consumer.ack(self(), [message_id1, message_id2, message_id3])
   """
   @spec ack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_list(message_ids) do
@@ -226,18 +224,19 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Examples
 
-      # NACK a single message
-      def handle_message({command, _metadata, _payload, _broker_metadata}, state) do
-        message_id = command.message_id
+      def handle_message(message, state) do
+        message_id = message.message_id_to_ack
+
         case process_message() do
           :ok -> Pulsar.Consumer.ack(self(), message_id)
           {:error, _reason} -> Pulsar.Consumer.nack(self(), message_id)
         end
+
         {:noreply, state}
       end
 
       # NACK multiple messages in batch (more efficient)
-      Pulsar.Consumer.nack(consumer_pid, [message_id1, message_id2, message_id3])
+      Pulsar.Consumer.nack(self(), [message_id1, message_id2, message_id3])
   """
   @spec nack(pid(), Binary.MessageIdData.t() | [Binary.MessageIdData.t()]) :: :ok | {:error, term()}
   def nack(consumer, message_ids) when is_list(message_ids) do

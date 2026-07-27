@@ -137,32 +137,36 @@ defmodule Pulsar.Consumer.Callback do
         end
       end
 
-  Example usage:
+  These are implemented by the workers, which `Pulsar.Consumer.workers/2` returns. A
+  consumer's own pid is the supervisor above them, and answers neither:
 
-      # Get current count via custom handle_call
-      count = GenServer.call(consumer_pid, :get_count)
-      
-      # Reset state via custom handle_cast
-      GenServer.cast(consumer_pid, :reset)
+      [worker | _rest] = Pulsar.Consumer.workers(:orders)
+
+      count = GenServer.call(worker, :get_count)
+      GenServer.cast(worker, :reset)
 
   ## Multiple Consumers
 
-  For shared or key-shared subscriptions, you can start multiple consumer processes
-  to increase throughput:
+  For shared or key-shared subscriptions, `:consumer_count` runs several consumer processes
+  on one subscription to increase throughput:
 
-      # Start 3 consumers for shared processing
-      {:ok, consumer_pids} = Pulsar.Consumer.start(
-        topic,
-        subscription,
-        :Key_Shared,
-        MyCallback,
-        consumer_count: 3
-      )
-      
-      # Each consumer maintains its own independent state
-      Enum.each(consumer_pids, fn consumer_pid ->
-        count = GenServer.call(consumer_pid, :get_count)
-        IO.puts("Consumer \#{inspect(consumer_pid)} processed \#{count} messages")
+      {Pulsar.Client,
+       host: "pulsar://localhost:6650",
+       consumers: [
+         [topic: topic,
+          subscription_name: subscription,
+          callback_module: MyCallback,
+          subscription_type: :Key_Shared,
+          consumer_count: 3,
+          name: :orders]
+       ]}
+
+  A consumer is a supervisor over its workers, so `Pulsar.Consumer.workers/2` is what
+  returns the processes holding the state, one per `:consumer_count` and per partition:
+
+      Enum.each(Pulsar.Consumer.workers(:orders), fn worker ->
+        count = GenServer.call(worker, :get_count)
+        IO.puts("Consumer \#{inspect(worker)} processed \#{count} messages")
       end)
 
   ## Return Values
