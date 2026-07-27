@@ -32,11 +32,8 @@ defmodule Pulsar do
 
       {:ok, message_id} = Pulsar.Producer.send(:audit, "payload")
 
-  Consumers and producers run under the client that owns the registries they resolve brokers
-  through, so the tree matches the dependency and the host tree needs no ordering between
-  them. Sets that are only known at runtime — per-tenant consumers, say — are added with
-  `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1` instead. Those are *not* recreated
-  if the client restarts; declared ones are.
+  The client is the only thing your tree holds. See `Pulsar.Client` for what that buys, and
+  for adding consumers and producers to a running client.
 
   ## Scripts and IEx
 

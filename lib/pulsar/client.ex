@@ -33,8 +33,11 @@ defmodule Pulsar.Client do
         {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
       ]
 
-  Anything declared on a client belongs to it. `Pulsar.Consumer.start/1` and
-  `Pulsar.Producer.start/1` add to one at runtime, picking it with `:client`:
+  ## Declared and runtime resources
+
+  Anything declared on a client belongs to it. For sets only known at runtime — a consumer
+  per tenant, say — `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1` add to a running
+  client, picking it with `:client`:
 
       Pulsar.Consumer.start(
         topic: topic,
@@ -43,6 +46,9 @@ defmodule Pulsar.Client do
         client: :analytics
       )
 
+  The two differ in one respect. Declared resources are recreated whenever the client
+  restarts; resources added with `start/1` are not, because the `DynamicSupervisor` holding
+  them has no static child list to bring back.
   """
 
   use Supervisor

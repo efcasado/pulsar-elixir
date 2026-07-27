@@ -373,7 +373,6 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def terminate(reason, state) do
-    # Reply to any pending batch callers with error
     if state.batch_enabled and not Enum.empty?(state.batch) do
       Enum.each(state.batch, fn {_message, from} ->
         GenServer.reply(from, {:error, :producer_terminated})

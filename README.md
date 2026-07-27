@@ -73,9 +73,8 @@ children = [
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
-Consumers and producers resolve brokers through registries their client owns, so they run
-under that client and are started again whenever it restarts. Sets that are only known at
-runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
+The client is the only thing your tree holds; consumers and producers run under it. Sets
+only known at runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
 
 Sending a message using the configured producer can be done as follows:
 

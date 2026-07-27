@@ -16,17 +16,11 @@ defmodule Pulsar.Consumer do
 
       Supervisor.start_link(children, strategy: :one_for_one)
 
-  A consumer resolves its brokers through the registries its client owns, so it runs under
-  that client and is started again whenever the client restarts.
+  See `Pulsar.Client` for how declared and runtime resources differ, and for `start/1`.
 
   A consumer is a supervisor over one worker per partition and per `:consumer_count`, so
   a partitioned topic needs nothing special at the call site. Partition count is resolved
   at startup, and new partitions are picked up by `:partition_discovery_interval_ms`.
-
-  For sets that are only known at runtime — a consumer per tenant, say — `start/1` and
-  `stop/2` add and remove them against a running client. Those are not recreated if the
-  client restarts, because a `DynamicSupervisor` cannot list children it should bring back;
-  declared consumers are.
 
   ## Callback module
 
@@ -257,8 +251,6 @@ defmodule Pulsar.Consumer do
 
   # Resolved by the caller for Pulsar.Consumer.start/4, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other consumer start.
-  # The pid alone does not say which client owns it, and the named supervisor for the
-  # client we assume may not exist, so a failed lookup falls back to stopping the process.
   # Asking the process which supervisor owns it, rather than deriving one from `:client`:
   # a pid carries no clue which client it belongs to, and stopping a permanent child any
   # other way just has its supervisor start it again.

@@ -263,12 +263,10 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_continue({:send_initial_flow, init_args}, state) do
-    # Only send initial flow if flow_initial > 0 (automatic flow control enabled)
     result =
       if state.flow_initial > 0 do
         send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial)
       else
-        # Manual flow control - don't send initial flow
         :ok
       end
 
@@ -413,7 +411,6 @@ defmodule Pulsar.Consumer.Worker do
     {:stop, :broker_crashed, state}
   end
 
-  # Handle other info messages by delegating to callback module
   @impl true
   def handle_info(message, state) do
     case state.callback_module.handle_info(message, state.callback_state) do
@@ -462,13 +459,11 @@ defmodule Pulsar.Consumer.Worker do
 
     nacked_ids =
       Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
-        # message_id_to_ack can be single value or list
         message_ids_list =
           if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
 
         case send_to_dead_letter(state, message.payload, List.first(message_ids_list)) do
           :ok ->
-            # ACK all message IDs since it's now in DLQ (for chunks, ACK all chunks)
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
               ack_type: :Individual,
@@ -485,7 +480,6 @@ defmodule Pulsar.Consumer.Worker do
         end
       end)
 
-    # Add failed DLQ sends to nacked messages for redelivery
     new_nacked_messages =
       if state.redelivery_interval do
         MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
@@ -528,13 +522,11 @@ defmodule Pulsar.Consumer.Worker do
         state.callback_module.handle_invalid_message(message, callback_state)
       end
 
-    # message_id_to_ack can be single value or list (chunked messages)
     message_ids_list =
       if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
 
     case result do
       {:ok, new_callback_state} ->
-        # ACK all message IDs (for chunked messages, this ACKs all chunks)
         ack_command = %Binary.CommandAck{
           consumer_id: state.consumer_id,
           ack_type: :Individual,
@@ -546,7 +538,6 @@ defmodule Pulsar.Consumer.Worker do
         {new_callback_state, nacked_acc}
 
       {:noreply, new_callback_state} ->
-        # Manual ACK/NACK - callback handles it
         {new_callback_state, nacked_acc}
 
       {:error, reason, new_callback_state} ->
@@ -556,7 +547,6 @@ defmodule Pulsar.Consumer.Worker do
           "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
         )
 
-        # NACK all message IDs (for chunked messages, this NACKs all chunks)
         {new_callback_state, message_ids_list ++ nacked_acc}
 
       unexpected_result ->
@@ -617,15 +607,10 @@ defmodule Pulsar.Consumer.Worker do
 
     new_nacked_messages =
       if state.redelivery_interval do
-        # Track all messages for periodic redelivery
         Enum.reduce(message_ids, state.nacked_messages, fn message_id, acc ->
           MapSet.put(acc, message_id)
         end)
       else
-        # No periodic redelivery configured, so we don't track nacked messages
-        # Note: Without redelivery_interval, messages won't be automatically redelivered
-        # and DLQ won't be triggered. Consider configuring :redelivery_interval and
-        # :dead_letter_policy for production use.
         Logger.debug("NACKed #{length(message_ids)} message(s), but no redelivery_interval configured")
         state.nacked_messages
       end
@@ -724,7 +709,6 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp send_initial_flow(broker_pid, consumer_id, permits) do
-    # Initial flow starts from 0 outstanding permits
     send_flow_command(broker_pid, consumer_id, permits, 0)
   end
 
@@ -761,7 +745,6 @@ defmodule Pulsar.Consumer.Worker do
       messagePermits: permits
     }
 
-    # Metadata for :start event
     start_metadata = %{
       consumer_id: consumer_id,
       permits_requested: permits,
@@ -806,7 +789,6 @@ defmodule Pulsar.Consumer.Worker do
     max_redelivery = Keyword.get(policy, :max_redelivery)
     topic = Keyword.get(policy, :topic)
 
-    # Validate max_redelivery
     validated_max_redelivery =
       case max_redelivery do
         n when is_integer(n) and n >= 1 -> n
@@ -821,7 +803,6 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp start_dead_letter_producer(state) do
-    # Generate default dead letter topic if not provided
     dead_letter_topic =
       state.dead_letter_topic ||
         "#{state.topic}-#{state.subscription_name}-DLQ"
@@ -868,7 +849,6 @@ defmodule Pulsar.Consumer.Worker do
     payload
   end
 
-  # Constructs Pulsar.Message structs from unwrapped non-chunked messages
   defp build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped_messages) do
     base_message_id = command.message_id
 
@@ -916,7 +896,6 @@ defmodule Pulsar.Consumer.Worker do
     }
   end
 
-  # Constructs Pulsar.Message struct from complete chunked message
   defp build_message_from_chunk(chunk_metadata, payload) do
     %Pulsar.Message{
       command: Map.get(chunk_metadata, :commands, []),
@@ -951,7 +930,6 @@ defmodule Pulsar.Consumer.Worker do
 
     <<payload::bytes-size(^payload_size), rest::binary>> = data
 
-    # Build individual message as {metadata, payload} tuple
     message = {single_metadata, payload}
 
     parse_batch_messages(rest, count - 1, [message | acc])
@@ -977,8 +955,6 @@ defmodule Pulsar.Consumer.Worker do
     :ok
   end
 
-  # Returns {state, messages} where messages is a list of Pulsar.Message structs
-  # Returns empty list if chunks are incomplete, or a list with one complete message
   defp maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata) do
     base_message_id = command.message_id
     uuid = metadata.uuid
@@ -1033,7 +1009,6 @@ defmodule Pulsar.Consumer.Worker do
     new_state = %{state | chunked_message_contexts: new_contexts}
 
     if ChunkedMessageContext.complete?(ctx) do
-      # Complete - assemble and return complete message
       complete_payload = ChunkedMessageContext.assemble_payload(ctx)
 
       :telemetry.execute(
@@ -1042,10 +1017,8 @@ defmodule Pulsar.Consumer.Worker do
         %{uuid: uuid, consumer_id: state.consumer_id}
       )
 
-      # Remove from context since it's complete
       final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
 
-      # Include all message IDs so they can all be ACKed
       all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
 
       chunk_metadata = %{
@@ -1062,7 +1035,6 @@ defmodule Pulsar.Consumer.Worker do
       message = build_message_from_chunk(chunk_metadata, complete_payload)
       {final_state, [message]}
     else
-      # Incomplete - don't return any message yet, keep waiting for more chunks
       {new_state, []}
     end
   end

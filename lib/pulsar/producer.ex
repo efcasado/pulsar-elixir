@@ -14,8 +14,7 @@ defmodule Pulsar.Producer do
 
       Supervisor.start_link(children, strategy: :one_for_one)
 
-  A producer resolves its brokers through the registries its client owns, so it runs under
-  that client and is started again whenever the client restarts.
+  See `Pulsar.Client` for how declared and runtime resources differ, and for `start/1`.
 
   Then publish through the name it was registered under:
 
@@ -24,10 +23,6 @@ defmodule Pulsar.Producer do
   A producer is a supervisor over one worker per partition and per `:producer_count`, so
   a partitioned topic needs nothing special at the call site. Messages are routed across
   partitions, honouring a message's partition key when one is set.
-
-  For sets that are only known at runtime, `start/1` and `stop/2` add and remove producers
-  against a running client. Those are not recreated if the client restarts; declared ones
-  are.
 
   ## Options
 
@@ -265,8 +260,6 @@ defmodule Pulsar.Producer do
 
   # Resolved by the caller for Pulsar.Producer.start/2, so that the lookup and its retries
   # do not run inside the client's supervisor and block every other producer start.
-  # The pid alone does not say which client owns it, and the named supervisor for the
-  # client we assume may not exist, so a failed lookup falls back to stopping the process.
   # Asking the process which supervisor owns it, rather than deriving one from `:client`:
   # a pid carries no clue which client it belongs to, and stopping a permanent child any
   # other way just has its supervisor start it again.
