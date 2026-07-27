@@ -32,7 +32,7 @@ from a Pulsar topic is using the Reader interface, reading through a client in y
 supervision tree:
 
 ```elixir
-children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
+{:ok, _} = Supervisor.start_link([{Pulsar.Client, host: "pulsar://localhost:6650"}], strategy: :one_for_one)
 
 "persistent://my-tenant/my-namespace/my-topic"
 |> Pulsar.Reader.stream(timeout: 100)

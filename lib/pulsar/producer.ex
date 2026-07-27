@@ -157,7 +157,7 @@ defmodule Pulsar.Producer do
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: stop(pid)
+    with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
   end
 
   @doc """

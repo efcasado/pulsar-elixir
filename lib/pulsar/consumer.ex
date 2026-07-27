@@ -157,7 +157,7 @@ defmodule Pulsar.Consumer do
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: stop(pid)
+    with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
   end
 
   @doc """
@@ -209,18 +209,8 @@ defmodule Pulsar.Consumer do
   Takes the pid of the consumer that delivered them, which inside a callback is `self()`,
   or the name of a consumer.
   """
-  @spec ack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
-          :ok | {:error, term()}
-  def ack(consumer, message_ids, opts \\ [])
-
-  def ack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
-
-  def ack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
-    case lookup(name, opts) do
-      {:ok, pid} -> Worker.ack(pid, message_ids)
-      {:error, :not_found} -> {:error, :consumer_not_found}
-    end
-  end
+  @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
+  def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
 
   @doc """
   Negatively acknowledges one or more messages, asking the broker to redeliver them.
@@ -228,18 +218,8 @@ defmodule Pulsar.Consumer do
   Redelivered messages that exceed `:max_redelivery` go to the dead letter topic when
   `:dead_letter_policy` is configured, whether they were acknowledged manually or not.
   """
-  @spec nack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
-          :ok | {:error, term()}
-  def nack(consumer, message_ids, opts \\ [])
-
-  def nack(consumer, message_ids, _opts) when is_pid(consumer), do: Worker.nack(consumer, message_ids)
-
-  def nack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
-    case lookup(name, opts) do
-      {:ok, pid} -> Worker.nack(pid, message_ids)
-      {:error, :not_found} -> {:error, :consumer_not_found}
-    end
-  end
+  @spec nack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
+  def nack(consumer, message_ids) when is_pid(consumer), do: Worker.nack(consumer, message_ids)
 
   @doc """
   Grants a consumer more flow permits.
@@ -252,9 +232,9 @@ defmodule Pulsar.Consumer do
   def send_flow(consumer, permits, _opts) when is_pid(consumer), do: Worker.send_flow(consumer, permits)
 
   def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
-    case lookup(name, opts) do
-      {:ok, pid} -> Worker.send_flow(pid, permits)
+    case workers(name, opts) do
       {:error, :not_found} -> {:error, :consumer_not_found}
+      workers -> Enum.each(workers, &Worker.send_flow(&1, permits))
     end
   end
 
