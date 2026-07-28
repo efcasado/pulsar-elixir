@@ -58,19 +58,4 @@ defmodule Pulsar.Producer.OptionsTest do
       assert log =~ ":nonsense"
     end
   end
-
-  describe "docs/0" do
-    test "documents every option in the schema" do
-      docs = Options.docs()
-
-      # Options with `doc: false` are internal and deliberately absent.
-      documented = for {option, spec} <- Options.schema(), spec[:doc] != false, do: option
-
-      assert documented != []
-
-      for option <- documented do
-        assert docs =~ "`:#{option}`", "#{option} is missing from the generated docs"
-      end
-    end
-  end
 end

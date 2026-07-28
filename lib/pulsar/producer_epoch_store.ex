@@ -63,19 +63,26 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.get(:default, "my-topic", "my-producer", :Exclusive)
+      iex> Pulsar.ProducerEpochStore.init(:stored)
+      iex> Pulsar.ProducerEpochStore.put(:stored, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.ProducerEpochStore.get(:stored, "my-topic", "my-producer", :Exclusive)
       {:ok, 5}
 
-      iex> ProducerEpochStore.get(:default, "new-topic", "new-producer", :Shared)
+      iex> Pulsar.ProducerEpochStore.init(:unstored)
+      iex> Pulsar.ProducerEpochStore.get(:unstored, "new-topic", "new-producer", :Shared)
       :error
   """
   @spec get(atom(), String.t(), String.t(), atom()) :: {:ok, integer()} | :error
   def get(client_name, topic, producer_name, access_mode) do
     table = table_name(client_name)
 
-    case :ets.lookup(table, {topic, producer_name, access_mode}) do
-      [{_, epoch}] -> {:ok, epoch}
-      [] -> :error
+    if :ets.whereis(table) == :undefined do
+      :error
+    else
+      case :ets.lookup(table, {topic, producer_name, access_mode}) do
+        [{_, epoch}] -> {:ok, epoch}
+        [] -> :error
+      end
     end
   end
 
@@ -96,7 +103,8 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.put(:default, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.ProducerEpochStore.init(:written)
+      iex> Pulsar.ProducerEpochStore.put(:written, "my-topic", "my-producer", :Exclusive, 5)
       :ok
   """
   @spec put(atom(), String.t(), String.t(), atom(), integer()) :: :ok | :error
@@ -127,8 +135,12 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> ProducerEpochStore.delete(:default, "my-topic", "my-producer", :Exclusive)
+      iex> Pulsar.ProducerEpochStore.init(:removed)
+      iex> Pulsar.ProducerEpochStore.put(:removed, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.ProducerEpochStore.delete(:removed, "my-topic", "my-producer", :Exclusive)
       :ok
+      iex> Pulsar.ProducerEpochStore.get(:removed, "my-topic", "my-producer", :Exclusive)
+      :error
   """
   @spec delete(atom(), String.t(), String.t(), atom()) :: :ok | :error
   def delete(client_name, topic, producer_name, access_mode) do

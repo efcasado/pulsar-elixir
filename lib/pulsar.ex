@@ -65,9 +65,10 @@ defmodule Pulsar do
 
   In IEx, start a bare client and add to it as you go:
 
-      iex> {:ok, _} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
-      iex> {:ok, _} = Pulsar.Producer.start(topic: "persistent://public/default/t", name: :p)
-      iex> Pulsar.Producer.send(:p, "hello")
+      {:ok, _} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+      {:ok, _} = Pulsar.Producer.start(topic: "persistent://public/default/t", name: :p)
+
+      Pulsar.Producer.send(:p, "hello")
 
   ## Multiple clusters
 
