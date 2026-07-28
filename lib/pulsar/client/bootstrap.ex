@@ -1,11 +1,24 @@
 defmodule Pulsar.Client.Bootstrap do
   @moduledoc false
 
+  # The client's last static child: it connects the bootstrap broker into BrokerSupervisor,
+  # alongside every broker discovered later, and then starts the consumers and producers
+  # declared on the client. Being static, it runs again on every restart of the client, which
+  # is how both come back where a DynamicSupervisor, having no static child list, cannot
+  # bring them back itself.
+  #
+  # The connection is required — a client that cannot reach its bootstrap broker stops, and
+  # the failure reaches whoever started it. Declared resources are not: they are retried with
+  # backoff, since a broker that is unreachable now is usually reachable later.
+
   use GenServer
 
+  alias Pulsar.Backoff
   alias Pulsar.Client
 
   require Logger
+
+  @default_max_backoff 30_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -15,35 +28,81 @@ defmodule Pulsar.Client.Bootstrap do
   def init(opts) do
     client = Keyword.fetch!(opts, :name)
 
-    case Client.start_broker(Keyword.fetch!(opts, :host), client: client) do
-      {:ok, _broker} ->
-        start_all(Pulsar.Producer, Keyword.fetch!(opts, :producers), client)
-        start_all(Pulsar.Consumer, Keyword.fetch!(opts, :consumers), client)
-        :ignore
+    {:ok, _broker} = Client.start_broker(Keyword.fetch!(opts, :host), client: client)
 
-      {:error, reason} ->
-        {:stop, {:broker_startup_failed, reason}}
-    end
+    pending =
+      Enum.map(Keyword.fetch!(opts, :producers), &{Pulsar.Producer, &1}) ++
+        Enum.map(Keyword.fetch!(opts, :consumers), &{Pulsar.Consumer, &1})
+
+    state = %{client: client, pending: pending, declared: length(pending), backoff: 0}
+
+    # Starting the resources here rather than in init/1 keeps them off the client's boot:
+    # resolving a topic's partitions takes seconds against a broker that is not up yet.
+    {:ok, state, {:continue, :start_declared}}
   end
 
-  defp start_all(module, entries, client) do
-    Enum.each(entries, fn opts ->
-      case module.start(opts) do
-        {:ok, _pid} ->
-          :ok
+  @impl true
+  def handle_continue(:start_declared, state) do
+    {:noreply, attempt(state)}
+  end
 
-        {:ok, _pid, _info} ->
-          :ok
+  @impl true
+  def handle_info(:retry, state) do
+    {:noreply, attempt(state)}
+  end
 
-        {:error, {:already_started, _pid}} ->
-          :ok
+  defp attempt(%{pending: []} = state), do: state
 
-        {:error, reason} ->
-          Logger.error(
-            "Pulsar client #{inspect(client)} could not start #{inspect(module)} " <>
-              "for #{inspect(Keyword.get(opts, :topic))}: #{inspect(reason)}"
-          )
-      end
-    end)
+  defp attempt(state) do
+    {pending, last_error} =
+      Enum.reduce(state.pending, {[], nil}, fn {module, opts}, {pending, last_error} ->
+        case module.start(opts) do
+          {:ok, _pid} ->
+            {pending, last_error}
+
+          {:ok, _pid, _info} ->
+            {pending, last_error}
+
+          # Every resource this starts is dead by the time it runs again, so a name still
+          # registered belongs to a process on its way out and the registry has yet to catch
+          # up. Process.alive?/1 is no help — it stays true until the exit is processed — so
+          # this stays pending and the retry starts it a moment later.
+          {:error, {:already_started, pid}} ->
+            {[{module, opts} | pending], {:already_started, pid}}
+
+          {:error, reason} ->
+            {[{module, opts} | pending], reason}
+        end
+      end)
+
+    reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
+  end
+
+  defp reschedule(%{pending: []} = state, _last_error) do
+    if state.backoff > 0 do
+      Logger.info("Pulsar client #{inspect(state.client)}: all #{state.declared} declared resources are running")
+    end
+
+    %{state | backoff: 0}
+  end
+
+  defp reschedule(state, last_error) do
+    wait = Backoff.next(state.backoff, max_backoff(state.client))
+    running = state.declared - length(state.pending)
+
+    Logger.error(
+      "Pulsar client #{inspect(state.client)}: #{running} of #{state.declared} declared resources " <>
+        "running (#{inspect(last_error)}); retrying in #{wait}ms"
+    )
+
+    Process.send_after(self(), :retry, wait)
+
+    %{state | backoff: wait}
+  end
+
+  defp max_backoff(client) do
+    client
+    |> Client.get_broker_opts()
+    |> Keyword.get(:max_backoff, @default_max_backoff)
   end
 end

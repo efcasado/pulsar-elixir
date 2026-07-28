@@ -79,7 +79,15 @@ defmodule Pulsar.Client do
               Consumers to run under this client, each a keyword list of `Pulsar.Consumer`
               options. Their `:client` is set to this one. They are started again whenever
               the client restarts, unlike consumers added later with `Pulsar.Consumer.start/1`.
-              A consumer that fails to start is logged and skipped; it does not stop the client.
+
+              They start just after the client rather than during its startup, so that resolving
+              a topic against an unreachable broker cannot block your application's boot: a
+              client that is up may not have them yet. `Pulsar.Consumer.start/1` is synchronous
+              if you need one before the next line runs.
+
+              One that fails to start does not stop the client: it is logged and retried with
+              backoff, so a consumer whose broker is unreachable at boot starts once the broker
+              is reachable.
               """
             ],
             producers: [

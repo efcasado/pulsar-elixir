@@ -19,6 +19,7 @@ defmodule Pulsar.Broker do
 
   @behaviour :gen_statem
 
+  alias Pulsar.Backoff
   alias Pulsar.Broker.Options
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
@@ -960,13 +961,8 @@ defmodule Pulsar.Broker do
     end
   end
 
-  defp next_backoff(%__MODULE__{prev_backoff: 0}) do
-    :rand.uniform(100)
-  end
-
   defp next_backoff(%__MODULE__{prev_backoff: prev, max_backoff: max_backoff}) do
-    next = min(round(prev * 2), max_backoff)
-    next + :rand.uniform(100)
+    Backoff.next(prev, max_backoff)
   end
 
   defp get_auth_method_name(type: type, opts: opts) do

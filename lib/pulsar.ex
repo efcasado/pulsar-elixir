@@ -116,13 +116,17 @@ defmodule Pulsar do
           │       ├── partition-1 → P3
           │       ├── partition-2 → P4
           │       └── PartitionDiscovery (polls for newly added partitions)
-          └── Bootstrap             (no process; runs at startup)
+          └── Bootstrap             (connects Broker 1, starts declared resources)
 
-  `ConsumerSupervisor` and `ProducerSupervisor` are `DynamicSupervisor`s, which have no
-  static child list and so come back empty when restarted. `Bootstrap` is the client's last
-  static child: it connects the bootstrap broker, starts everything named in `:producers`
-  and `:consumers`, and returns `:ignore`, so it leaves no process behind but runs again on
-  each restart of the client.
+  `BrokerSupervisor`, `ConsumerSupervisor` and `ProducerSupervisor` are `DynamicSupervisor`s,
+  which have no static child list and so come back empty when restarted. `Bootstrap` is what
+  fills them: it connects `Broker 1` and then starts everything named in `:producers` and
+  `:consumers`. Being static, it runs again on every restart of the client.
+
+  The connection is required — a client that cannot reach its bootstrap broker stops, and the
+  error reaches whoever started it. Declared resources are not: one that fails is logged and
+  retried with backoff, so a consumer whose broker is briefly unreachable starts once it is
+  reachable rather than being abandoned.
 
   The client supervises with `:rest_for_one`, because its children are in dependency order
   and resources register their names in the registries as they start. Under `:one_for_one` a
