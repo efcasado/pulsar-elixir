@@ -103,7 +103,6 @@ defmodule Pulsar.Client do
 
   ## Public API
 
-  # Several clients can sit in one supervision tree, so the id cannot be the module.
   @doc false
   def child_spec(opts) do
     %{
@@ -150,7 +149,6 @@ defmodule Pulsar.Client do
       {Bootstrap, opts}
     ]
 
-    # :one_for_one would let a registry come back empty with its registrations still alive.
     Supervisor.init(children, strategy: :rest_for_one)
   end
 

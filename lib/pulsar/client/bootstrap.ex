@@ -1,15 +1,6 @@
 defmodule Pulsar.Client.Bootstrap do
   @moduledoc false
 
-  # The client's last static child: it connects the bootstrap broker into BrokerSupervisor,
-  # alongside every broker discovered later, and then starts the consumers and producers
-  # declared on the client. Being static, it runs again on every restart of the client, which
-  # is how both come back where a DynamicSupervisor, having no static child list, cannot
-  # bring them back itself.
-  #
-  # The connection is required and the declared resources are not; see `Pulsar.Client`'s
-  # `:consumers` option for what that means for a caller.
-
   use GenServer
 
   alias Pulsar.Backoff
@@ -36,8 +27,7 @@ defmodule Pulsar.Client.Bootstrap do
 
     state = %{client: client, pending: pending, declared: length(pending), backoff: 0}
 
-    # Starting the resources here rather than in init/1 keeps them off the client's boot:
-    # resolving a topic's partitions takes seconds against a broker that is not up yet.
+    # Off init/1 so resolving a topic against an unreachable broker cannot block the host's boot.
     {:ok, state, {:continue, :start_declared}}
   end
 
@@ -76,9 +66,8 @@ defmodule Pulsar.Client.Bootstrap do
     reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
   end
 
-  # A name can still be registered to a process on its way out, and Process.alive?/1 stays
-  # true until that exit is processed. Waiting briefly for a DOWN separates the two: a
-  # resource that survived this restart is running, a dying one stays pending for the retry.
+  # Process.alive?/1 stays true until a dying process's exit is processed, so it cannot tell a
+  # resource that survived this restart from one on its way out. Waiting for a DOWN can.
   defp running?(pid) do
     ref = Process.monitor(pid)
 

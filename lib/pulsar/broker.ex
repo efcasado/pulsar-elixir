@@ -257,7 +257,7 @@ defmodule Pulsar.Broker do
 
   # Disconnected state
   def disconnected(:enter, :connected, broker) do
-    wait = next_backoff(broker)
+    wait = Backoff.next(broker.prev_backoff, broker.max_backoff)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
     # Explicitly close the socket to ensure the remote broker cleans up consumers/producers.
@@ -320,7 +320,7 @@ defmodule Pulsar.Broker do
         {:next_state, :connected, broker, actions}
 
       {:error, error} ->
-        wait = next_backoff(broker)
+        wait = Backoff.next(broker.prev_backoff, broker.max_backoff)
         Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
@@ -959,10 +959,6 @@ defmodule Pulsar.Broker do
       {:ok, commands, buffer} -> {:ok, commands, %{broker | buffer: buffer}}
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp next_backoff(%__MODULE__{prev_backoff: prev, max_backoff: max_backoff}) do
-    Backoff.next(prev, max_backoff)
   end
 
   defp get_auth_method_name(type: type, opts: opts) do

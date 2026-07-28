@@ -21,6 +21,13 @@
 
 ## Basic Usage
 
+`Pulsar.Producer.start/2` and `Pulsar.Consumer.start/4` add resources to a running client, so
+start one first — in your supervision tree, or directly in a script:
+
+```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+```
+
 ### Producers
 
 ```elixir

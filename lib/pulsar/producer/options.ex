@@ -3,8 +3,6 @@ defmodule Pulsar.Producer.Options do
 
   require Logger
 
-  # Options whose current default is read from the application environment carry no
-  # default here: they have to stay absent so the process that reads them can still
   @schema [
     partitions: [
       type: :non_neg_integer,

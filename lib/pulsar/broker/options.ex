@@ -78,8 +78,6 @@ defmodule Pulsar.Broker.Options do
     Keyword.merge(rest, default_socket_opts(NimbleOptions.validate!(known, @schema)))
   end
 
-  # Resolved here rather than in the schema: the CA bundle's path is a property of the
-  # machine, not of the compiled library.
   defp default_socket_opts(opts) do
     Keyword.put_new(opts, :socket_opts, verify: :verify_peer, cacertfile: CAStore.file_path())
   end
