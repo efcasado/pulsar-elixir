@@ -2,44 +2,17 @@ defmodule Pulsar.Consumer do
   @moduledoc """
   A consumer subscribes to a topic and hands each message to a callback module.
 
-  Declare one on the client it belongs to:
+  This module is how you add, inspect and stop consumers. To declare them on a client
+  instead, so they start and restart with it, see `Pulsar.Client`. The callback module
+  they dispatch into is `Pulsar.Consumer.Callback`.
 
-      children = [
-        {Pulsar.Client,
-         host: "pulsar://localhost:6650",
-         consumers: [
-           [topic: "persistent://public/default/orders",
-            subscription_name: "order-service",
-            callback_module: MyApp.OrderHandler]
-         ]}
-      ]
+  `start/1` adds a consumer to a running client and `stop/2` removes it. A consumer is a
+  supervisor over one worker per partition and per `:consumer_count`, so `workers/2` and
+  `partitions/2` report what it is made of, `lookup/2` finds one by name, and `topic/1`
+  answers at any level of it.
 
-      Supervisor.start_link(children, strategy: :one_for_one)
-
-  See `Pulsar.Client` for how declared and runtime resources differ, and for `start/1`.
-
-  A consumer is a supervisor over one worker per partition and per `:consumer_count`, so
-  a partitioned topic needs nothing special at the call site. Partition count is resolved
-  at startup, and new partitions are picked up by `:partition_discovery_interval_ms`.
-
-  ## Callback module
-
-  The callback module implements `Pulsar.Consumer.Callback`:
-
-      defmodule MyApp.OrderHandler do
-        use Pulsar.Consumer.Callback
-
-        @impl true
-        def handle_message(message, state) do
-          IO.puts(message.payload)
-          {:ok, state}
-        end
-      end
-
-  Returning `{:ok, state}` acknowledges the message and `{:error, reason}` negatively
-  acknowledges it. To acknowledge outside the callback's return value — when handing the
-  message to another process, say — return `{:noreply, state}` and call `ack/2` or
-  `nack/2` with the consumer's own pid.
+  `ack/2`, `nack/2` and `send_flow/3` act on a worker — `self()` inside a callback — for
+  manual acknowledgement and flow control.
 
   ## Options
 

@@ -39,11 +39,6 @@ defmodule Pulsar.Broker.Options do
       default: 60_000,
       doc: "Milliseconds after which a request without a response is failed."
     ],
-    max_backoff: [
-      type: :pos_integer,
-      default: 30_000,
-      doc: "Longest wait between attempts to reconnect to a broker, in milliseconds."
-    ],
     socket_opts: [
       type: {:list, :any},
       doc: """

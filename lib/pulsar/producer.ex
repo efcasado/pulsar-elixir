@@ -2,27 +2,19 @@ defmodule Pulsar.Producer do
   @moduledoc """
   A producer publishes messages to a topic.
 
-  Declare one on the client it belongs to:
+  This module is how you add, publish through, inspect and stop producers. To declare them
+  on a client instead, so they start and restart with it, see `Pulsar.Client`.
 
-      children = [
-        {Pulsar.Client,
-         host: "pulsar://localhost:6650",
-         producers: [
-           [topic: "persistent://public/default/audit", name: :audit]
-         ]}
-      ]
-
-      Supervisor.start_link(children, strategy: :one_for_one)
-
-  See `Pulsar.Client` for how declared and runtime resources differ, and for `start/1`.
-
-  Then publish through the name it was registered under:
+  `send/3` publishes, taking a producer's pid or the name it was registered under:
 
       {:ok, message_id} = Pulsar.Producer.send(:audit, "payload")
 
-  A producer is a supervisor over one worker per partition and per `:producer_count`, so
-  a partitioned topic needs nothing special at the call site. Messages are routed across
-  partitions, honouring a message's partition key when one is set.
+  A partitioned topic needs nothing special at the call site: messages are routed across
+  partitions, honouring a message's `:partition_key` when one is set.
+
+  `start/1` adds a producer to a running client and `stop/2` removes it. A producer is a
+  supervisor over one worker per partition and per `:producer_count`, so `workers/2` and
+  `partitions/2` report what it is made of, and `lookup/2` finds one by name.
 
   ## Options
 

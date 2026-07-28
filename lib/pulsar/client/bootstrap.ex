@@ -8,7 +8,6 @@ defmodule Pulsar.Client.Bootstrap do
 
   require Logger
 
-  @default_max_backoff 30_000
   @settle_ms 100
 
   def start_link(opts) do
@@ -89,7 +88,7 @@ defmodule Pulsar.Client.Bootstrap do
   end
 
   defp reschedule(state, last_error) do
-    wait = Backoff.next(state.backoff, max_backoff(state.client))
+    wait = Backoff.next(state.backoff)
     running = state.declared - length(state.pending)
 
     Logger.error(
@@ -100,11 +99,5 @@ defmodule Pulsar.Client.Bootstrap do
     Process.send_after(self(), :retry, wait)
 
     %{state | backoff: wait}
-  end
-
-  defp max_backoff(client) do
-    client
-    |> Client.get_broker_opts()
-    |> Keyword.get(:max_backoff, @default_max_backoff)
   end
 end

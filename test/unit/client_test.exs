@@ -113,7 +113,6 @@ defmodule Pulsar.ClientTest do
       assert opts[:ping_interval] == 60_000
       assert opts[:cleanup_interval] == 30_000
       assert opts[:request_timeout] == 60_000
-      assert opts[:max_backoff] == 30_000
     end
 
     test "prefers an option passed to start_link over the default" do

@@ -40,7 +40,6 @@ defmodule Pulsar.Broker do
     :ping_interval,
     :cleanup_interval,
     :request_timeout,
-    :max_backoff,
     {:buffer, <<>>},
     {:requests, %{}},
     {:actions, []},
@@ -63,7 +62,6 @@ defmodule Pulsar.Broker do
           ping_interval: timeout(),
           cleanup_interval: timeout(),
           request_timeout: timeout(),
-          max_backoff: pos_integer(),
           buffer: Pulsar.Protocol.buffer(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
@@ -257,7 +255,7 @@ defmodule Pulsar.Broker do
 
   # Disconnected state
   def disconnected(:enter, :connected, broker) do
-    wait = Backoff.next(broker.prev_backoff, broker.max_backoff)
+    wait = Backoff.next(broker.prev_backoff)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
     # Explicitly close the socket to ensure the remote broker cleans up consumers/producers.
@@ -320,7 +318,7 @@ defmodule Pulsar.Broker do
         {:next_state, :connected, broker, actions}
 
       {:error, error} ->
-        wait = Backoff.next(broker.prev_backoff, broker.max_backoff)
+        wait = Backoff.next(broker.prev_backoff)
         Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
