@@ -48,6 +48,7 @@ defmodule Pulsar.Consumer do
 
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
+  alias Pulsar.PartitionTopic
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
 
@@ -199,14 +200,17 @@ defmodule Pulsar.Consumer do
   @doc """
   Acknowledges one or more messages, marking them as processed.
 
-  Takes the pid of the consumer that delivered them, which inside a callback is `self()`,
-  or the name of a consumer.
+  Takes the pid of the worker that delivered them, which inside a callback is `self()`.
+  Not a group or a name: an acknowledgement carries the consumer id of the worker the
+  broker sent the message to, so no other worker can answer for it.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
 
   @doc """
   Negatively acknowledges one or more messages, asking the broker to redeliver them.
+
+  Takes the pid of the worker that delivered them, on the same terms as `ack/2`.
 
   Redelivered messages that exceed `:max_redelivery` go to the dead letter topic when
   `:dead_letter_policy` is configured, whether they were acknowledged manually or not.
@@ -233,8 +237,37 @@ defmodule Pulsar.Consumer do
 
   @doc """
   Returns the topic a consumer is subscribed to.
+
+  Takes any of the pids a consumer is made of: the one `start/1` returns, a partition's
+  group, or a worker. A worker reports the partition it is subscribed to, the others the
+  topic they cover.
   """
-  defdelegate topic(consumer), to: Worker
+  @spec topic(pid()) :: String.t() | {:error, :not_found}
+  def topic(consumer) do
+    case kind(consumer) do
+      :worker -> Worker.topic(consumer)
+      :group -> worker_topic(consumer)
+      :partitioned -> with topic when is_binary(topic) <- worker_topic(consumer), do: PartitionTopic.base(topic)
+    end
+  end
+
+  defp worker_topic(supervisor) do
+    case collect_workers(supervisor) do
+      [worker | _rest] -> Worker.topic(worker)
+      [] -> {:error, :not_found}
+    end
+  end
+
+  # A supervisor cannot answer a GenServer call, so asking one for its topic would take
+  # the group down with it. :proc_lib.initial_call/1 tells the levels apart without
+  # walking the tree, which is what an earlier partition-routing bug turned on.
+  defp kind(pid) do
+    case :proc_lib.initial_call(pid) do
+      {:supervisor, Pulsar.Partitioned, _args} -> :partitioned
+      {:supervisor, Pulsar.Group, _args} -> :group
+      _worker -> :worker
+    end
+  end
 
   # Descends through the partition supervisors, if any, so a partitioned and a plain
   # consumer read the same. Matching on the worker module skips the partition discovery

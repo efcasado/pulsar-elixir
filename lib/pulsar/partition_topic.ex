@@ -32,4 +32,22 @@ defmodule Pulsar.PartitionTopic do
     |> List.last()
     |> String.to_integer()
   end
+
+  @doc """
+  Strips the partition suffix, returning the name a partition belongs to. A name without
+  one is returned unchanged.
+
+      iex> Pulsar.PartitionTopic.base("persistent://public/default/t-partition-3")
+      "persistent://public/default/t"
+
+      iex> Pulsar.PartitionTopic.base("persistent://public/default/t")
+      "persistent://public/default/t"
+  """
+  @spec base(String.t() | atom()) :: String.t()
+  def base(partition_name) do
+    partition_name
+    |> to_string()
+    |> String.split(@separator)
+    |> hd()
+  end
 end

@@ -13,10 +13,11 @@ Readers use **non-durable subscriptions**, meaning they don't persist their posi
 
 ## Basic Usage
 
-A Reader reads through a client, which belongs in your supervision tree:
+A Reader reads through a client, so there has to be one running. In an application it
+belongs in your supervision tree; in a script, start it directly:
 
 ```elixir
-children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
 
 "persistent://public/default/my-topic"
 |> Pulsar.Reader.stream()

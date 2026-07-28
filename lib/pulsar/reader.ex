@@ -6,9 +6,10 @@ defmodule Pulsar.Reader do
 
   ## Usage
 
-  A reader reads through a client, which belongs in your supervision tree:
+  A reader reads through a client, so there has to be one running. In an application it
+  belongs in your supervision tree; in a script, start it directly:
 
-      children = [{Pulsar.Client, host: "pulsar://localhost:6650"}]
+      {:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
 
       Pulsar.Reader.stream("persistent://public/default/my-topic", start_position: :earliest)
       |> Stream.take(10)
