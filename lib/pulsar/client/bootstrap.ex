@@ -18,6 +18,7 @@ defmodule Pulsar.Client.Bootstrap do
   require Logger
 
   @default_max_backoff 30_000
+  @settle_ms 100
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -62,12 +63,10 @@ defmodule Pulsar.Client.Bootstrap do
           {:ok, _pid, _info} ->
             {pending, last_error}
 
-          # Every resource this starts is dead by the time it runs again, so a name still
-          # registered belongs to a process on its way out and the registry has yet to catch
-          # up. Process.alive?/1 is no help — it stays true until the exit is processed — so
-          # this stays pending and the retry starts it a moment later.
           {:error, {:already_started, pid}} ->
-            {[{module, opts} | pending], {:already_started, pid}}
+            if running?(pid),
+              do: {pending, last_error},
+              else: {[{module, opts} | pending], {:already_started, pid}}
 
           {:error, reason} ->
             {[{module, opts} | pending], reason}
@@ -75,6 +74,21 @@ defmodule Pulsar.Client.Bootstrap do
       end)
 
     reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
+  end
+
+  # A name can still be registered to a process on its way out, and Process.alive?/1 stays
+  # true until that exit is processed. Waiting briefly for a DOWN separates the two: a
+  # resource that survived this restart is running, a dying one stays pending for the retry.
+  defp running?(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, _pid, _reason} -> false
+    after
+      @settle_ms ->
+        Process.demonitor(ref, [:flush])
+        true
+    end
   end
 
   defp reschedule(%{pending: []} = state, _last_error) do

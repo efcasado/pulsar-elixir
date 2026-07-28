@@ -42,12 +42,17 @@ defmodule Pulsar.PartitionTopic do
 
       iex> Pulsar.PartitionTopic.base("persistent://public/default/t")
       "persistent://public/default/t"
+
+  Only a trailing index is a partition suffix; the convention is not reserved, so a topic
+  may contain the separator itself:
+
+      iex> Pulsar.PartitionTopic.base("persistent://public/default/events-partition-archive-partition-0")
+      "persistent://public/default/events-partition-archive"
   """
   @spec base(String.t() | atom()) :: String.t()
   def base(partition_name) do
     partition_name
     |> to_string()
-    |> String.split(@separator)
-    |> hd()
+    |> String.replace(~r/#{Regex.escape(@separator)}\d+$/, "")
   end
 end

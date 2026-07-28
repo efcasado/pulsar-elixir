@@ -70,9 +70,22 @@ defmodule Main do
         consumers: consumers(@num_players, @card_size, @topic)
       )
 
+    await_players()
+
     spawn(fn -> call_numbers(1..99, :game_master) end)
 
     and_the_winner_is()
+  end
+
+  defp await_players do
+    ready? =
+      match?({:ok, _pid}, Pulsar.Producer.lookup(:game_master)) and
+        Enum.all?(1..@num_players, &match?({:ok, _pid}, Pulsar.Consumer.lookup("player-#{&1}")))
+
+    if !ready? do
+      Process.sleep(100)
+      await_players()
+    end
   end
 
   defp consumers(num_players, card_size, topic) do
