@@ -7,9 +7,8 @@ defmodule Pulsar.Client.Bootstrap do
   # is how both come back where a DynamicSupervisor, having no static child list, cannot
   # bring them back itself.
   #
-  # The connection is required — a client that cannot reach its bootstrap broker stops, and
-  # the failure reaches whoever started it. Declared resources are not: they are retried with
-  # backoff, since a broker that is unreachable now is usually reachable later.
+  # The connection is required and the declared resources are not; see `Pulsar.Client`'s
+  # `:consumers` option for what that means for a caller.
 
   use GenServer
 

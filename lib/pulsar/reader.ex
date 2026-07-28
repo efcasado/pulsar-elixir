@@ -27,7 +27,6 @@ defmodule Pulsar.Reader do
 
   With custom flow control:
 
-      # Request 50 messages at a time
       Pulsar.Reader.stream(topic, flow_permits: 50) |> Enum.take(100)
 
   Reading from a specific message:
@@ -131,11 +130,9 @@ defmodule Pulsar.Reader do
 
   ## Examples
 
-      # Read from the earliest message
       Pulsar.Reader.stream("persistent://public/default/topic", start_position: :earliest)
       |> Enum.take(5)
 
-      # Read through a named client, filtering as you go
       Pulsar.Reader.stream("persistent://public/default/topic",
         client: :analytics,
         start_position: :latest

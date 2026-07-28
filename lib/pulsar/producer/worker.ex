@@ -101,7 +101,6 @@ defmodule Pulsar.Producer.Worker do
 
   @impl true
   def init(opts) do
-    # Trap exits so terminate/2 is called on shutdown
     Process.flag(:trap_exit, true)
 
     client = Keyword.fetch!(opts, :client)
