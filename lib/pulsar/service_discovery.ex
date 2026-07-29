@@ -89,6 +89,8 @@ defmodule Pulsar.ServiceDiscovery do
     )
   end
 
+  defp lookup_topic(nil, _topic, _authoritative, _client), do: {:error, :no_broker_available}
+
   defp lookup_topic(broker, topic, authoritative, client) do
     case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do
       {:ok, %{response: :Connect} = response} ->
