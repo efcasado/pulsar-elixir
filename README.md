@@ -97,6 +97,8 @@ children = [
   {Pulsar.Client, name: :client_1, host: "pulsar://host.cluster1.com:6650"},
   {Pulsar.Client, name: :client_2, host: "pulsar://host.cluster2.com:6650"}
 ]
+
+Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
 Anything declared on a client belongs to it. A consumer or producer added at runtime picks

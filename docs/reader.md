@@ -51,6 +51,8 @@ children = [
   {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
 ]
 
+Supervisor.start_link(children, strategy: :one_for_one)
+
 Pulsar.Reader.stream(topic, client: :analytics)
 ```
 

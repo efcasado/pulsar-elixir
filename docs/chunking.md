@@ -15,6 +15,13 @@ application layer.
 
 ### Producer Side
 
+`Pulsar.Producer.start/2` adds a producer to a running client, so start one first — in your
+supervision tree, or directly in a script:
+
+```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+```
+
 When a producer is configured with chunking enabled:
 
 ```elixir
@@ -189,6 +196,8 @@ num_permits = Pulsar.Message.num_broker_messages(message)
 ## Example: Complete Chunked Message Flow
 
 ```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
 # Producer sends large message
 {:ok, producer} = Pulsar.Producer.start(
   "large-files",
