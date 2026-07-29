@@ -46,26 +46,29 @@ defmodule Pulsar.Client.Bootstrap do
   defp attempt(%{pending: []} = state), do: state
 
   defp attempt(state) do
-    {pending, last_error} =
-      Enum.reduce(state.pending, {[], nil}, fn {module, opts}, {pending, last_error} ->
-        case module.start(opts) do
-          {:ok, _pid} ->
-            {pending, last_error}
-
-          {:ok, _pid, _info} ->
-            {pending, last_error}
-
-          {:error, {:already_started, pid}} ->
-            if running?(pid),
-              do: {pending, last_error},
-              else: {[{module, opts} | pending], {:already_started, pid}}
-
-          {:error, reason} ->
-            {[{module, opts} | pending], reason}
-        end
-      end)
+    {pending, last_error} = Enum.reduce(state.pending, {[], nil}, &start_declared/2)
 
     reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
+  end
+
+  defp start_declared({module, opts} = resource, {pending, last_error}) do
+    case start(module, opts) do
+      :started -> {pending, last_error}
+      {:pending, reason} -> {[resource | pending], reason}
+    end
+  end
+
+  defp start(module, opts) do
+    case module.start(opts) do
+      {:ok, _pid} -> :started
+      {:ok, _pid, _info} -> :started
+      {:error, {:already_started, pid}} -> already_started(pid)
+      {:error, reason} -> {:pending, reason}
+    end
+  end
+
+  defp already_started(pid) do
+    if running?(pid), do: :started, else: {:pending, {:already_started, pid}}
   end
 
   # Process.alive?/1 stays true until a dying process's exit is processed, so it cannot tell a
