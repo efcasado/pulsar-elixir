@@ -1,4 +1,4 @@
-defmodule Pulsar.PartitionDiscovery do
+defmodule Pulsar.Topic.Discovery do
   @moduledoc """
   Periodically polls a partitioned topic's metadata and grows a partitioned
   consumer/producer supervisor when new partitions are added to the topic.
@@ -9,7 +9,7 @@ defmodule Pulsar.PartitionDiscovery do
   not larger than the current one (including a transient lookup error) is
   ignored.
 
-  This runs as a `:worker` child of the `Pulsar.Partitioned` supervisor it manages,
+  This runs as a `:worker` child of the `Pulsar.Topic` supervisor it manages,
   and adds new partition
   children to that same supervisor via `Supervisor.start_child/2`.
   """
@@ -121,7 +121,7 @@ defmodule Pulsar.PartitionDiscovery do
     supervisor
     |> Supervisor.which_children()
     |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
-    |> MapSet.new(fn {id, _pid, _type, _modules} -> Pulsar.PartitionTopic.index(id) end)
+    |> MapSet.new(fn {id, _pid, _type, _modules} -> Pulsar.Topic.index(id) end)
   end
 
   defp schedule(interval), do: Process.send_after(self(), :discover, interval)

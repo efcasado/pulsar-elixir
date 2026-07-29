@@ -21,9 +21,9 @@ defmodule Pulsar.Consumer do
 
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
-  alias Pulsar.PartitionTopic
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
+  alias Pulsar.Topic
 
   @default_client :default
 
@@ -54,21 +54,7 @@ defmodule Pulsar.Consumer do
         default_name(topic, Keyword.fetch!(opts, :subscription_name))
       end)
 
-    case partition_count(opts, topic, client) do
-      {:ok, 0} ->
-        Pulsar.Group.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
-
-      {:ok, partitions} ->
-        Pulsar.Partitioned.start_link(
-          Worker,
-          Pulsar.Client.consumer_registry(client),
-          :consumer_count,
-          Keyword.put(opts, :partitions, partitions)
-        )
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    Topic.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
   end
 
   @doc """
@@ -220,7 +206,7 @@ defmodule Pulsar.Consumer do
     case kind(consumer) do
       :worker -> Worker.topic(consumer)
       :group -> worker_topic(consumer)
-      :partitioned -> with topic when is_binary(topic) <- worker_topic(consumer), do: PartitionTopic.base(topic)
+      :partitioned -> with topic when is_binary(topic) <- worker_topic(consumer), do: Topic.base(topic)
     end
   end
 
@@ -236,7 +222,7 @@ defmodule Pulsar.Consumer do
   # walking the tree, which is what an earlier partition-routing bug turned on.
   defp kind(pid) do
     case :proc_lib.initial_call(pid) do
-      {:supervisor, Pulsar.Partitioned, _args} -> :partitioned
+      {:supervisor, Topic, _args} -> :partitioned
       {:supervisor, Pulsar.Group, _args} -> :group
       _worker -> :worker
     end
@@ -281,13 +267,6 @@ defmodule Pulsar.Consumer do
     DynamicSupervisor.terminate_child(supervisor, pid)
   catch
     :exit, _reason -> {:error, :not_found}
-  end
-
-  defp partition_count(opts, topic, client) do
-    case Keyword.fetch(opts, :partitions) do
-      {:ok, partitions} -> {:ok, partitions}
-      :error -> ServiceDiscovery.partition_count_with_retry(topic, client: client)
-    end
   end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows

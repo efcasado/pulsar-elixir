@@ -25,6 +25,7 @@ defmodule Pulsar.Producer do
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
+  alias Pulsar.Topic
 
   @default_client :default
 
@@ -51,21 +52,7 @@ defmodule Pulsar.Producer do
     client = Keyword.fetch!(opts, :client)
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
-    case partition_count(opts, topic, client) do
-      {:ok, 0} ->
-        Pulsar.Group.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
-
-      {:ok, partitions} ->
-        Pulsar.Partitioned.start_link(
-          Worker,
-          Pulsar.Client.producer_registry(client),
-          :producer_count,
-          Keyword.put(opts, :partitions, partitions)
-        )
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    Topic.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
   end
 
   @doc """
@@ -211,7 +198,7 @@ defmodule Pulsar.Producer do
     # there are ten or more ("...-partition-10" before "...-partition-2").
     index = select_partition(opts, length(groups))
 
-    case Enum.find(groups, fn {topic, _pid} -> Pulsar.PartitionTopic.index(topic) == index end) do
+    case Enum.find(groups, fn {topic, _pid} -> Topic.index(topic) == index end) do
       {_topic, group} when is_pid(group) -> send_to_worker(collect_workers(group), message, opts)
       {_topic, _restarting} -> {:error, :no_producers_available}
       nil -> {:error, {:partition_not_found, index}}
@@ -276,13 +263,6 @@ defmodule Pulsar.Producer do
     DynamicSupervisor.terminate_child(supervisor, pid)
   catch
     :exit, _reason -> {:error, :not_found}
-  end
-
-  defp partition_count(opts, topic, client) do
-    case Keyword.fetch(opts, :partitions) do
-      {:ok, partitions} -> {:ok, partitions}
-      :error -> ServiceDiscovery.partition_count_with_retry(topic, client: client)
-    end
   end
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
