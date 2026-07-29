@@ -10,21 +10,24 @@ defmodule Pulsar.Client.Bootstrap do
 
   @settle_ms 100
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+  def start_link({kind, opts}) do
+    GenServer.start_link(__MODULE__, {kind, opts})
   end
 
+  defp module_for(:consumers), do: Pulsar.Consumer
+  defp module_for(:producers), do: Pulsar.Producer
+
   @impl true
-  def init(opts) do
+  def init({kind, opts}) do
     client = Keyword.fetch!(opts, :name)
 
+    # Idempotent, and each branch runs it, so the connection is re-established whichever
+    # branch a restart brings back.
     {:ok, _broker} = Client.start_broker(Keyword.fetch!(opts, :host), client: client)
 
-    pending =
-      Enum.map(Keyword.fetch!(opts, :producers), &{Pulsar.Producer, &1}) ++
-        Enum.map(Keyword.fetch!(opts, :consumers), &{Pulsar.Consumer, &1})
+    pending = Enum.map(Keyword.fetch!(opts, kind), &{module_for(kind), &1})
 
-    state = %{client: client, pending: pending, declared: length(pending), backoff: 0}
+    state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
 
     # Off init/1 so resolving a topic against an unreachable broker cannot block the host's boot.
     {:ok, state, {:continue, :start_declared}}
@@ -81,7 +84,7 @@ defmodule Pulsar.Client.Bootstrap do
 
   defp reschedule(%{pending: []} = state, _last_error) do
     if state.backoff > 0 do
-      Logger.info("Pulsar client #{inspect(state.client)}: all #{state.declared} declared resources are running")
+      Logger.info("Pulsar client #{inspect(state.client)}: all #{state.declared} declared #{state.kind} are running")
     end
 
     %{state | backoff: 0}
@@ -92,8 +95,8 @@ defmodule Pulsar.Client.Bootstrap do
     running = state.declared - length(state.pending)
 
     Logger.error(
-      "Pulsar client #{inspect(state.client)}: #{running} of #{state.declared} declared resources " <>
-        "running (#{inspect(last_error)}); retrying in #{wait}ms"
+      "Pulsar client #{inspect(state.client)}: #{running} of #{state.declared} declared " <>
+        "#{state.kind} running (#{inspect(last_error)}); retrying in #{wait}ms"
     )
 
     Process.send_after(self(), :retry, wait)

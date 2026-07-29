@@ -124,10 +124,14 @@ defmodule Pulsar.Client do
     name = Keyword.fetch!(opts, :name)
 
     case Supervisor.start_link(__MODULE__, opts, name: name) do
-      {:error, {:shutdown, {:failed_to_start_child, Bootstrap, reason}}} -> {:error, reason}
+      {:error, reason} -> {:error, unwrap_start_error(reason)}
       result -> result
     end
   end
+
+  # The failure a caller cares about is nested once per branch supervisor it happened under.
+  defp unwrap_start_error({:shutdown, {:failed_to_start_child, _id, reason}}), do: unwrap_start_error(reason)
+  defp unwrap_start_error(reason), do: reason
 
   @impl true
   def init(opts) do
@@ -141,15 +145,47 @@ defmodule Pulsar.Client do
 
     children = [
       {Registry, keys: :unique, name: broker_registry(client_name)},
-      {Registry, keys: :unique, name: consumer_registry(client_name)},
-      {Registry, keys: :unique, name: producer_registry(client_name)},
       {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: consumer_supervisor(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: producer_supervisor(client_name)},
-      {Bootstrap, opts}
+      resources_spec(opts)
     ]
 
+    # Brokers first: everything below resolves topics through them, so losing them means
+    # starting the resources over.
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # Consumers and producers depend on the brokers and on their own registry, but not on each
+  # other. One flat :rest_for_one chain made them dependants of whichever came first, so a
+  # consumer supervisor exceeding its restart intensity took every runtime producer with it.
+  defp resources_spec(opts) do
+    client_name = Keyword.fetch!(opts, :name)
+
+    branches = [
+      branch_spec(:consumers, consumer_registry(client_name), consumer_supervisor(client_name), opts),
+      branch_spec(:producers, producer_registry(client_name), producer_supervisor(client_name), opts)
+    ]
+
+    %{
+      id: :resources,
+      start: {Supervisor, :start_link, [branches, [strategy: :one_for_one]]},
+      type: :supervisor
+    }
+  end
+
+  # Within a branch the order is a dependency: resources register their names in the registry
+  # as they start, so a registry that came back empty would leave them alive and unreachable.
+  defp branch_spec(kind, registry, supervisor, opts) do
+    children = [
+      {Registry, keys: :unique, name: registry},
+      {DynamicSupervisor, strategy: :one_for_one, name: supervisor},
+      {Bootstrap, {kind, opts}}
+    ]
+
+    %{
+      id: kind,
+      start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
+      type: :supervisor
+    }
   end
 
   ## Registry and Supervisor Name Helpers

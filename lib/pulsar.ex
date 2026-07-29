@@ -95,43 +95,50 @@ defmodule Pulsar do
   special at the call site.
 
       MyApp.Supervisor
-      └── Pulsar.Client (:default)
-          ├── BrokerRegistry, ConsumerRegistry, ProducerRegistry
+      └── Pulsar.Client (:default)            :rest_for_one
           ├── ProducerEpochStore (ETS)
+          ├── BrokerRegistry
           ├── BrokerSupervisor
           │   ├── Broker 1          monitors: C1, C2, DLQ-P1, P1
           │   └── Broker 2          monitors: C3, C4
-          ├── ConsumerSupervisor
-          │   ├── Pulsar.Consumer: my-topic
-          │   │   └── C1 (with DLQ policy)
-          │   │       └── DLQ-P1 (linked process)
-          │   └── Pulsar.Consumer: my-partitioned-topic
-          │       ├── partition-0 → C2
-          │       ├── partition-1 → C3
-          │       ├── partition-2 → C4
-          │       └── PartitionDiscovery (polls for newly added partitions)
-          ├── ProducerSupervisor
-          │   └── Pulsar.Producer: my-partitioned-topic
-          │       ├── partition-0 → P2
-          │       ├── partition-1 → P3
-          │       ├── partition-2 → P4
-          │       └── PartitionDiscovery (polls for newly added partitions)
-          └── Bootstrap             (connects Broker 1, starts declared resources)
+          └── resources                       :one_for_one
+              ├── consumers                   :rest_for_one
+              │   ├── ConsumerRegistry
+              │   ├── ConsumerSupervisor
+              │   │   ├── Pulsar.Consumer: my-topic
+              │   │   │   └── C1 (with DLQ policy)
+              │   │   │       └── DLQ-P1 (linked process)
+              │   │   └── Pulsar.Consumer: my-partitioned-topic
+              │   │       ├── partition-0 → C2
+              │   │       ├── partition-1 → C3
+              │   │       ├── partition-2 → C4
+              │   │       └── PartitionDiscovery (polls for new partitions)
+              │   └── Bootstrap     (connects Broker 1, starts declared consumers)
+              └── producers                   :rest_for_one
+                  ├── ProducerRegistry
+                  ├── ProducerSupervisor
+                  │   └── Pulsar.Producer: my-partitioned-topic
+                  │       ├── partition-0 → P2
+                  │       ├── partition-1 → P3
+                  │       ├── partition-2 → P4
+                  │       └── PartitionDiscovery (polls for new partitions)
+                  └── Bootstrap     (connects Broker 1, starts declared producers)
 
-  `BrokerSupervisor`, `ConsumerSupervisor` and `ProducerSupervisor` are `DynamicSupervisor`s,
-  which have no static child list and so come back empty when restarted. `Bootstrap` is what
-  fills them: it connects `Broker 1` and then starts everything named in `:producers` and
-  `:consumers`. Being static, it runs again on every restart of the client.
+  The strategies follow the dependencies. Everything resolves topics through the brokers, so
+  losing them means starting the resources over — hence `:rest_for_one` at the top. Consumers
+  and producers do not depend on each other, so `resources` is `:one_for_one` and a consumer
+  failure leaves producers alone. Within a branch, resources register their names in the
+  registry as they start, so a registry that came back empty would leave them alive and
+  unreachable by name — `:rest_for_one` again.
 
-  The connection is required — a client that cannot reach its bootstrap broker stops, and the
-  error reaches whoever started it. Declared resources are not: one that fails is logged and
-  retried with backoff, so a consumer whose broker is briefly unreachable starts once it is
-  reachable rather than being abandoned.
+  The `DynamicSupervisor`s have no static child list and so come back empty when restarted.
+  `Bootstrap` is what fills them, and it is static, so it runs again on every restart of its
+  branch. A declared resource that fails is logged and retried with backoff, so a consumer
+  whose broker is briefly unreachable starts once it is reachable rather than being abandoned.
 
-  The client supervises with `:rest_for_one`, because its children are in dependency order
-  and resources register their names in the registries as they start. Under `:one_for_one` a
-  crashed registry would come back empty while everything registered in it stayed alive and
-  unreachable by name.
+  A client starts before its bootstrap connection is established: `Pulsar.Client.start_link/1`
+  returning does not mean the broker is reachable, only that the connection process exists and
+  is retrying. It is not a readiness check.
 
   ## Reading without a subscription
 
