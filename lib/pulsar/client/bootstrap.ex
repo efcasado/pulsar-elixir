@@ -74,23 +74,20 @@ defmodule Pulsar.Client.Bootstrap do
   # for the whole set, so the wait does not grow with the number of declarations.
   defp settle_contested(outcomes) do
     case for {_resource, {:contested, pid}} <- outcomes, do: pid do
-      [] ->
-        outcomes
-
-      pids ->
-        gone = await_exits(pids)
-
-        Enum.map(outcomes, fn
-          {resource, {:contested, pid}} ->
-            if pid in gone,
-              do: {resource, {:pending, {:already_started, pid}}},
-              else: {resource, :started}
-
-          settled ->
-            settled
-        end)
+      [] -> outcomes
+      pids -> settle_all(outcomes, await_exits(pids))
     end
   end
+
+  defp settle_all(outcomes, gone), do: Enum.map(outcomes, &settle(&1, gone))
+
+  defp settle({resource, {:contested, pid}}, gone) do
+    if pid in gone,
+      do: {resource, {:pending, {:already_started, pid}}},
+      else: {resource, :started}
+  end
+
+  defp settle(settled, _gone), do: settled
 
   defp await_exits(pids) do
     refs = Map.new(pids, fn pid -> {Process.monitor(pid), pid} end)
