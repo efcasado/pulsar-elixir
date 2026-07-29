@@ -1,18 +1,10 @@
 defmodule Pulsar.Topic.Discovery do
-  @moduledoc """
-  Periodically polls a partitioned topic's metadata and grows a partitioned
-  consumer/producer supervisor when new partitions are added to the topic.
+  @moduledoc false
 
-  Pulsar only ever increases a topic's partition count, so discovery is
-  grow-only: any partition indices that are missing from the supervisor are
-  added, existing partitions are left untouched, and a reported count that is
-  not larger than the current one (including a transient lookup error) is
-  ignored.
-
-  This runs as a `:worker` child of the `Pulsar.Topic` supervisor it manages,
-  and adds new partition
-  children to that same supervisor via `Supervisor.start_child/2`.
-  """
+  # Polls a topic's metadata and adds the partitions a Pulsar.Topic supervisor is missing.
+  # Pulsar only ever increases a partition count, so this is grow-only: existing partitions
+  # are left alone, and a count that is not larger than the current one — including the count
+  # a failed lookup reports — is ignored.
 
   use GenServer
 

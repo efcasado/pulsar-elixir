@@ -1,21 +1,9 @@
 defmodule Pulsar.Broker do
-  @moduledoc """
-  Unified Pulsar broker connection process.
+  @moduledoc false
 
-  This module combines:
-  - TCP connection management with reconnection logic
-  - Protocol handshake and authentication
-  - Service discovery functionality
-  - Consumer and producer registration and message routing
-  - Request/response correlation
-
-  Uses gen_statem for robust state management with states:
-  - :disconnected - Not connected to broker
-  - :connected - Connected and authenticated, ready for operations
-
-  Consumer and producer processes are monitored by this broker process
-  for automatic cleanup when they exit.
-  """
+  # One connection to one broker, as a gen_statem with :disconnected and :connected states:
+  # framing, handshake and auth, request/response correlation, and reconnection with backoff.
+  # Consumers and producers registered here are monitored so they are cleaned up when they exit.
 
   @behaviour :gen_statem
 

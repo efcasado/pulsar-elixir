@@ -1,13 +1,8 @@
 defmodule Pulsar.ServiceDiscovery do
-  @moduledoc """
-  This module handles topic lookup operations that discover which broker owns a particular topic.
-  The lookup process may involve following redirects across multiple brokers in a cluster before
-  finding the authoritative broker for a topic.
+  @moduledoc false
 
-  ## Example
-
-      {:ok, broker_pid} = Pulsar.ServiceDiscovery.lookup_topic("persistent://public/default/my-topic")
-  """
+  # Topic lookup: which broker owns a topic, and how many partitions it has. A lookup may be
+  # redirected across several brokers before reaching the authoritative one.
 
   require Logger
 

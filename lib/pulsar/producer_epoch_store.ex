@@ -1,14 +1,8 @@
 defmodule Pulsar.ProducerEpochStore do
-  @moduledoc """
-  Manages persistent storage of producer topic epochs across restarts.
+  @moduledoc false
 
-  This module provides an abstraction layer over ETS for storing and retrieving
-  topic epochs for producers. The epochs are used to detect when a producer has
-  been fenced by a newer producer with ExclusiveWithFencing access mode.
-
-  Each client maintains its own isolated epoch store, created when the client
-  starts and cleaned up when the client stops.
-  """
+  # Topic epochs per client, in ETS, so a restarting producer can tell whether a newer one
+  # fenced it under the :ExclusiveWithFencing access mode. The table belongs to the client.
 
   @doc """
   Returns the ETS table name for a given client.
