@@ -48,8 +48,14 @@ defmodule Pulsar.Topic do
   """
   @spec base(String.t() | atom()) :: String.t()
   def base(partition_name) do
-    partition_name
-    |> to_string()
-    |> String.replace(~r/#{Regex.escape(@separator)}\d+$/, "")
+    name = to_string(partition_name)
+
+    case name |> String.split(@separator) |> Enum.split(-1) do
+      {[_ | _] = prefix, [index]} -> if partition_index?(index), do: Enum.join(prefix, @separator), else: name
+      _no_suffix -> name
+    end
   end
+
+  defp partition_index?(""), do: false
+  defp partition_index?(index), do: index |> String.to_charlist() |> Enum.all?(&(&1 in ?0..?9))
 end
