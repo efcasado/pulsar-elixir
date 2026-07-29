@@ -377,12 +377,33 @@ defmodule Pulsar.Client do
     client = Keyword.fetch!(opts, :name)
 
     opts
-    |> Keyword.update!(:consumers, &validate_each!(&1, Pulsar.Consumer.Options, client))
-    |> Keyword.update!(:producers, &validate_each!(&1, Pulsar.Producer.Options, client))
+    |> Keyword.update!(:consumers, &validate_each!(&1, Pulsar.Consumer, Pulsar.Consumer.Options, client))
+    |> Keyword.update!(:producers, &validate_each!(&1, Pulsar.Producer, Pulsar.Producer.Options, client))
   end
 
-  defp validate_each!(entries, options, client) do
-    Enum.map(entries, &options.validate!(Keyword.put(&1, :client, client)))
+  defp validate_each!(entries, module, options, client) do
+    entries
+    |> Enum.map(&options.validate!(Keyword.put(&1, :client, client)))
+    |> reject_duplicate_names!(module, client)
+  end
+
+  # Two declarations resolving to one registry name would leave the second silently
+  # discarded, since starting it reports the first as already started.
+  defp reject_duplicate_names!(entries, module, client) do
+    duplicates =
+      entries
+      |> Enum.frequencies_by(&module.id/1)
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(fn {name, _count} -> name end)
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "Pulsar client #{inspect(client)} declares more than one #{inspect(module)} named " <>
+              "#{Enum.map_join(duplicates, ", ", &inspect/1)}. Names default to the topic, so two " <>
+              "entries on one topic need distinct :name values."
+    end
+
+    entries
   end
 
   defp build_broker_opts(opts) do

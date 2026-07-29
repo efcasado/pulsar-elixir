@@ -271,7 +271,8 @@ defmodule Pulsar.Consumer do
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows
   # the same default as the consumer's name.
-  defp id(opts) do
+  @doc false
+  def id(opts) do
     Keyword.get_lazy(opts, :name, fn ->
       default_name(Keyword.get(opts, :topic), Keyword.get(opts, :subscription_name))
     end)

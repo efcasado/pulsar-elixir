@@ -93,6 +93,41 @@ defmodule Pulsar.ClientTest do
       end
     end
 
+    test "rejects two declarations that resolve to one registry name" do
+      # Starting the second reports the first as already started, so it would be discarded.
+      assert_raise ArgumentError, ~r/declares more than one Pulsar.Producer named/, fn ->
+        Client.start_link(
+          name: :dup_producers,
+          host: "pulsar://127.0.0.1:1",
+          producers: [[topic: "t"], [topic: "t"]]
+        )
+      end
+    end
+
+    test "rejects duplicates that come from the default name rather than an explicit one" do
+      assert_raise ArgumentError, ~r/declares more than one Pulsar.Consumer named/, fn ->
+        Client.start_link(
+          name: :dup_consumers,
+          host: "pulsar://127.0.0.1:1",
+          consumers: [
+            [topic: "t", subscription_name: "s", callback_module: MyApp.H],
+            [topic: "t", subscription_name: "s", callback_module: MyApp.H, consumer_count: 2]
+          ]
+        )
+      end
+    end
+
+    test "allows two resources on one topic when they are named apart" do
+      start_supervised!(
+        {Client,
+         name: :distinct_names,
+         host: "pulsar://127.0.0.1:1",
+         producers: [[topic: "t", name: :audit], [topic: "t", name: :billing]]}
+      )
+
+      assert is_pid(Process.whereis(:distinct_names))
+    end
+
     test "raises before starting anything" do
       assert_raise NimbleOptions.ValidationError, fn ->
         Client.start_link(name: :never_started, host: "pulsar://127.0.0.1:1", producers: [[]])

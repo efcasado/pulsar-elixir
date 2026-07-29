@@ -267,7 +267,8 @@ defmodule Pulsar.Producer do
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.
-  defp id(opts), do: Keyword.get_lazy(opts, :name, fn -> default_name(Keyword.get(opts, :topic)) end)
+  @doc false
+  def id(opts), do: Keyword.get_lazy(opts, :name, fn -> default_name(Keyword.get(opts, :topic)) end)
 
   defp default_name(topic), do: "#{topic}-producer"
 end
