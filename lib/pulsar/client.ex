@@ -95,8 +95,12 @@ defmodule Pulsar.Client do
               default: [],
               doc: """
               Producers to run under this client, each a keyword list of `Pulsar.Producer`
-              options, on the same terms as `:consumers`. Started before the consumers, so a
-              callback that publishes has its producer available.
+              options, on the same terms as `:consumers`.
+
+              Consumers and producers are independent and start concurrently, so a consumer
+              can receive a message before a declared producer is registered. A callback that
+              publishes has to handle `{:error, :producer_not_found}` in any case, since a
+              producer may also be restarting.
               """
             ]
           ] ++ BrokerOptions.schema()

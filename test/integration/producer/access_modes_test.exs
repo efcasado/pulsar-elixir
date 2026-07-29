@@ -135,7 +135,11 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     [producer_2] = Pulsar.Producer.workers(group_pid_2)
 
-    Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name == "waiting-producer-2" end)
+    assert :ok =
+             Utils.wait_for(fn ->
+               String.starts_with?(:sys.get_state(producer_2).producer_name || "", "waiting-producer-2")
+             end)
+
     refute :sys.get_state(producer_2).ready
 
     # First producer can send messages
