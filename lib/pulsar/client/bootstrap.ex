@@ -46,42 +46,69 @@ defmodule Pulsar.Client.Bootstrap do
   defp attempt(%{pending: []} = state), do: state
 
   defp attempt(state) do
-    {pending, last_error} = Enum.reduce(state.pending, {[], nil}, &start_declared/2)
+    outcomes =
+      state.pending
+      |> Enum.map(fn {module, opts} = resource -> {resource, start(module, opts)} end)
+      |> settle_contested()
+
+    {pending, last_error} =
+      Enum.reduce(outcomes, {[], nil}, fn
+        {_resource, :started}, acc -> acc
+        {resource, {:pending, reason}}, {pending, _previous} -> {[resource | pending], reason}
+      end)
 
     reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
-  end
-
-  defp start_declared({module, opts} = resource, {pending, last_error}) do
-    case start(module, opts) do
-      :started -> {pending, last_error}
-      {:pending, reason} -> {[resource | pending], reason}
-    end
   end
 
   defp start(module, opts) do
     case module.start(opts) do
       {:ok, _pid} -> :started
       {:ok, _pid, _info} -> :started
-      {:error, {:already_started, pid}} -> already_started(pid)
+      {:error, {:already_started, pid}} -> {:contested, pid}
       {:error, reason} -> {:pending, reason}
     end
   end
 
-  defp already_started(pid) do
-    if running?(pid), do: :started, else: {:pending, {:already_started, pid}}
+  # A name can still be registered to a process on its way out, and Process.alive?/1 stays true
+  # until that exit is processed. Waiting for a DOWN tells a survivor from a straggler — once
+  # for the whole set, so the wait does not grow with the number of declarations.
+  defp settle_contested(outcomes) do
+    case for {_resource, {:contested, pid}} <- outcomes, do: pid do
+      [] ->
+        outcomes
+
+      pids ->
+        gone = await_exits(pids)
+
+        Enum.map(outcomes, fn
+          {resource, {:contested, pid}} ->
+            if pid in gone,
+              do: {resource, {:pending, {:already_started, pid}}},
+              else: {resource, :started}
+
+          settled ->
+            settled
+        end)
+    end
   end
 
-  # Process.alive?/1 stays true until a dying process's exit is processed, so it cannot tell a
-  # resource that survived this restart from one on its way out. Waiting for a DOWN can.
-  defp running?(pid) do
-    ref = Process.monitor(pid)
+  defp await_exits(pids) do
+    refs = Map.new(pids, fn pid -> {Process.monitor(pid), pid} end)
+    gone = collect_exits(refs, [], System.monotonic_time(:millisecond) + @settle_ms)
+    Enum.each(Map.keys(refs), &Process.demonitor(&1, [:flush]))
+    gone
+  end
 
-    receive do
-      {:DOWN, ^ref, :process, _pid, _reason} -> false
-    after
-      @settle_ms ->
-        Process.demonitor(ref, [:flush])
-        true
+  defp collect_exits(refs, gone, deadline) do
+    if length(gone) == map_size(refs) do
+      gone
+    else
+      receive do
+        {:DOWN, ref, :process, pid, _reason} when is_map_key(refs, ref) ->
+          collect_exits(refs, [pid | gone], deadline)
+      after
+        max(deadline - System.monotonic_time(:millisecond), 0) -> gone
+      end
     end
   end
 
