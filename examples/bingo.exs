@@ -7,6 +7,7 @@ defmodule BingoPlayer do
   def init([game_master, card_size]) do
     card = card(card_size)
     IO.puts("#{inspect(self())} started with card: #{inspect(card, charlists: :as_lists)}")
+    Process.send(game_master, {:player_ready, self()}, [])
     {:ok, {game_master, card}}
   end
 
@@ -56,10 +57,15 @@ defmodule Main do
   def call_numbers(numbers, producer) do
     [number | other_numbers] = Enum.shuffle(numbers)
 
-    IO.puts("#{inspect(self())} calling number: #{number}")
-    Pulsar.Producer.send(producer, Integer.to_string(number))
+    case Pulsar.Producer.send(producer, Integer.to_string(number)) do
+      {:ok, _message_id} ->
+        IO.puts("#{inspect(self())} calling number: #{number}")
+        call_numbers(Enum.shuffle(other_numbers), producer)
 
-    call_numbers(Enum.shuffle(other_numbers), producer)
+      {:error, _reason} ->
+        Process.sleep(100)
+        call_numbers(numbers, producer)
+    end
   end
 
   def run do
@@ -77,14 +83,13 @@ defmodule Main do
     and_the_winner_is()
   end
 
-  defp await_players do
-    ready? =
-      match?({:ok, _pid}, Pulsar.Producer.lookup(:game_master)) and
-        Enum.all?(1..@num_players, &match?({:ok, _pid}, Pulsar.Consumer.lookup("player-#{&1}")))
+  defp await_players(remaining \\ @num_players)
 
-    if !ready? do
-      Process.sleep(100)
-      await_players()
+  defp await_players(0), do: :ok
+
+  defp await_players(remaining) do
+    receive do
+      {:player_ready, _pid} -> await_players(remaining - 1)
     end
   end
 
