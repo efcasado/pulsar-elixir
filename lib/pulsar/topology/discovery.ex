@@ -1,7 +1,7 @@
-defmodule Pulsar.Topic.Discovery do
+defmodule Pulsar.Topology.Discovery do
   @moduledoc false
 
-  # Polls a topic's metadata and adds the partitions a Pulsar.Topic supervisor is missing.
+  # Polls a topic's metadata and adds the partitions a Pulsar.Topology supervisor is missing.
   # Pulsar only ever increases a partition count, so this is grow-only: existing partitions
   # are left alone, and a count that is not larger than the current one — including the count
   # a failed lookup reports — is ignored.

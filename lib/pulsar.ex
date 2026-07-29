@@ -112,7 +112,7 @@ defmodule Pulsar do
               │   │       ├── partition-0 → C2
               │   │       ├── partition-1 → C3
               │   │       ├── partition-2 → C4
-              │   │       └── Topic.Discovery (polls for new partitions)
+              │   │       └── Topology.Discovery (polls for new partitions)
               │   └── Bootstrap     (connects Broker 1, starts declared consumers)
               └── producers                   :rest_for_one
                   ├── ProducerRegistry
@@ -121,7 +121,7 @@ defmodule Pulsar do
                   │       ├── partition-0 → P2
                   │       ├── partition-1 → P3
                   │       ├── partition-2 → P4
-                  │       └── Topic.Discovery (polls for new partitions)
+                  │       └── Topology.Discovery (polls for new partitions)
                   └── Bootstrap     (connects Broker 1, starts declared producers)
 
   The strategies follow the dependencies. Everything resolves topics through the brokers, so

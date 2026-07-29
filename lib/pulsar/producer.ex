@@ -26,6 +26,7 @@ defmodule Pulsar.Producer do
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
   alias Pulsar.Topic
+  alias Pulsar.Topology
 
   @default_client :default
 
@@ -52,7 +53,7 @@ defmodule Pulsar.Producer do
     client = Keyword.fetch!(opts, :client)
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
-    Topic.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
+    Topology.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
   end
 
   @doc """
@@ -123,12 +124,7 @@ defmodule Pulsar.Producer do
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
-  def stop(producer, _opts) when is_pid(producer) do
-    case remove_from(owning_supervisor(producer), producer) do
-      :ok -> :ok
-      {:error, :not_found} -> stop_directly(producer)
-    end
-  end
+  def stop(producer, _opts) when is_pid(producer), do: Topology.remove(producer)
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
@@ -153,7 +149,7 @@ defmodule Pulsar.Producer do
   @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(producer, opts \\ [])
 
-  def workers(producer, _opts) when is_pid(producer), do: collect_workers(producer)
+  def workers(producer, _opts) when is_pid(producer), do: Topology.workers(producer, Worker)
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -165,11 +161,7 @@ defmodule Pulsar.Producer do
   @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
   def partitions(producer, opts \\ [])
 
-  def partitions(producer, _opts) when is_pid(producer) do
-    producer
-    |> Supervisor.which_children()
-    |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
-  end
+  def partitions(producer, _opts) when is_pid(producer), do: Topology.partitions(producer)
 
   def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
@@ -179,7 +171,7 @@ defmodule Pulsar.Producer do
   # supervisors below only build child specs.
   defp publish(producer, message, opts) do
     case partition_groups(producer) do
-      [] -> send_to_worker(collect_workers(producer), message, opts)
+      [] -> send_to_worker(Topology.workers(producer, Worker), message, opts)
       groups -> route(groups, message, opts)
     end
   catch
@@ -199,7 +191,7 @@ defmodule Pulsar.Producer do
     index = select_partition(opts, length(groups))
 
     case Enum.find(groups, fn {topic, _pid} -> Topic.index(topic) == index end) do
-      {_topic, group} when is_pid(group) -> send_to_worker(collect_workers(group), message, opts)
+      {_topic, group} when is_pid(group) -> send_to_worker(Topology.workers(group, Worker), message, opts)
       {_topic, _restarting} -> {:error, :no_producers_available}
       nil -> {:error, {:partition_not_found, index}}
     end
@@ -223,46 +215,6 @@ defmodule Pulsar.Producer do
     |> Supervisor.which_children()
     |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
     |> Enum.map(fn {topic, pid, _type, _modules} -> {topic, pid} end)
-  end
-
-  # Descends through the partition supervisors, if any. Matching on the worker module
-  # skips the partition discovery process, which is also a `:worker` child.
-  defp collect_workers(supervisor) do
-    supervisor
-    |> Supervisor.which_children()
-    |> Enum.flat_map(fn
-      {_id, pid, :worker, [Worker]} when is_pid(pid) -> [pid]
-      {_id, pid, :supervisor, _modules} when is_pid(pid) -> collect_workers(pid)
-      _child -> []
-    end)
-  end
-
-  # Resolved by the caller for Pulsar.Producer.start/2, so that the lookup and its retries
-  # do not run inside the client's supervisor and block every other producer start.
-  # Asking the process which supervisor owns it, rather than deriving one from `:client`:
-  # a pid carries no clue which client it belongs to, and stopping a permanent child any
-  # other way just has its supervisor start it again.
-  defp owning_supervisor(pid) do
-    case Process.info(pid, :dictionary) do
-      {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
-      nil -> nil
-    end
-  end
-
-  # A producer that is already gone reads as stopped, which is also what a caller holding a
-  # pid replaced by a restart sees.
-  defp stop_directly(pid) do
-    Supervisor.stop(pid)
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp remove_from(nil, _pid), do: {:error, :not_found}
-
-  defp remove_from(supervisor, pid) do
-    DynamicSupervisor.terminate_child(supervisor, pid)
-  catch
-    :exit, _reason -> {:error, :not_found}
   end
 
   # Two producers in one static supervision tree need distinct ids, so the id follows

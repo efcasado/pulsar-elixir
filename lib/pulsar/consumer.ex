@@ -24,6 +24,7 @@ defmodule Pulsar.Consumer do
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
   alias Pulsar.Topic
+  alias Pulsar.Topology
 
   @default_client :default
 
@@ -54,7 +55,7 @@ defmodule Pulsar.Consumer do
         default_name(topic, Keyword.fetch!(opts, :subscription_name))
       end)
 
-    Topic.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
+    Topology.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
   end
 
   @doc """
@@ -102,12 +103,7 @@ defmodule Pulsar.Consumer do
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
-  def stop(consumer, _opts) when is_pid(consumer) do
-    case remove_from(owning_supervisor(consumer), consumer) do
-      :ok -> :ok
-      {:error, :not_found} -> stop_directly(consumer)
-    end
-  end
+  def stop(consumer, _opts) when is_pid(consumer), do: Topology.remove(consumer)
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
@@ -132,9 +128,7 @@ defmodule Pulsar.Consumer do
   @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(consumer, opts \\ [])
 
-  def workers(consumer, _opts) when is_pid(consumer) do
-    collect_workers(consumer)
-  end
+  def workers(consumer, _opts) when is_pid(consumer), do: Topology.workers(consumer, Worker)
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -146,11 +140,7 @@ defmodule Pulsar.Consumer do
   @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
   def partitions(consumer, opts \\ [])
 
-  def partitions(consumer, _opts) when is_pid(consumer) do
-    consumer
-    |> Supervisor.which_children()
-    |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
-  end
+  def partitions(consumer, _opts) when is_pid(consumer), do: Topology.partitions(consumer)
 
   def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
@@ -203,7 +193,7 @@ defmodule Pulsar.Consumer do
   """
   @spec topic(pid()) :: String.t() | {:error, :not_found}
   def topic(consumer) do
-    case kind(consumer) do
+    case Topology.kind(consumer) do
       :worker -> Worker.topic(consumer)
       :group -> worker_topic(consumer)
       :partitioned -> with topic when is_binary(topic) <- worker_topic(consumer), do: Topic.base(topic)
@@ -211,62 +201,10 @@ defmodule Pulsar.Consumer do
   end
 
   defp worker_topic(supervisor) do
-    case collect_workers(supervisor) do
+    case Topology.workers(supervisor, Worker) do
       [worker | _rest] -> Worker.topic(worker)
       [] -> {:error, :not_found}
     end
-  end
-
-  # A supervisor cannot answer a GenServer call, so asking one for its topic would take
-  # the group down with it. :proc_lib.initial_call/1 tells the levels apart without
-  # walking the tree, which is what an earlier partition-routing bug turned on.
-  defp kind(pid) do
-    case :proc_lib.initial_call(pid) do
-      {:supervisor, Topic, _args} -> :partitioned
-      {:supervisor, Pulsar.Group, _args} -> :group
-      _worker -> :worker
-    end
-  end
-
-  # Descends through the partition supervisors, if any, so a partitioned and a plain
-  # consumer read the same. Matching on the worker module skips the partition discovery
-  # process, which is also a `:worker` child.
-  defp collect_workers(supervisor) do
-    supervisor
-    |> Supervisor.which_children()
-    |> Enum.flat_map(fn
-      {_id, pid, :worker, [Worker]} when is_pid(pid) -> [pid]
-      {_id, pid, :supervisor, _modules} when is_pid(pid) -> collect_workers(pid)
-      _child -> []
-    end)
-  end
-
-  # Resolved by the caller for Pulsar.Consumer.start/4, so that the lookup and its retries
-  # do not run inside the client's supervisor and block every other consumer start.
-  # Asking the process which supervisor owns it, rather than deriving one from `:client`:
-  # a pid carries no clue which client it belongs to, and stopping a permanent child any
-  # other way just has its supervisor start it again.
-  defp owning_supervisor(pid) do
-    case Process.info(pid, :dictionary) do
-      {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
-      nil -> nil
-    end
-  end
-
-  # A consumer that is already gone reads as stopped, which is also what a caller holding a
-  # pid replaced by a restart sees.
-  defp stop_directly(pid) do
-    Supervisor.stop(pid)
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp remove_from(nil, _pid), do: {:error, :not_found}
-
-  defp remove_from(supervisor, pid) do
-    DynamicSupervisor.terminate_child(supervisor, pid)
-  catch
-    :exit, _reason -> {:error, :not_found}
   end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows
