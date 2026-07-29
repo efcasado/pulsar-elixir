@@ -116,10 +116,7 @@ defmodule Pulsar.Consumer do
   def lookup(name, opts \\ []) do
     client = Keyword.get(opts, :client, @default_client)
 
-    case Registry.lookup(Pulsar.Client.consumer_registry(client), name) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> {:error, :not_found}
-    end
+    Pulsar.Client.lookup(Pulsar.Client.consumer_registry(client), name)
   end
 
   @doc """

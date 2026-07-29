@@ -137,6 +137,22 @@ defmodule Pulsar.ClientTest do
     end
   end
 
+  describe "lookups against a client that is not running" do
+    # Registry.lookup/2 raises when the registry is absent, which is the normal state while a
+    # client is down or restarting. The facades promise an error tuple, not an exit.
+    test "report not found rather than raising" do
+      assert Pulsar.Producer.lookup(:absent, client: :never_started) == {:error, :not_found}
+      assert Pulsar.Consumer.lookup("absent", client: :never_started) == {:error, :not_found}
+      assert Client.lookup_broker("pulsar://127.0.0.1:6650", client: :never_started) == {:error, :not_found}
+    end
+
+    test "send and stop keep their contracts" do
+      assert Pulsar.Producer.send(:absent, "payload", client: :never_started) == {:error, :producer_not_found}
+      assert Pulsar.Producer.stop(:absent, client: :never_started) == {:error, :not_found}
+      assert Pulsar.Consumer.stop("absent", client: :never_started) == {:error, :not_found}
+    end
+  end
+
   describe "broker options" do
     test "carries the connection tunables to the broker with their defaults" do
       start_supervised!({Client, name: :broker_defaults, host: "pulsar://127.0.0.1:1"})

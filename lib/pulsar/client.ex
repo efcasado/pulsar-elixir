@@ -192,6 +192,19 @@ defmodule Pulsar.Client do
     }
   end
 
+  @doc false
+  @spec lookup(atom(), term()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup(registry, key) do
+    case Registry.lookup(registry, key) do
+      [{pid, _value}] -> {:ok, pid}
+      [] -> {:error, :not_found}
+    end
+  rescue
+    # A client that is not running has no registry to ask, which reads the same as having
+    # nothing registered rather than raising at whoever asked.
+    ArgumentError -> {:error, :not_found}
+  end
+
   ## Registry and Supervisor Name Helpers
 
   @doc false
@@ -308,10 +321,7 @@ defmodule Pulsar.Client do
     client = Keyword.get(opts, :client, :default)
     broker_registry = broker_registry(client)
 
-    case Registry.lookup(broker_registry, broker_url) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> {:error, :not_found}
-    end
+    lookup(broker_registry, broker_url)
   end
 
   @doc """
