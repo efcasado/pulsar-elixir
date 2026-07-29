@@ -94,6 +94,42 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     assert [_client] = Supervisor.which_children(supervisor)
   end
 
+  test "a consumer-side failure leaves producers running" do
+    client = :supervision_tree_isolation_client
+
+    supervisor = host_tree(client, [])
+
+    # A runtime producer, not a declared one: Bootstrap recreates declared resources, so only
+    # this kind shows whether the branches are genuinely independent.
+    {:ok, _producer} = Pulsar.Producer.start(topic: @topic, name: :isolation_producer, client: client)
+
+    assert eventually(fn -> match?([_producer], producer_children(client)) end)
+    assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "before", client: client)
+
+    # The whole consumer branch, as when its children exhaust their restart intensity —
+    # a failure inside the branch is contained by the branch and never reaches the producers.
+    branch = branch(client, :consumers)
+    ref = Process.monitor(branch)
+    Supervisor.stop(branch, :shutdown)
+    assert_receive {:DOWN, ^ref, :process, _pid, :shutdown}, 5_000
+
+    assert eventually(fn -> match?([_producer], producer_children(client)) end)
+    assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "after", client: client)
+
+    assert [_client] = Supervisor.which_children(supervisor)
+  end
+
+  defp branch(client, kind) do
+    resources = child_pid(Process.whereis(client), :resources)
+    child_pid(resources, kind)
+  end
+
+  defp child_pid(supervisor, id) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
+  end
+
   defp consumer_children(client) do
     DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
   catch
