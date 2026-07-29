@@ -69,7 +69,7 @@ defmodule Pulsar.Topology do
   def partitions(root) do
     root
     |> Supervisor.which_children()
-    |> Enum.count(fn {_id, pid, type, _modules} -> type == :supervisor and is_pid(pid) end)
+    |> Enum.count(fn {_id, _pid, type, _modules} -> type == :supervisor end)
   end
 
   @doc """
@@ -105,11 +105,25 @@ defmodule Pulsar.Topology do
     end
   end
 
+  # Only a supervisor is asked to terminate a child. Started with `start_link/1` from an
+  # ordinary process, the first ancestor is whoever called it — and asking a GenServer to
+  # `terminate_child` crashes it on an unmatched call while this reports success.
   defp owning_supervisor(pid) do
-    case Process.info(pid, :dictionary) do
-      {:dictionary, dictionary} -> dictionary |> Keyword.get(:"$ancestors", []) |> List.first()
-      nil -> nil
+    with {:dictionary, dictionary} <- Process.info(pid, :dictionary),
+         [ancestor | _rest] <- Keyword.get(dictionary, :"$ancestors", []),
+         supervisor when not is_nil(supervisor) <- whereis(ancestor),
+         true <- supervisor?(supervisor) do
+      supervisor
+    else
+      _not_a_supervisor -> nil
     end
+  end
+
+  defp whereis(name) when is_atom(name), do: Process.whereis(name)
+  defp whereis(pid) when is_pid(pid), do: pid
+
+  defp supervisor?(pid) do
+    match?({:supervisor, _module, _args}, :proc_lib.initial_call(pid))
   end
 
   defp terminate_child(nil, _pid), do: {:error, :not_found}

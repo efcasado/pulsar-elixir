@@ -134,6 +134,25 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     assert @consumer_callback.count_messages(consumer) == expected_count
   end
 
+  test "granting permits through the group pid reaches its workers" do
+    {:ok, consumer_group} =
+      Pulsar.Consumer.start(@topic, "group-flow", @consumer_callback, subscription_options(2, 0, 0, 0))
+
+    workers = Pulsar.Consumer.workers(consumer_group)
+    assert length(workers) == 2
+
+    # The pid start/1 returns is a supervisor, which cannot answer the worker's call.
+    assert :ok = Pulsar.Consumer.send_flow(consumer_group, 2)
+
+    assert Process.alive?(consumer_group)
+    assert Enum.all?(workers, &Process.alive?/1)
+
+    Utils.wait_for(fn -> Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0 end)
+    assert Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0
+
+    Pulsar.Consumer.stop(consumer_group)
+  end
+
   defp subscription_options(count, initial, threshold, refill) do
     [
       client: @client,

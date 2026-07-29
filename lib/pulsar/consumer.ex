@@ -11,8 +11,8 @@ defmodule Pulsar.Consumer do
   `partitions/2` report what it is made of, `lookup/2` finds one by name, and `topic/1`
   answers at any level of it.
 
-  `ack/2`, `nack/2` and `send_flow/3` act on a worker — `self()` inside a callback — for
-  manual acknowledgement and flow control.
+  `ack/2` and `nack/2` act on a worker — `self()` inside a callback — for manual
+  acknowledgement. `send_flow/3` grants permits at any level.
 
   ## Options
 
@@ -168,17 +168,48 @@ defmodule Pulsar.Consumer do
   Grants a consumer more flow permits.
 
   Only needed when `:flow_initial` is `0`, which turns off automatic flow control.
+
+  Takes any of the pids a consumer is made of, or its name. Every worker behind it is granted
+  the permits, and the first refusal is returned — retrying by name is safe, since a worker
+  that already holds permits is only over-credited, and a worker that refused has usually been
+  replaced by one with a different pid.
+
+  A consumer with no workers is an error rather than a silent success: nothing was granted,
+  so nothing will be delivered.
   """
   @spec send_flow(pid() | String.t() | atom(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
   def send_flow(consumer, permits, opts \\ [])
 
-  def send_flow(consumer, permits, _opts) when is_pid(consumer), do: Worker.send_flow(consumer, permits)
+  def send_flow(consumer, permits, _opts) when is_pid(consumer) do
+    case Topology.kind(consumer) do
+      :worker -> grant(consumer, permits)
+      _supervisor -> grant_all(Topology.workers(consumer, Worker), permits)
+    end
+  end
 
   def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
     case workers(name, opts) do
       {:error, :not_found} -> {:error, :consumer_not_found}
-      workers -> Enum.each(workers, &Worker.send_flow(&1, permits))
+      workers -> grant_all(workers, permits)
     end
+  end
+
+  defp grant_all([], _permits), do: {:error, :no_consumers_available}
+
+  # Granted to every worker before reporting, so one unreachable partition does not stop the
+  # rest from flowing.
+  defp grant_all(workers, permits) do
+    workers
+    |> Enum.map(&grant(&1, permits))
+    |> Enum.find(:ok, &(&1 != :ok))
+  end
+
+  # A worker listed a moment ago can be gone by the time it is called, which exits rather than
+  # answering; that is a failure to report, not one to propagate.
+  defp grant(worker, permits) do
+    Worker.send_flow(worker, permits)
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @doc """
