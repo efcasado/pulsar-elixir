@@ -345,9 +345,11 @@ defmodule Pulsar.Client do
   end
 
   @doc """
-  Stops a client and all its resources gracefully.
+  Stops a client, and with it every consumer, producer and broker connection it owns.
 
-  This stops all producers, consumers, brokers, and the client supervisor.
+  For a client you started yourself, from a script or IEx. A client in a supervision tree is
+  restarted by its supervisor whatever its exit reason, so this only cycles it; stop those by
+  removing them from the tree.
 
   ## Options
 
