@@ -6,6 +6,7 @@ defmodule Pulsar.Consumer.Worker do
 
   use GenServer
 
+  alias Pulsar.Backoff
   alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Producer.Options, as: ProducerOptions
   alias Pulsar.Producer.Worker, as: ProducerWorker
@@ -184,28 +185,10 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_continue({:subscribe, init_args}, state) do
-    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
-         :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
-         {:ok, _response} <-
-           subscribe_to_topic(
-             broker_pid,
-             state.topic,
-             state.subscription_name,
-             state.subscription_type,
-             state.consumer_id,
-             state.consumer_name,
-             initial_position: state.initial_position,
-             durable: state.durable,
-             force_create_topic: state.force_create_topic,
-             read_compacted: state.read_compacted,
-             schema: state.schema
-           ) do
-      {:noreply,
-       %{
-         state
-         | broker_pid: broker_pid
-       }, {:continue, {:seek_subscription, init_args}}}
-    else
+    case Backoff.run(fn -> subscribe(state) end, &retryable?/1) do
+      {:ok, broker_pid} ->
+        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
+
       {:error, reason} ->
         {:stop, reason, state}
     end
@@ -313,6 +296,31 @@ defmodule Pulsar.Consumer.Worker do
         {:stop, reason, nil}
     end
   end
+
+  defp subscribe(state) do
+    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
+         :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
+         {:ok, _response} <-
+           subscribe_to_topic(
+             broker_pid,
+             state.topic,
+             state.subscription_name,
+             state.subscription_type,
+             state.consumer_id,
+             state.consumer_name,
+             initial_position: state.initial_position,
+             durable: state.durable,
+             force_create_topic: state.force_create_topic,
+             read_compacted: state.read_compacted,
+             schema: state.schema
+           ) do
+      {:ok, broker_pid}
+    end
+  end
+
+  # A topic being reassigned between brokers answers this until its new owner has taken over.
+  defp retryable?({:ServiceNotReady, _message}), do: true
+  defp retryable?(_reason), do: false
 
   @impl true
   def handle_info({:broker_message, %Binary.CommandCloseConsumer{}}, state) do

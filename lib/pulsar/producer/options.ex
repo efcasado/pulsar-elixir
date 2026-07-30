@@ -81,16 +81,6 @@ defmodule Pulsar.Producer.Options do
       `false` disables it.
       """
     ],
-    max_restarts: [
-      type: :non_neg_integer,
-      default: 100,
-      doc: "Restarts the producer group tolerates in a minute."
-    ],
-    max_seconds: [
-      type: :pos_integer,
-      default: 60,
-      doc: "Window, in seconds, over which `:max_restarts` is counted."
-    ],
     startup_delay_ms: [
       type: :non_neg_integer,
       default: 0,

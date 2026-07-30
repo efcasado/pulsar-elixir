@@ -56,8 +56,6 @@ defmodule Pulsar.TopologyTest do
       client: :test,
       partitions: partitions,
       count_key: 1,
-      max_restarts: 3,
-      max_seconds: 5,
       partition_discovery_interval_ms: false
     ]
 

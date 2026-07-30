@@ -6,6 +6,7 @@ defmodule Pulsar.Producer.Worker do
 
   use GenServer
 
+  alias Pulsar.Backoff
   alias Pulsar.ProducerEpochStore
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
@@ -153,30 +154,22 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def handle_continue(:register_producer, state) do
-    case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
-      {:ok, broker_pid} ->
-        case register_with_broker(state, broker_pid) do
-          {:ok, new_state} ->
-            {:noreply, new_state, {:continue, :monitor_broker}}
+    case Backoff.run(fn -> register(state) end, &retryable?/1) do
+      {:ok, new_state} ->
+        {:noreply, new_state, {:continue, :monitor_broker}}
 
-          {:error, {:ProducerFenced, _msg}} ->
-            ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
-            {:stop, {:shutdown, :producer_fenced}, state}
+      {:error, {:ProducerFenced, _msg}} ->
+        ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
+        {:stop, {:shutdown, :producer_fenced}, state}
 
-          {:error, {:IncompatibleSchema, _msg} = reason} ->
-            {:stop, {:shutdown, reason}, state}
-
-          {:error, reason} ->
-            {:stop, reason, state}
-        end
+      {:error, {:IncompatibleSchema, _msg} = reason} ->
+        {:stop, {:shutdown, reason}, state}
 
       {:error, reason} ->
-        Logger.error("Topic lookup failed: #{inspect(reason)}")
         {:stop, reason, state}
     end
   end
 
-  @impl true
   def handle_continue(:monitor_broker, state) do
     broker_monitor = Process.monitor(state.broker_pid)
     {:noreply, %{state | broker_monitor: broker_monitor}, {:continue, :start_batch_timer}}
@@ -190,6 +183,21 @@ defmodule Pulsar.Producer.Worker do
 
     {:noreply, %{state | batch_flush_timer: timer_ref}}
   end
+
+  defp register(state) do
+    case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
+      {:ok, broker_pid} ->
+        register_with_broker(state, broker_pid)
+
+      {:error, reason} = error ->
+        Logger.error("Topic lookup failed: #{inspect(reason)}")
+        error
+    end
+  end
+
+  # A topic being reassigned between brokers answers this until its new owner has taken over.
+  defp retryable?({:ServiceNotReady, _message}), do: true
+  defp retryable?(_reason), do: false
 
   @impl true
   def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do

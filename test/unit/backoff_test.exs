@@ -32,4 +32,55 @@ defmodule Pulsar.BackoffTest do
 
     assert Enum.uniq(waits) != [hd(waits)]
   end
+
+  describe "run/3" do
+    defp retryable?(:transient), do: true
+    defp retryable?(_reason), do: false
+
+    test "returns a success without retrying" do
+      assert Backoff.run(fn -> {:ok, :first_try} end, &retryable?/1) == {:ok, :first_try}
+    end
+
+    # The distinction the predicate carries: a topic that does not exist will not start
+    # existing, and retrying it is what turns one failure into a restart storm.
+    test "returns an error the predicate rejects without retrying" do
+      {elapsed, result} =
+        :timer.tc(fn -> Backoff.run(fn -> {:error, :fatal} end, &retryable?/1) end, :millisecond)
+
+      assert result == {:error, :fatal}
+      assert elapsed < 50
+    end
+
+    test "retries an error the predicate accepts until it succeeds" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      result =
+        Backoff.run(
+          fn ->
+            case Agent.get_and_update(counter, &{&1 + 1, &1 + 1}) do
+              attempt when attempt < 3 -> {:error, :transient}
+              attempt -> {:ok, attempt}
+            end
+          end,
+          &retryable?/1
+        )
+
+      assert result == {:ok, 3}
+    end
+
+    test "gives up with the error unchanged once the budget is spent" do
+      assert Backoff.run(fn -> {:error, :transient} end, &retryable?/1, 200) == {:error, :transient}
+    end
+
+    # The budget is what keeps a retrying worker from outliving the 5s a supervisor allows it
+    # for shutdown, so it bounds elapsed time rather than a count of attempts.
+    test "spends no longer than the budget it was given" do
+      budget = 300
+
+      {elapsed, {:error, :transient}} =
+        :timer.tc(fn -> Backoff.run(fn -> {:error, :transient} end, &retryable?/1, budget) end, :millisecond)
+
+      assert elapsed <= budget
+    end
+  end
 end

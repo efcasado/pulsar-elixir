@@ -46,10 +46,6 @@ defmodule Pulsar.Group do
         }
       end
 
-    Supervisor.init(children,
-      strategy: :one_for_one,
-      max_restarts: Keyword.fetch!(opts, :max_restarts),
-      max_seconds: Keyword.fetch!(opts, :max_seconds)
-    )
+    Supervisor.init(children, strategy: :one_for_one)
   end
 end
