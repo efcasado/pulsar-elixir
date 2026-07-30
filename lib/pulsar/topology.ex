@@ -63,13 +63,46 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
+  Returns `{index, pid}` for each group under `root`.
+
+  A non-partitioned topic is the degenerate topology of one group — `root` itself — so it
+  answers `[{0, root}]` rather than nothing, and a caller routing over the result needs no
+  case for it.
+
+  Keyed by the index parsed from the partition's name rather than by its position: names sort
+  lexicographically, which misorders partitions once there are ten or more
+  ("...-partition-10" before "...-partition-2").
+
+  A partition between lives is reported as `:restarting` or `:undefined` instead of a pid,
+  which is a distinct answer from having no such partition at all.
+  """
+  @spec groups(pid()) :: [{non_neg_integer(), pid() | :restarting | :undefined}]
+  def groups(root) do
+    case kind(root) do
+      :group -> [{0, root}]
+      :partitioned -> partition_children(root)
+    end
+  end
+
+  @doc """
   Returns how many partitions `root` covers, or `0` when the topic is not partitioned.
   """
   @spec partitions(pid()) :: non_neg_integer()
   def partitions(root) do
+    case kind(root) do
+      :group -> 0
+      :partitioned -> length(partition_children(root))
+    end
+  end
+
+  # A partitioned root also supervises its Discovery poller, which is not a partition.
+  defp partition_children(root) do
     root
     |> Supervisor.which_children()
-    |> Enum.count(fn {_id, _pid, type, _modules} -> type == :supervisor end)
+    |> Enum.flat_map(fn
+      {partition_name, pid, :supervisor, _modules} -> [{Topic.index(partition_name), pid}]
+      _child -> []
+    end)
   end
 
   @doc """

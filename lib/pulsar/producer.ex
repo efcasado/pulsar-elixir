@@ -25,7 +25,6 @@ defmodule Pulsar.Producer do
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.ServiceDiscovery
-  alias Pulsar.Topic
   alias Pulsar.Topology
 
   @default_client :default
@@ -167,9 +166,9 @@ defmodule Pulsar.Producer do
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
   defp publish(producer, message, opts) do
-    case partition_groups(producer) do
-      [] -> send_to_worker(Topology.workers(producer, Worker), message, opts)
-      groups -> route(groups, message, opts)
+    case Topology.kind(producer) do
+      :worker -> Worker.send_message(producer, message, opts)
+      _supervisor -> route(Topology.groups(producer), message, opts)
     end
   catch
     # The producer went away while we were looking at it, which is what a caller holding
@@ -181,15 +180,11 @@ defmodule Pulsar.Producer do
     # The modulus is every configured partition, including any whose group is currently
     # restarting: hashing over only the live ones would move a key to another partition
     # for the duration of a restart, breaking per-key ordering.
-    #
-    # Routing then resolves the partition index parsed from the topic suffix rather than a
-    # position in a sorted list: sorting names lexicographically misorders partitions once
-    # there are ten or more ("...-partition-10" before "...-partition-2").
     index = select_partition(opts, length(groups))
 
-    case Enum.find(groups, fn {topic, _pid} -> Topic.index(topic) == index end) do
-      {_topic, group} when is_pid(group) -> send_to_worker(Topology.workers(group, Worker), message, opts)
-      {_topic, _restarting} -> {:error, :no_producers_available}
+    case List.keyfind(groups, index, 0) do
+      {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group, Worker), message, opts)
+      {_index, _restarting} -> {:error, :no_producers_available}
       nil -> {:error, {:partition_not_found, index}}
     end
   end
@@ -205,13 +200,6 @@ defmodule Pulsar.Producer do
 
   defp send_to_worker([worker | _rest], message, opts) do
     Worker.send_message(worker, message, opts)
-  end
-
-  defp partition_groups(producer) do
-    producer
-    |> Supervisor.which_children()
-    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
-    |> Enum.map(fn {topic, pid, _type, _modules} -> {topic, pid} end)
   end
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
