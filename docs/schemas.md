@@ -123,12 +123,15 @@ Pulsar.Producer.send(producer, Jason.encode!(%{id: 1, name: "Alice"}))
 The broker enforces compatibility when registering schemas:
 
 ```elixir
-# Producer with String schema
-{:ok, p1} = Pulsar.Producer.start("topic", schema: [type: :String])
+# Two producers on one topic need distinct names, since a producer's name defaults to
+# its topic and the second would otherwise be reported as already started.
+{:ok, p1} = Pulsar.Producer.start("topic", name: :original, schema: [type: :String])
 
 # Different schema type - REJECTED by broker
-{:ok, p2} = Pulsar.Producer.start("topic", schema: [type: :Int32])
-# Process terminates with {:IncompatibleSchema, ...}
+{:ok, p2} = Pulsar.Producer.start("topic", name: :evolving, schema: [type: :Int32])
+
+# The second producer's worker terminates with {:IncompatibleSchema, ...}, so it stops
+# without being restarted and Pulsar.Producer.workers(p2) is empty.
 ```
 
 **Compatible changes:**

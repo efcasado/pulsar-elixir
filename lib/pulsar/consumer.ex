@@ -11,8 +11,8 @@ defmodule Pulsar.Consumer do
   `partitions/2` report what it is made of, `lookup/2` finds one by name, and `topic/1`
   answers at any level of it.
 
-  `ack/2` and `nack/2` act on a worker — `self()` inside a callback — for manual
-  acknowledgement. `send_flow/3` grants permits at any level.
+  `ack/2` and `nack/2` acknowledge manually, from a process other than the worker that
+  delivered the message. `send_flow/3` grants permits at any level.
 
   ## Options
 
@@ -146,9 +146,24 @@ defmodule Pulsar.Consumer do
   @doc """
   Acknowledges one or more messages, marking them as processed.
 
-  Takes the pid of the worker that delivered them, which inside a callback is `self()`.
-  Not a group or a name: an acknowledgement carries the consumer id of the worker the
-  broker sent the message to, so no other worker can answer for it.
+  Takes the pid of the worker that delivered them. Not a group or a name: an acknowledgement
+  carries the consumer id of the worker the broker sent the message to, so no other worker
+  can answer for it.
+
+  Manual acknowledgement is for handing a message to whatever actually processes it and
+  acknowledging once that work is done. Return `{:noreply, state}` from
+  `c:Pulsar.Consumer.Callback.handle_message/2` to leave the message unacknowledged, passing
+  along the worker and the message id:
+
+      def handle_message(message, state) do
+        MyApp.Jobs.enqueue(message.payload, ack: {self(), message.message_id_to_ack})
+        {:noreply, state}
+      end
+
+  The job calls `Pulsar.Consumer.ack(consumer, message_id)` when it finishes. It has to be
+  that process and not the callback: every callback function runs inside its worker, so
+  `ack(self(), ...)` is a `GenServer` call a process makes to itself, which exits with
+  `:calling_self` and takes the consumer down.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)

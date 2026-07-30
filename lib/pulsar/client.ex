@@ -82,8 +82,13 @@ defmodule Pulsar.Client do
 
               They start just after the client rather than during its startup, so that resolving
               a topic against an unreachable broker cannot block your application's boot: a
-              client that is up may not have them yet. `Pulsar.Consumer.start/1` is synchronous
-              if you need one before the next line runs.
+              client that is up may not have them yet.
+
+              Nor is a consumer that exists one that is consuming. `Pulsar.Consumer.start/1`
+              resolves the topic's partitions and returns once the processes are up, while each
+              worker still subscribes and initialises your callback module in the background.
+              Neither declaring a consumer nor starting one is a readiness signal; the first
+              `c:Pulsar.Consumer.Callback.handle_message/2` is.
 
               One that fails to start does not stop the client: it is logged and retried with
               backoff, so a consumer whose broker is unreachable at boot starts once the broker
