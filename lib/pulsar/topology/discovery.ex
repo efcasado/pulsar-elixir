@@ -8,6 +8,8 @@ defmodule Pulsar.Topology.Discovery do
 
   use GenServer
 
+  alias Pulsar.Topology
+
   require Logger
 
   @doc """
@@ -80,7 +82,7 @@ defmodule Pulsar.Topology.Discovery do
   end
 
   defp grow(state, desired) when desired > 0 do
-    existing = existing_partition_indices(state.supervisor)
+    existing = MapSet.new(Topology.groups(state.supervisor), &elem(&1, 0))
     missing = Enum.reject(0..(desired - 1), &MapSet.member?(existing, &1))
     add_partitions(state, missing)
   end
@@ -107,13 +109,6 @@ defmodule Pulsar.Topology.Discovery do
           Logger.error("Partition discovery: failed to start partition #{index} for #{state.topic}: #{inspect(reason)}")
       end
     end)
-  end
-
-  defp existing_partition_indices(supervisor) do
-    supervisor
-    |> Supervisor.which_children()
-    |> Enum.filter(fn {_id, _pid, type, _modules} -> type == :supervisor end)
-    |> MapSet.new(fn {id, _pid, _type, _modules} -> Pulsar.Topic.index(id) end)
   end
 
   defp schedule(interval), do: Process.send_after(self(), :discover, interval)
