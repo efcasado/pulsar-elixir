@@ -48,17 +48,34 @@ defmodule Pulsar.Topology do
     end
   end
 
+  # Checked rather than assumed: a topology also supervises its Discovery poller, which is a
+  # :worker too, and answering with that would have a caller send it worker calls it cannot
+  # handle, taking it down.
+  @worker_modules [Pulsar.Consumer.Worker, Pulsar.Producer.Worker]
+
   @doc """
   Returns the worker processes under `root`, across every partition it has.
+
+  Only the ones that are up, unless `:include_all` is set — a worker between lives is
+  then reported as `:restarting` or `:undefined`, the way `groups/1` reports a partition.
+  A caller wanting to talk to a worker wants the default; a caller counting how many will
+  report in wants all of them, since one restarting now is still one that will report.
   """
-  @spec workers(pid(), module()) :: [pid()]
-  def workers(root, worker_module) do
+  @spec workers(pid(), keyword()) :: [pid() | :restarting | :undefined]
+  def workers(root, opts \\ []) do
+    include_all? = Keyword.get(opts, :include_all, false)
+
     root
     |> Supervisor.which_children()
     |> Enum.flat_map(fn
-      {_id, pid, :worker, [^worker_module]} when is_pid(pid) -> [pid]
-      {_id, pid, :supervisor, _modules} when is_pid(pid) -> workers(pid, worker_module)
-      _child -> []
+      {_id, pid, :worker, [module]} when module in @worker_modules ->
+        if is_pid(pid) or include_all?, do: [pid], else: []
+
+      {_id, pid, :supervisor, _modules} when is_pid(pid) ->
+        workers(pid, opts)
+
+      _child ->
+        []
     end)
   end
 

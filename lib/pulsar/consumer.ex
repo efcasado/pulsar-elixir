@@ -125,7 +125,7 @@ defmodule Pulsar.Consumer do
   @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(consumer, opts \\ [])
 
-  def workers(consumer, _opts) when is_pid(consumer), do: Topology.workers(consumer, Worker)
+  def workers(consumer, _opts) when is_pid(consumer), do: Topology.workers(consumer)
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -183,7 +183,7 @@ defmodule Pulsar.Consumer do
   def send_flow(consumer, permits, _opts) when is_pid(consumer) do
     case Topology.kind(consumer) do
       :worker -> grant(consumer, permits)
-      _supervisor -> grant_all(Topology.workers(consumer, Worker), permits)
+      _supervisor -> grant_all(Topology.workers(consumer), permits)
     end
   end
 
@@ -229,7 +229,7 @@ defmodule Pulsar.Consumer do
   end
 
   defp worker_topic(supervisor) do
-    case Topology.workers(supervisor, Worker) do
+    case Topology.workers(supervisor) do
       [worker | _rest] -> Worker.topic(worker)
       [] -> {:error, :not_found}
     end

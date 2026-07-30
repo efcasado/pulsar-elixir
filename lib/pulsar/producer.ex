@@ -145,7 +145,7 @@ defmodule Pulsar.Producer do
   @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
   def workers(producer, opts \\ [])
 
-  def workers(producer, _opts) when is_pid(producer), do: Topology.workers(producer, Worker)
+  def workers(producer, _opts) when is_pid(producer), do: Topology.workers(producer)
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -183,7 +183,7 @@ defmodule Pulsar.Producer do
     index = select_partition(opts, length(groups))
 
     case List.keyfind(groups, index, 0) do
-      {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group, Worker), message, opts)
+      {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
       {_index, _restarting} -> {:error, :no_producers_available}
       nil -> {:error, {:partition_not_found, index}}
     end

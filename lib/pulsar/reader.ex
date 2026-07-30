@@ -67,6 +67,7 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
+  alias Pulsar.Topology
 
   require Logger
 
@@ -302,7 +303,7 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_consumers_ready(consumer_group_pid, reader_ref) do
-    expected_count = length(Consumer.workers(consumer_group_pid))
+    expected_count = length(Topology.workers(consumer_group_pid, include_all: true))
     collect_ready_messages(expected_count, [], 5_000, reader_ref)
   end
 
