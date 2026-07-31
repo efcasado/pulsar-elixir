@@ -186,7 +186,7 @@ defmodule Pulsar.Client do
   defp branch_spec(kind, registry, supervisor, opts) do
     children = [
       {Registry, keys: :unique, name: registry},
-      {DynamicSupervisor, strategy: :one_for_one, name: supervisor},
+      {DynamicSupervisor, [strategy: :one_for_one, name: supervisor] ++ Pulsar.Topology.restart_intensity()},
       {Bootstrap, {kind, opts}}
     ]
 

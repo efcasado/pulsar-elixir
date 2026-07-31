@@ -15,6 +15,16 @@ defmodule Pulsar.Producer.Worker do
 
   require Logger
 
+  @terminal_errors [
+    :AuthenticationError,
+    :AuthorizationError,
+    :IncompatibleSchema,
+    :InvalidTopicName,
+    :NotAllowedError,
+    :TopicTerminatedError,
+    :UnsupportedVersionError
+  ]
+
   defstruct [
     :client,
     :topic,
@@ -162,7 +172,8 @@ defmodule Pulsar.Producer.Worker do
         ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
         {:stop, {:shutdown, :producer_fenced}, state}
 
-      {:error, {:IncompatibleSchema, _msg} = reason} ->
+      # Errors a second attempt cannot change; see Pulsar.Consumer.Worker.
+      {:error, {code, _msg} = reason} when code in @terminal_errors ->
         {:stop, {:shutdown, reason}, state}
 
       {:error, reason} ->
@@ -195,7 +206,10 @@ defmodule Pulsar.Producer.Worker do
     end
   end
 
-  # A topic being reassigned between brokers answers this until its new owner has taken over.
+  # :disconnected is the broker answering while it re-establishes its connection, which it is
+  # already retrying with its own backoff; ServiceNotReady is a topic still being reassigned
+  # between brokers. Both are answers that change on their own.
+  defp retryable?(:disconnected), do: true
   defp retryable?({:ServiceNotReady, _message}), do: true
   defp retryable?(_reason), do: false
 

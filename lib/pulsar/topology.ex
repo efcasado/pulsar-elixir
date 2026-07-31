@@ -18,6 +18,19 @@ defmodule Pulsar.Topology do
 
   require Logger
 
+  # A broker losing its connection exits every worker registered with it at once, so a group of
+  # N workers sees N restarts in the same instant. OTP's default of 3 in 5 seconds is spent by
+  # any group of four or more on a single disconnect, and since a resource is only brought back
+  # from an abnormal exit, spending it means the resource is gone for good. Sized to absorb
+  # several full reconnects of a large group rather than to catch a fast crash loop, which the
+  # workers' own bounded retry handles.
+  @max_restarts 100
+  @max_seconds 60
+
+  @doc false
+  @spec restart_intensity() :: keyword()
+  def restart_intensity, do: [max_restarts: @max_restarts, max_seconds: @max_seconds]
+
   @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
     with {:ok, partitions} <- width(opts) do
@@ -211,7 +224,10 @@ defmodule Pulsar.Topology do
 
     partition_children = Enum.map(0..(partitions - 1), build_child_spec)
 
-    Supervisor.init(partition_children ++ discovery_children, strategy: :one_for_one)
+    Supervisor.init(
+      partition_children ++ discovery_children,
+      [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
+    )
   end
 
   defp partition_child_spec(partition_index, worker, registry, count_key, opts) do
@@ -225,7 +241,8 @@ defmodule Pulsar.Topology do
     %{
       id: partition_topic,
       start: {Group, :start_link, [worker, registry, count_key, partition_opts]},
-      restart: :permanent,
+      restart: :transient,
+      significant: true,
       type: :supervisor
     }
   end

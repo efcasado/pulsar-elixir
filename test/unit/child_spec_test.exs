@@ -34,7 +34,7 @@ defmodule Pulsar.ChildSpecTest do
         )
 
       assert spec.type == :supervisor
-      assert spec.restart == :permanent
+      assert spec.restart == :transient
       assert spec.id == {Pulsar.Consumer, "persistent://public/default/orders-svc"}
     end
 
@@ -81,9 +81,9 @@ defmodule Pulsar.ChildSpecTest do
       spec = Pulsar.Producer.child_spec(topic: "persistent://public/default/audit")
 
       assert spec.type == :supervisor
-      # Permanent so a group that exhausts max_restarts is brought back, rather than the
-      # producer disappearing until someone starts it again.
-      assert spec.restart == :permanent
+      # Transient so a resource that stopped cleanly stays stopped: its workers hit something
+      # a restart cannot change, and its group shut down behind them. A crash still restarts it.
+      assert spec.restart == :transient
       assert spec.id == {Pulsar.Producer, "persistent://public/default/audit-producer"}
     end
 

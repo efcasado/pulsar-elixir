@@ -34,7 +34,7 @@ defmodule Pulsar.Producer do
     %{
       id: {__MODULE__, id(opts)},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :permanent,
+      restart: :transient,
       type: :supervisor
     }
   end

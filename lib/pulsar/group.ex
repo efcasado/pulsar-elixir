@@ -12,6 +12,8 @@ defmodule Pulsar.Group do
 
   use Supervisor
 
+  alias Pulsar.Topology
+
   require Logger
 
   @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
@@ -42,10 +44,14 @@ defmodule Pulsar.Group do
           id: worker_name,
           start: {worker, :start_link, [Keyword.put(opts, :name, worker_name)]},
           restart: :transient,
+          significant: true,
           type: :worker
         }
       end
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # A worker that stops cleanly hit something retrying cannot fix, so it is not brought back.
+    # :all_significant then keeps the group running while any sibling still has the topic, and
+    # shuts it down once the last one is gone rather than leaving a group with nothing in it.
+    Supervisor.init(children, [strategy: :one_for_one, auto_shutdown: :all_significant] ++ Topology.restart_intensity())
   end
 end

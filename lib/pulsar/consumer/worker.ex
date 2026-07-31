@@ -16,6 +16,17 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
+  @terminal_errors [
+    :AuthenticationError,
+    :AuthorizationError,
+    :ConsumerBusy,
+    :IncompatibleSchema,
+    :InvalidTopicName,
+    :NotAllowedError,
+    :TopicNotFound,
+    :UnsupportedVersionError
+  ]
+
   defstruct [
     :client,
     :topic,
@@ -189,6 +200,13 @@ defmodule Pulsar.Consumer.Worker do
       {:ok, broker_pid} ->
         {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
 
+      # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic
+      # stays malformed, and an :Exclusive subscription already taken stays taken. Stopping
+      # with :shutdown leaves the worker down instead of restarting it into the same answer,
+      # and the group follows once its last worker has gone.
+      {:error, {code, _message} = reason} when code in @terminal_errors ->
+        {:stop, {:shutdown, reason}, state}
+
       {:error, reason} ->
         {:stop, reason, state}
     end
@@ -318,7 +336,10 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  # A topic being reassigned between brokers answers this until its new owner has taken over.
+  # :disconnected is the broker answering while it re-establishes its connection, which it is
+  # already retrying with its own backoff; ServiceNotReady is a topic still being reassigned
+  # between brokers. Both are answers that change on their own.
+  defp retryable?(:disconnected), do: true
   defp retryable?({:ServiceNotReady, _message}), do: true
   defp retryable?(_reason), do: false
 

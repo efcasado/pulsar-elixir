@@ -168,7 +168,10 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert count == expected_count
   end
 
-  test "exclusive subscription fails with multiple consumers" do
+  # An :Exclusive subscription admits one consumer, so the workers past the first are refused
+  # and stop instead of restarting against a slot that will not free up. The one that got the
+  # subscription keeps running. Use :Failover if the others should stand by.
+  test "exclusive subscription keeps only the consumer that got the subscription" do
     {:ok, exclusive_multi_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -177,9 +180,10 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:Exclusive, 2)
       )
 
-    Utils.wait_for(fn -> not Process.alive?(exclusive_multi_group) end)
+    Utils.wait_for(fn -> length(Pulsar.Consumer.workers(exclusive_multi_group)) == 1 end)
 
-    assert Process.alive?(exclusive_multi_group) == false
+    assert Process.alive?(exclusive_multi_group)
+    assert length(Pulsar.Consumer.workers(exclusive_multi_group)) == 1
   end
 
   defp subscription_options(type, count) do

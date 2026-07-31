@@ -144,9 +144,15 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       )
 
     [producer_pid] = Pulsar.Producer.workers(producer_group)
-    ref = Process.monitor(producer_pid)
-    assert_receive {:DOWN, ^ref, :process, ^producer_pid, _reason}, 5_000
-    assert Pulsar.Producer.workers(producer_group) == []
+    worker_ref = Process.monitor(producer_pid)
+    group_ref = Process.monitor(producer_group)
+
+    assert_receive {:DOWN, ^worker_ref, :process, ^producer_pid, _reason}, 5_000
+
+    # An incompatible schema will not become compatible, so the worker stops rather than
+    # restarting into the same rejection, and the group follows it down rather than lingering
+    # with nothing in it.
+    assert_receive {:DOWN, ^group_ref, :process, ^producer_group, _reason}, 5_000
   end
 
   test "compatible schema changes produce different versions" do
