@@ -82,5 +82,23 @@ defmodule Pulsar.BackoffTest do
 
       assert elapsed <= budget
     end
+
+    # The calls being retried carry their own multi-second timeouts, so a budget that charged
+    # only the sleeps would bound almost nothing when the broker is the slow part.
+    test "charges the time the function itself spends" do
+      budget = 300
+
+      slow = fn ->
+        Process.sleep(120)
+        {:error, :transient}
+      end
+
+      {elapsed, {:error, :transient}} =
+        :timer.tc(fn -> Backoff.run(slow, &retryable?/1, budget) end, :millisecond)
+
+      # Without charging the calls, four sleeps of 120ms would fit inside the sleep budget
+      # alone and this would run for the best part of a second.
+      assert elapsed <= budget + 120
+    end
   end
 end

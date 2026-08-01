@@ -27,17 +27,21 @@ defmodule Pulsar.Backoff do
   """
   @spec run((-> result), (term() -> boolean()), non_neg_integer()) :: result when result: term()
   def run(fun, retryable?, budget \\ @retry_budget) when is_function(fun, 0) and is_function(retryable?, 1) do
-    run(fun, retryable?, budget, 0)
+    run(fun, retryable?, now() + budget, 0)
   end
 
-  defp run(fun, retryable?, budget, backoff) do
+  # Against a deadline rather than by subtracting the sleeps, so that the time `fun` itself
+  # spends counts too. The broker calls it wraps carry their own timeouts of several seconds,
+  # and charging only the sleeps would let a slow broker stretch a 3s budget into tens of
+  # seconds — past the shutdown window the budget exists to stay inside.
+  defp run(fun, retryable?, deadline, backoff) do
     case fun.() do
       {:error, reason} = error ->
         wait = next(backoff)
 
-        if retryable?.(reason) and wait <= budget do
+        if retryable?.(reason) and now() + wait <= deadline do
           Process.sleep(wait)
-          run(fun, retryable?, budget - wait, wait)
+          run(fun, retryable?, deadline, wait)
         else
           error
         end
@@ -46,4 +50,6 @@ defmodule Pulsar.Backoff do
         result
     end
   end
+
+  defp now, do: System.monotonic_time(:millisecond)
 end

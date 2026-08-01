@@ -124,17 +124,21 @@ defmodule Pulsar do
                   │       └── Topology.Discovery (polls for new partitions)
                   └── Bootstrap     (connects Broker 1, starts declared producers)
 
-  The strategies follow the dependencies. Everything resolves topics through the brokers, so
-  losing them means starting the resources over — hence `:rest_for_one` at the top. Consumers
-  and producers do not depend on each other, so `resources` is `:one_for_one` and a consumer
-  failure leaves producers alone. Within a branch, resources register their names in the
-  registry as they start, so a registry that came back empty would leave them alive and
-  unreachable by name — `:rest_for_one` again.
+  The strategies follow the dependencies between those children; `Pulsar.Client` covers why
+  each one was chosen. What it means for your consumers and producers:
 
-  The `DynamicSupervisor`s have no static child list and so come back empty when restarted.
-  `Bootstrap` is what fills them, and it is static, so it runs again on every restart of its
-  branch. A declared resource that fails is logged and retried with backoff, so a consumer
-  whose broker is briefly unreachable starts once it is reachable rather than being abandoned.
+  - A broker losing its connection does not restart anything through the tree. The connection
+    process stays up and reconnects with backoff, exiting the workers registered with it so
+    they resubscribe against the replacement. Only losing the broker registry or supervisor
+    itself restarts the resources below them.
+  - A consumer failing leaves producers alone, and the other way round.
+  - A resource that meets something a retry cannot change — a topic that does not exist, a
+    schema the broker rejects, credentials it refuses — stops and stays stopped rather than
+    restarting into the same answer. Anything that can change on its own is retried instead,
+    in place where the worker can and through a restart otherwise.
+  - The `DynamicSupervisor`s have no static child list, so a branch restart brings back only
+    the declared resources, through `Bootstrap`. Anything added with `start/1` is gone. A
+    declared one that fails is logged and retried with backoff rather than abandoned.
 
   A client starts before its bootstrap connection is established: `Pulsar.Client.start_link/1`
   returning does not mean the broker is reachable, only that the connection process exists and
