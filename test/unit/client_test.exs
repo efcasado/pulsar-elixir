@@ -83,13 +83,13 @@ defmodule Pulsar.ClientTest do
       end
     end
 
-    test "rejects two declarations that resolve to one registry name" do
+    test "rejects the same explicit name on different declarations" do
       # Starting the second reports the first as already started, so it would be discarded.
       assert_raise ArgumentError, ~r/declares more than one Pulsar.Producer named/, fn ->
         Client.start_link(
           name: :dup_producers,
           host: "pulsar://127.0.0.1:1",
-          producers: [[topic: "t"], [topic: "t"]]
+          producers: [[topic: "a", name: :duplicate], [topic: "b", name: :duplicate]]
         )
       end
     end

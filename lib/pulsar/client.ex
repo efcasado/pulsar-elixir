@@ -444,8 +444,7 @@ defmodule Pulsar.Client do
     if duplicates != [] do
       raise ArgumentError,
             "Pulsar client #{inspect(client)} declares more than one #{inspect(module)} named " <>
-              "#{Enum.map_join(duplicates, ", ", &inspect/1)}. Names default to the topic, so two " <>
-              "entries on one topic need distinct :name values."
+              "#{Enum.map_join(duplicates, ", ", &inspect/1)}. Give each declaration a distinct :name."
     end
 
     entries
