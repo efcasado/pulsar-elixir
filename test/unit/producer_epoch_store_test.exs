@@ -3,8 +3,6 @@ defmodule Pulsar.Producer.EpochStoreTest do
 
   alias Pulsar.Producer.EpochStore
 
-  doctest EpochStore
-
   test "reads and writes are scoped to a client" do
     EpochStore.init(:epoch_a)
     EpochStore.init(:epoch_b)
@@ -18,5 +16,13 @@ defmodule Pulsar.Producer.EpochStoreTest do
   test "a client that was never started reports no epoch rather than raising" do
     assert EpochStore.get(:epoch_never, "t", "p", :Exclusive) == :error
     assert EpochStore.put(:epoch_never, "t", "p", :Exclusive, 1) == :error
+  end
+
+  test "deletes a stored epoch" do
+    EpochStore.init(:epoch_delete)
+    :ok = EpochStore.put(:epoch_delete, "t", "p", :Exclusive, 7)
+
+    assert EpochStore.delete(:epoch_delete, "t", "p", :Exclusive) == :ok
+    assert EpochStore.get(:epoch_delete, "t", "p", :Exclusive) == :error
   end
 end

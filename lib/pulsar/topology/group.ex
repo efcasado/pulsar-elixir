@@ -1,15 +1,6 @@
 defmodule Pulsar.Topology.Group do
   @moduledoc false
 
-  # Supervises the worker processes for one topic, or for one partition of it, for
-  # consumers and for producers alike.
-  #
-  # Started beneath Pulsar.Topology, after Pulsar.Consumer or Pulsar.Producer has validated
-  # the option surface, so options are threaded through untouched apart from the per-worker
-  # :name. Each worker gets its own name because the broker identifies a producer by it and
-  # the topic epoch is stored against it, so sharing one name across a group would have them
-  # overwrite each other.
-
   use Supervisor
 
   alias Pulsar.Topology
@@ -30,6 +21,7 @@ defmodule Pulsar.Topology.Group do
 
     children =
       for i <- 1..count do
+        # Producer epochs are keyed by broker name, so every worker needs its own identity.
         worker_name = "#{name}-#{i}"
 
         %{

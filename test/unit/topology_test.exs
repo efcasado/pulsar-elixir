@@ -203,8 +203,6 @@ defmodule Pulsar.TopologyTest do
       assert length(Topology.workers(start_supervisor(partitions))) == 3
     end
 
-    # A topology supervises its Discovery poller alongside its partitions, and it is a :worker
-    # too. Answering with it would have a caller send it worker calls it cannot handle.
     test "leaves out a child that is not one of the topology's workers" do
       root = start_supervisor([worker_spec("w-1"), worker_spec(Discovery, Discovery)])
 

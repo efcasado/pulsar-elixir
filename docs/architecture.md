@@ -8,6 +8,8 @@ spans several partitions and workers.
 This guide explains those boundaries, what starts asynchronously, and what applications
 can expect when part of the tree restarts.
 
+<!-- Internal modules use <code> tags because ExDoc cannot link modules hidden with @moduledoc false. -->
+
 ## Why Does Ownership Matter?
 
 A consumer or producer cannot work without the connection context provided by a

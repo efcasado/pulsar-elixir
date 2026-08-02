@@ -1,10 +1,7 @@
 defmodule Pulsar.Topology do
   @moduledoc false
 
-  # The stable supervision root a consumer or producer has for one topic. Its Discovery
-  # controller resolves and reconciles one Pulsar.Topology.Group for a non-partitioned topic, or one
-  # group per partition. The root has the public registry name; its groups are internal
-  # children identified by their place in the topology rather than additional public names.
+  # Stable root for one logical consumer or producer; Discovery reconciles its internal groups.
 
   use Supervisor
 
@@ -81,9 +78,7 @@ defmodule Pulsar.Topology do
     :exit, _reason -> fallback
   end
 
-  # Checked rather than assumed: a topology also supervises its Discovery controller, which is a
-  # :worker too, and answering with that would have a caller send it worker calls it cannot
-  # handle, taking it down.
+  # Discovery is also an OTP :worker child, so traversal explicitly allows only resource workers.
   @worker_modules [Pulsar.Consumer.Worker, Pulsar.Producer.Worker]
 
   @doc """
@@ -114,9 +109,7 @@ defmodule Pulsar.Topology do
   passed directly is treated the same way and answers itself, so callers routing over either
   shape need no special case.
 
-  Keyed by the index parsed from the partition's name rather than by its position: names sort
-  lexicographically, which misorders partitions once there are ten or more
-  ("...-partition-10" before "...-partition-2").
+  Partition indexes come from the integer child ids rather than a group's position in the list.
 
   A partition between lives is reported as `:restarting` or `:undefined` instead of a pid,
   which is a distinct answer from having no such partition at all.
@@ -129,7 +122,6 @@ defmodule Pulsar.Topology do
     end
   end
 
-  # A topology also supervises its Discovery controller, which is not a group.
   defp topology_groups(root) do
     root
     |> Supervisor.which_children()
@@ -143,9 +135,8 @@ defmodule Pulsar.Topology do
   @doc """
   Which level of a topology `pid` is: the stable topology root, one of its groups, or a worker.
 
-  Callers need this because a supervisor cannot answer a `GenServer` call — asking one for a
-  worker's answer would take it down. Taken from `:proc_lib.initial_call/1` rather than by
-  walking the tree, which is what an earlier partition-routing bug turned on.
+  Uses `:proc_lib.initial_call/1` rather than traversal, so supervisors are never sent calls
+  intended for workers.
   """
   @spec kind(pid()) :: :topology | :group | :worker
   def kind(pid) do

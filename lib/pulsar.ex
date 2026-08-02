@@ -89,37 +89,8 @@ defmodule Pulsar do
   Each client keeps its own broker connections, registries and supervisors, so the two are
   fully isolated.
 
-  ## Ownership at a glance
-
-      MyApp.Supervisor
-      └── Pulsar.Client
-          ├── BrokerRegistry
-          ├── BrokerSupervisor
-          │   └── broker connection(s)
-          └── resources
-              ├── consumers
-              │   ├── ConsumerRegistry
-              │   ├── ConsumerSupervisor
-              │   │   └── stable consumer root(s)
-              │   │       ├── topology discovery
-              │   │       └── partition group(s)
-              │   │           └── consumer worker(s)
-              │   └── Bootstrap
-              └── producers
-                  ├── ProducerRegistry
-                  ├── ProducerSupervisor
-                  │   └── stable producer root(s)
-                  │       ├── topology discovery
-                  │       └── partition group(s)
-                  │           └── producer worker(s)
-                  └── Bootstrap
-
-  Non-partitioned resources have one worker group; partitioned resources have one per
-  partition. Those groups remain internal—the stable resource root is what the public API
-  returns, registers and lists.
-
-  See the [architecture guide](architecture.html) for the ownership and recovery model in
-  more detail.
+  See the [architecture guide](architecture.html) for the complete ownership tree and recovery
+  model.
 
   ## Lifecycle and availability
 
