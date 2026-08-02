@@ -81,17 +81,17 @@ defmodule Pulsar.Client.Bootstrap do
               into: MapSet.new(),
               do: pid
 
-        Enum.map(outcomes, fn
-          {resource, {:contested, pid}} ->
-            if pid in owned,
-              do: {resource, :started},
-              else: {resource, {:pending, {:already_started, pid}}}
-
-          settled ->
-            settled
-        end)
+        Enum.map(outcomes, &settle_outcome(&1, owned))
     end
   end
+
+  defp settle_outcome({resource, {:contested, pid}}, owned) do
+    if pid in owned,
+      do: {resource, :started},
+      else: {resource, {:pending, {:already_started, pid}}}
+  end
+
+  defp settle_outcome(settled, _owned), do: settled
 
   defp reschedule(%{pending: []} = state, _last_error) do
     if state.backoff > 0 do

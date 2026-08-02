@@ -220,6 +220,17 @@ defmodule Pulsar.Topology do
   def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
     children = Supervisor.which_children(root)
 
+    case restart_stopped_groups(root, children) do
+      :ok -> reconcile_children(root, desired, config)
+      {:error, _reason} = error -> error
+    end
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp reconcile_children(root, desired, config) do
+    children = Supervisor.which_children(root)
+
     topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
 
     partitions =
@@ -229,8 +240,26 @@ defmodule Pulsar.Topology do
       end)
 
     reconcile_shape(topology_shape(topic?, partitions), root, desired, config)
-  catch
-    :exit, reason -> {:error, reason}
+  end
+
+  defp restart_stopped_groups(root, children) do
+    Enum.reduce_while(children, :ok, fn
+      {{:topic, :non_partitioned} = id, :undefined, :supervisor, _modules}, :ok ->
+        restart_stopped_group(root, id)
+
+      {{:partition, _index} = id, :undefined, :supervisor, _modules}, :ok ->
+        restart_stopped_group(root, id)
+
+      _child, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp restart_stopped_group(root, id) do
+    case restart_group(root, id) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, {:group_restart_failed, id, reason}}}
+    end
   end
 
   defp topology_shape(true, partitions) do
@@ -287,7 +316,16 @@ defmodule Pulsar.Topology do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
       {:error, {:already_started, _pid}} -> :ok
-      {:error, :already_present} -> :ok
+      {:error, :already_present} -> restart_group(root, Map.fetch!(child_spec, :id))
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp restart_group(root, id) do
+    case Supervisor.restart_child(root, id) do
+      {:ok, _pid} -> :ok
+      {:ok, _pid, _info} -> :ok
+      {:error, state} when state in [:running, :restarting] -> :ok
       {:error, reason} -> {:error, reason}
     end
   end

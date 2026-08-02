@@ -173,6 +173,56 @@ defmodule Pulsar.TopologyTest do
       assert Topology.status(root) == {:ready, {:partitioned, 4}}
       assert length(Topology.groups(root)) == 4
     end
+
+    test "periodically revives a partition group that stopped normally" do
+      test_pid = self()
+      resolutions = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        case Agent.get_and_update(resolutions, &{&1, &1 + 1}) do
+          0 ->
+            {:ok, 2}
+
+          _later ->
+            send(test_pid, {:resolution_started, self()})
+
+            receive do
+              :resolve -> {:ok, 2}
+            end
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 100)
+
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
+      assert_receive {:resolution_started, discovery}, 1_000
+
+      {1, old_group} = List.keyfind(Topology.groups(root), 1, 0)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(old_group)
+      ref = Process.monitor(old_group)
+
+      :ok = Agent.stop(worker)
+      assert_receive {:DOWN, ^ref, :process, ^old_group, _reason}
+      assert List.keyfind(Topology.groups(root), 1, 0) == {1, :undefined}
+
+      send(discovery, :resolve)
+
+      :ok =
+        Utils.wait_for(
+          fn ->
+            case List.keyfind(Topology.groups(root), 1, 0) do
+              {1, new_group} when is_pid(new_group) -> new_group != old_group
+              _not_running -> false
+            end
+          end,
+          100,
+          10
+        )
+
+      {1, new_group} = List.keyfind(Topology.groups(root), 1, 0)
+      assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)
+      assert Agent.get(new_worker, & &1) == Pulsar.Topic.partition(@topic, 1)
+    end
   end
 
   # workers/1 answers only for the modules a topology is actually made of, so these declare

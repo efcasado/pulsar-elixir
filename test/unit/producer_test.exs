@@ -12,13 +12,15 @@ defmodule Pulsar.ProducerTest do
     end
 
     test "rejects unsupported target types" do
-      assert_raise FunctionClauseError, fn -> apply(Producer, :send, [42, "payload", []]) end
+      assert_raise FunctionClauseError, fn -> send_message(Producer, 42, "payload") end
     end
 
     test "rejects non-binary payloads for pids and names" do
       for producer <- [self(), :producer] do
-        assert_raise FunctionClauseError, fn -> apply(Producer, :send, [producer, %{value: 1}, []]) end
+        assert_raise FunctionClauseError, fn -> send_message(Producer, producer, %{value: 1}) end
       end
     end
   end
+
+  defp send_message(module, producer, message), do: module.send(producer, message, [])
 end
