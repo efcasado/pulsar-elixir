@@ -74,7 +74,6 @@ defmodule Pulsar.Reader do
 
   require Logger
 
-  @default_flow_permits 100
   @default_startup_timeout 5_000
 
   @schema [
@@ -177,15 +176,15 @@ defmodule Pulsar.Reader do
   end
 
   defp start_consumer(topic, client_name, opts) do
-    flow_permits = Keyword.get(opts, :flow_permits, @default_flow_permits)
-    start_position = Keyword.get(opts, :start_position, :earliest)
+    flow_permits = Keyword.fetch!(opts, :flow_permits)
+    start_position = Keyword.fetch!(opts, :start_position)
     start_message_id = Keyword.get(opts, :start_message_id)
     start_timestamp = Keyword.get(opts, :start_timestamp)
-    read_compacted = Keyword.get(opts, :read_compacted, false)
-    timeout = Keyword.get(opts, :timeout, 60_000)
+    read_compacted = Keyword.fetch!(opts, :read_compacted)
+    timeout = Keyword.fetch!(opts, :timeout)
     startup_timeout = Keyword.fetch!(opts, :startup_timeout)
-    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, 0)
-    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, 0)
+    startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
+    startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
     subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
     reader_ref = make_ref()
