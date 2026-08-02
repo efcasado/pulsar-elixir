@@ -27,7 +27,11 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
 
     for i <- 1..@num_messages do
       payload = "Message #{i}"
-      Pulsar.Producer.send(:reader_connection_management_test_producer, payload, client: @client)
+
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:reader_connection_management_test_producer, payload, client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->

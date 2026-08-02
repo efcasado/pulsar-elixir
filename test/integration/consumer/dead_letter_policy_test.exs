@@ -28,7 +28,12 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         name: :test_producer
       )
 
-    Enum.each(@messages, &({:ok, _message_id} = Pulsar.Producer.send(:test_producer, &1, client: @client)))
+    Enum.each(@messages, fn message ->
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:test_producer, message, client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
+    end)
 
     on_exit(fn ->
       Pulsar.Client.stop(@client)

@@ -37,7 +37,12 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
       )
 
     for {key, payload} <- @messages do
-      Pulsar.Producer.send(:subscription_options_producer, payload, partition_key: key, client: @client)
+      Utils.wait_for(
+        fn ->
+          Pulsar.Producer.send(:subscription_options_producer, payload, partition_key: key, client: @client)
+        end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->

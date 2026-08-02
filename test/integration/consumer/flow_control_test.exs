@@ -37,7 +37,10 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       )
 
     for {key, payload} <- @messages do
-      Pulsar.Producer.send(:flow_control_producer, payload, partition_key: key, client: @client)
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:flow_control_producer, payload, partition_key: key, client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->

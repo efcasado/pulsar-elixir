@@ -2,6 +2,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @client :reader_common_test_client
@@ -26,7 +27,11 @@ defmodule Pulsar.Integration.Reader.CommonTest do
 
     for i <- 1..@num_messages do
       payload = "Message #{i}"
-      Pulsar.Producer.send(:reader_common_test_producer, payload, client: @client)
+
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:reader_common_test_producer, payload, client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->
