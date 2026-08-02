@@ -216,10 +216,7 @@ defmodule Pulsar.Topology do
 
     discovery = Discovery.child_spec({self(), config, controller_opts})
 
-    Supervisor.init(
-      [discovery],
-      [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
-    )
+    Supervisor.init([discovery], [strategy: :one_for_one] ++ restart_intensity())
   end
 
   @doc false
@@ -357,7 +354,6 @@ defmodule Pulsar.Topology do
       id: id,
       start: {Group, :start_link, [worker, count_key, opts]},
       restart: :transient,
-      significant: true,
       type: :supervisor
     }
   end

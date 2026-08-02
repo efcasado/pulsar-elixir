@@ -32,7 +32,7 @@ defmodule Pulsar.Consumer do
     %{
       id: {__MODULE__, id(opts)},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :transient,
+      restart: :permanent,
       type: :supervisor
     }
   end

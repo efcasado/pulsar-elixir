@@ -82,7 +82,12 @@ defmodule Pulsar.Integration.AccessModesTest do
              )
 
     # Second producer should fail to register (fenced by the existing exclusive producer)
-    Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
+    :ok = Utils.wait_for(fn -> Topology.status(group_pid_2) == {:ready, :non_partitioned} end)
+    :ok = Utils.wait_for(fn -> Topology.workers(group_pid_2) == [] end)
+
+    assert Process.alive?(group_pid_2)
+    assert group_pid_2 in Pulsar.Client.producers(@client)
+    assert {:error, :no_producers_available} = Pulsar.Producer.send(group_pid_2, "Rejected message")
 
     events = Utils.collect_events([:pulsar, :producer, :opened, :stop], producer_names: ["exclusive-2"])
 
@@ -91,6 +96,10 @@ defmodule Pulsar.Integration.AccessModesTest do
              &(&1.success == false and &1.error == :producer_fenced and
                  String.starts_with?(&1.producer_name, "exclusive-2"))
            )
+
+    assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
+    :ok = Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
+    refute group_pid_2 in Pulsar.Client.producers(@client)
 
     # Stop the first producer to release exclusive lock
     Pulsar.Producer.stop(group_pid_1)

@@ -63,8 +63,16 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         schema: [type: :Int32]
       )
 
-    ref = Process.monitor(consumer_group)
-    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}, 10_000
+    :ok = Utils.wait_for(fn -> Topology.status(consumer_group) == {:ready, :non_partitioned} end)
+    :ok = Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
+
+    assert Process.alive?(consumer_group)
+    assert consumer_group in Pulsar.Client.consumers(@client)
+    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
+
+    assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
+    :ok = Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
+    refute consumer_group in Pulsar.Client.consumers(@client)
   end
 
   defp start_producer(topic, opts) do

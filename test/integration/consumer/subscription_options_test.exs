@@ -276,9 +276,16 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, force_create_topic: false)
       )
 
-    Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
+    :ok = Utils.wait_for(fn -> Topology.status(no_force_create_group) == {:ready, :non_partitioned} end)
+    :ok = Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
 
-    assert Process.alive?(no_force_create_group) == false
+    assert Process.alive?(no_force_create_group)
+    assert no_force_create_group in Pulsar.Client.consumers(@client)
+    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
+
+    assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
+    :ok = Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
+    refute no_force_create_group in Pulsar.Client.consumers(@client)
   end
 
   test "read_compacted filters compacted messages", %{expected_count: expected_count} do

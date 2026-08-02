@@ -197,7 +197,7 @@ defmodule Pulsar.TopologyTest do
       assert length(Topology.groups(root)) == 4
     end
 
-    test "periodically revives a partition group that stopped normally" do
+    test "periodically revives every partition group after they stop normally" do
       test_pid = self()
       resolutions = start_supervised!({Agent, fn -> 0 end})
 
@@ -220,31 +220,45 @@ defmodule Pulsar.TopologyTest do
       :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
       assert_receive {:resolution_started, discovery}, 1_000
 
-      {1, old_group} = List.keyfind(Topology.groups(root), 1, 0)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(old_group)
-      ref = Process.monitor(old_group)
+      old_groups = Map.new(Topology.groups(root))
 
-      :ok = Agent.stop(worker)
-      assert_receive {:DOWN, ^ref, :process, ^old_group, _reason}
-      assert List.keyfind(Topology.groups(root), 1, 0) == {1, :undefined}
+      refs =
+        Enum.map(old_groups, fn {_index, group} ->
+          [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+          ref = Process.monitor(group)
+          :ok = Agent.stop(worker)
+          {ref, group}
+        end)
+
+      for {ref, group} <- refs do
+        assert_receive {:DOWN, ^ref, :process, ^group, _reason}
+      end
+
+      assert Process.alive?(root)
+      assert Enum.all?(Topology.groups(root), &match?({_index, :undefined}, &1))
 
       send(discovery, :resolve)
 
       :ok =
         Utils.wait_for(
           fn ->
-            case List.keyfind(Topology.groups(root), 1, 0) do
-              {1, new_group} when is_pid(new_group) -> new_group != old_group
-              _not_running -> false
-            end
+            groups = Map.new(Topology.groups(root))
+
+            Enum.all?(old_groups, fn {index, old_group} ->
+              case Map.fetch(groups, index) do
+                {:ok, new_group} when is_pid(new_group) -> new_group != old_group
+                _not_running -> false
+              end
+            end)
           end,
           100,
           10
         )
 
-      {1, new_group} = List.keyfind(Topology.groups(root), 1, 0)
-      assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)
-      assert Agent.get(new_worker, & &1) == Pulsar.Topic.partition(@topic, 1)
+      for {index, new_group} <- Topology.groups(root) do
+        assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)
+        assert Agent.get(new_worker, & &1) == Pulsar.Topic.partition(@topic, index)
+      end
     end
   end
 

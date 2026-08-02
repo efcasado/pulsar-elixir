@@ -144,9 +144,16 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         name: "compat-test-producer-2"
       )
 
-    group_ref = Process.monitor(producer_group)
+    :ok = Utils.wait_for(fn -> Topology.status(producer_group) == {:ready, :non_partitioned} end)
+    :ok = Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
 
-    assert_receive {:DOWN, ^group_ref, :process, ^producer_group, _reason}, 5_000
+    assert Process.alive?(producer_group)
+    assert producer_group in Pulsar.Client.producers(@client)
+    assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
+
+    assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
+    :ok = Utils.wait_for(fn -> not Process.alive?(producer_group) end)
+    refute producer_group in Pulsar.Client.producers(@client)
   end
 
   test "compatible schema changes produce different versions" do

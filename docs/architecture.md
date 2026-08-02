@@ -134,6 +134,11 @@ Adding partitions changes the children below the root, but not the root itself. 
 names, stop operations, client listings, and publishing target the logical resource instead
 of a particular worker.
 
+The stable root represents that logical resource even when none of its groups currently has
+a live worker. It remains registered and appears in client listings while operations report
+that no workers are available. This lets reconciliation recover the resource without changing
+the pid applications use to address it.
+
 Producer publishing resolves the logical root, selects a partition group, and sends through
 one of that group's workers. Consumer workers receive broker messages and invoke the
 configured `Pulsar.Consumer.Callback` in the worker process.
@@ -195,9 +200,9 @@ Recovery happens at the narrowest useful boundary:
 - A broker connection loss restarts the workers that depended on it while the client remains
   available.
 - A terminal broker rejection, such as an incompatible schema, ends that worker's immediate
-  retry cycle. A group with no viable workers shuts down. If other partitions keep the logical
-  root alive, a later reconciliation pass can try the stopped group again; if no significant
-  groups remain, the root shuts down as well.
+  retry cycle. A group with no viable workers shuts down, but the stable root and Discovery
+  remain available. A later reconciliation pass can try the stopped group again without
+  immediately repeating the terminal failure.
 - A consumer branch failure is isolated from the producer branch, and vice versa.
 - A client or branch restart recreates declared resources; runtime resources remain the
   responsibility of their caller.
@@ -242,8 +247,9 @@ them. A failed lookup or reconciliation is retried with backoff; after a success
 Discovery schedules the next one at `:partition_discovery_interval_ms` when polling is enabled.
 
 This gives a terminal worker response a useful boundary. The worker does not immediately
-restart into the same rejection, but a surviving partitioned topology can try that partition
-again on a later discovery pass, after broker-side state may have changed.
+restart into the same rejection, but the stable root can try the stopped group again on a
+later discovery pass, after broker-side state may have changed. This remains true when every
+group is stopped: the logical resource becomes degraded rather than disappearing.
 
 ### Traversing a Topology
 
@@ -272,7 +278,8 @@ independent of short-lived group and worker pids.
 The design is built around a small set of guarantees:
 
 1. A consumer or producer cannot outlive the client context it depends on.
-2. Each logical consumer or producer has one registered stable root.
+2. Each logical consumer or producer has one registered stable root, even while it has no
+   live workers.
 3. Partitions, groups, and worker pids stay behind the public facade.
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.
