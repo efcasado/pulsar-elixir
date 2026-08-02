@@ -100,26 +100,20 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
 
-  test "topic/1 answers at every level of a partitioned consumer without stopping it" do
+  test "topic/1 answers for a partitioned consumer and its workers without stopping them" do
     {:ok, partitioned} =
       Pulsar.Consumer.start(@topic, "topic-at-every-level", @consumer_callback, subscription_options(1))
 
     assert :ok = Utils.wait_for(fn -> Pulsar.Consumer.topic(partitioned) == @topic end)
 
-    [group | _rest] =
-      partitioned
-      |> Supervisor.which_children()
-      |> Enum.filter(fn {_id, pid, type, _mods} -> type == :supervisor and is_pid(pid) end)
-      |> Enum.map(fn {_id, pid, _type, _mods} -> pid end)
-
-    [worker | _rest] = Pulsar.Consumer.workers(partitioned)
+    workers = Pulsar.Consumer.workers(partitioned)
 
     assert Pulsar.Consumer.topic(partitioned) == @topic
-    assert Pulsar.Consumer.topic(group) =~ "#{@topic}-partition-"
-    assert Pulsar.Consumer.topic(worker) =~ "#{@topic}-partition-"
+    assert length(workers) == 3
+    assert Enum.all?(workers, &(Pulsar.Consumer.topic(&1) =~ "#{@topic}-partition-"))
 
     assert Process.alive?(partitioned)
-    assert Process.alive?(group)
+    assert Enum.all?(workers, &Process.alive?/1)
 
     :ok = Pulsar.Consumer.stop(partitioned)
   end

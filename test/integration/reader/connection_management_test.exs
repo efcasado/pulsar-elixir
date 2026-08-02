@@ -2,6 +2,7 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @client :reader_connection_management_test_client
@@ -79,16 +80,6 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
 
     assert length(result) == @num_messages
 
-    Process.sleep(timeout_ms * 3)
-
-    remaining =
-      @client
-      |> Pulsar.Client.consumer_supervisor()
-      |> Supervisor.which_children()
-      |> Enum.filter(fn {id, _pid, _type, _modules} ->
-        id |> to_string() |> String.contains?("reader-connection-management-test")
-      end)
-
-    assert remaining == []
+    assert :ok = Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end)
   end
 end
