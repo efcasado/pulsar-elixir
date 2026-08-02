@@ -151,6 +151,52 @@ defmodule Pulsar.ClientTest do
       assert Pulsar.Producer.stop(:absent, client: :never_started) == {:error, :not_found}
       assert Pulsar.Consumer.stop("absent", client: :never_started) == {:error, :not_found}
     end
+
+    test "resource starts report the missing client rather than exiting" do
+      assert Pulsar.Producer.start(topic: "t", client: :never_started) == {:error, :client_not_found}
+
+      assert Pulsar.Consumer.start(
+               topic: "t",
+               subscription_name: "s",
+               callback_module: MyApp.Handler,
+               client: :never_started
+             ) == {:error, :client_not_found}
+    end
+  end
+
+  describe "runtime resource initialization" do
+    test "registers stable roots while their broker is unavailable" do
+      client = :async_runtime_resources
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1"})
+
+      assert {:ok, producer} =
+               Pulsar.Producer.start(
+                 topic: "persistent://public/default/producer",
+                 name: :async_producer,
+                 client: client
+               )
+
+      assert {:ok, consumer} =
+               Pulsar.Consumer.start(
+                 topic: "persistent://public/default/consumer",
+                 subscription_name: "sub",
+                 callback_module: MyApp.Handler,
+                 name: :async_consumer,
+                 client: client
+               )
+
+      assert Pulsar.Producer.lookup(:async_producer, client: client) == {:ok, producer}
+      assert Pulsar.Consumer.lookup(:async_consumer, client: client) == {:ok, consumer}
+
+      assert Pulsar.Producer.workers(producer) == {:error, :not_ready}
+      assert Pulsar.Producer.partitions(producer) == {:error, :not_ready}
+      assert Pulsar.Producer.send(producer, "payload") == {:error, :not_ready}
+
+      assert Pulsar.Consumer.workers(consumer) == {:error, :not_ready}
+      assert Pulsar.Consumer.partitions(consumer) == {:error, :not_ready}
+      assert Pulsar.Consumer.topic(consumer) == {:error, :not_ready}
+      assert Pulsar.Consumer.send_flow(consumer, 1) == {:error, :not_ready}
+    end
   end
 
   describe "broker options" do

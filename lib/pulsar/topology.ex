@@ -56,6 +56,15 @@ defmodule Pulsar.Topology do
   end
 
   @doc false
+  @spec initialized?(pid()) :: boolean()
+  def initialized?(root) do
+    case kind(root) do
+      :topology -> match?({:ready, _topology}, status(root))
+      _group_or_worker -> true
+    end
+  end
+
+  @doc false
   @spec expected_workers(pid()) :: {:ok, pos_integer()} | {:error, :not_ready}
   def expected_workers(root) do
     case controller(root) do

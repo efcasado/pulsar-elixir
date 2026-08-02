@@ -29,7 +29,7 @@ defmodule Pulsar.Client.Bootstrap do
 
     state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
 
-    # Off init/1 so resolving a topic against an unreachable broker cannot block the host's boot.
+    # Off init/1 so declared resources are added after the client tree itself is available.
     {:ok, state, {:continue, :start_declared}}
   end
 

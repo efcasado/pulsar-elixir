@@ -80,19 +80,17 @@ defmodule Pulsar.Client do
               options. Their `:client` is set to this one. They are started again whenever
               the client restarts, unlike consumers added later with `Pulsar.Consumer.start/1`.
 
-              They start just after the client rather than during its startup, so that resolving
-              a topic against an unreachable broker cannot block your application's boot: a
-              client that is up may not have them yet.
+              They start just after the client rather than during its startup, so a client that
+              is up may not have them yet.
 
-              Nor is a consumer that exists one that is consuming. `Pulsar.Consumer.start/1`
-              resolves the topic's partitions and returns once the processes are up, while each
-              worker still subscribes and initialises your callback module in the background.
-              Neither declaring a consumer nor starting one is a readiness signal; the first
+              Nor is a consumer that exists one that is consuming. Its stable supervisor is
+              registered first; topic discovery, worker startup, subscription, and callback
+              initialization then happen in the background. Neither declaring a consumer nor
+              starting one is a readiness signal; the first
               `c:Pulsar.Consumer.Callback.handle_message/2` is.
 
-              One that fails to start does not stop the client: it is logged and retried with
-              backoff, so a consumer whose broker is unreachable at boot starts once the broker
-              is reachable.
+              An unreachable broker does not stop the client: topology discovery is retried
+              with backoff until the broker becomes reachable.
               """
             ],
             producers: [
@@ -208,6 +206,15 @@ defmodule Pulsar.Client do
     # A client that is not running has no registry to ask, which reads the same as having
     # nothing registered rather than raising at whoever asked.
     ArgumentError -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec start_resource(atom(), {module(), term()}) ::
+          DynamicSupervisor.on_start_child() | {:error, :client_not_found}
+  def start_resource(supervisor, child_spec) do
+    DynamicSupervisor.start_child(supervisor, child_spec)
+  catch
+    :exit, {:noproc, _call} -> {:error, :client_not_found}
   end
 
   ## Registry and Supervisor Name Helpers

@@ -4,10 +4,6 @@ defmodule Pulsar.Producer.Options do
   require Logger
 
   @schema [
-    partitions: [
-      type: :non_neg_integer,
-      doc: false
-    ],
     topic: [
       type: :string,
       required: true,
@@ -78,7 +74,7 @@ defmodule Pulsar.Producer.Options do
       default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables it.
+      `false` disables later checks, but not the initial topic discovery.
       """
     ],
     startup_delay_ms: [

@@ -24,7 +24,6 @@ defmodule Pulsar.Producer do
   alias Pulsar.Producer.Options
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
-  alias Pulsar.ServiceDiscovery
   alias Pulsar.Topology
 
   @default_client :default
@@ -60,6 +59,10 @@ defmodule Pulsar.Producer do
 
   For producers whose set is only known at runtime. Prefer the client's `:producers` for
   ones known up front: a producer added here is not recreated if the client restarts.
+
+  Returns once the stable producer supervisor has been registered. Topic discovery and
+  worker initialization continue asynchronously; publishing and inspection return
+  `{:error, :not_ready}` until discovery completes.
   """
   @spec start(keyword() | String.t()) :: DynamicSupervisor.on_start_child()
   def start(topic) when is_binary(topic), do: start(topic: topic)
@@ -67,15 +70,8 @@ defmodule Pulsar.Producer do
   def start(opts) when is_list(opts) do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
-    topic = Keyword.fetch!(opts, :topic)
 
-    # See Pulsar.Consumer.start/1: keeping the lookup out of the client's supervisor.
-    with {:ok, partitions} <- ServiceDiscovery.partition_count_with_retry(topic, client: client) do
-      DynamicSupervisor.start_child(
-        Pulsar.Client.producer_supervisor(client),
-        {__MODULE__, Keyword.put(opts, :partitions, partitions)}
-      )
-    end
+    Pulsar.Client.start_resource(Pulsar.Client.producer_supervisor(client), {__MODULE__, opts})
   end
 
   @doc """
@@ -86,6 +82,8 @@ defmodule Pulsar.Producer do
 
   @doc """
   Publishes a message, given a producer's pid or name.
+
+  Returns `{:error, :not_ready}` while its topic topology is being discovered.
 
   ## Options
 
@@ -141,11 +139,15 @@ defmodule Pulsar.Producer do
 
   @doc """
   Returns the worker processes behind a producer, across every partition.
+
+  Returns `{:error, :not_ready}` while its topic topology is being discovered.
   """
-  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
+  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found | :not_ready}
   def workers(producer, opts \\ [])
 
-  def workers(producer, _opts) when is_pid(producer), do: Topology.workers(producer)
+  def workers(producer, _opts) when is_pid(producer) do
+    if Topology.initialized?(producer), do: Topology.workers(producer), else: {:error, :not_ready}
+  end
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -153,11 +155,16 @@ defmodule Pulsar.Producer do
 
   @doc """
   Returns how many partitions a producer covers, or `0` for a non-partitioned topic.
+
+  Returns `{:error, :not_ready}` while its topic topology is being discovered.
   """
-  @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  @spec partitions(pid() | String.t() | atom(), keyword()) ::
+          non_neg_integer() | {:error, :not_found | :not_ready}
   def partitions(producer, opts \\ [])
 
-  def partitions(producer, _opts) when is_pid(producer), do: Topology.partitions(producer)
+  def partitions(producer, _opts) when is_pid(producer) do
+    if Topology.initialized?(producer), do: Topology.partitions(producer), else: {:error, :not_ready}
+  end
 
   def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
@@ -167,14 +174,24 @@ defmodule Pulsar.Producer do
   # supervisors below only build child specs.
   defp publish(producer, message, opts) do
     case Topology.kind(producer) do
-      :worker -> Worker.send_message(producer, message, opts)
-      _supervisor -> route(Topology.groups(producer), message, opts)
+      :worker ->
+        Worker.send_message(producer, message, opts)
+
+      :group ->
+        route(Topology.groups(producer), message, opts)
+
+      :topology ->
+        if Topology.initialized?(producer),
+          do: route(Topology.groups(producer), message, opts),
+          else: {:error, :not_ready}
     end
   catch
     # The producer went away while we were looking at it, which is what a caller holding
     # a stale pid sees; it reads the same as a worker dying mid-send.
     :exit, reason -> {:error, {:producer_died, reason}}
   end
+
+  defp route([], _message, _opts), do: {:error, :not_ready}
 
   defp route(groups, message, opts) do
     # The modulus is every configured partition, including any whose group is currently

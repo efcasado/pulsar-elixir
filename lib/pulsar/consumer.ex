@@ -22,7 +22,6 @@ defmodule Pulsar.Consumer do
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
-  alias Pulsar.ServiceDiscovery
   alias Pulsar.Topic
   alias Pulsar.Topology
 
@@ -63,21 +62,17 @@ defmodule Pulsar.Consumer do
 
   For consumers whose set is only known at runtime. Prefer the client's `:consumers` for
   ones known up front: a consumer added here is not recreated if the client restarts.
+
+  Returns once the stable consumer supervisor has been registered. Topic discovery and
+  worker initialization continue asynchronously; inspection and flow operations return
+  `{:error, :not_ready}` until discovery completes.
   """
   @spec start(keyword()) :: DynamicSupervisor.on_start_child()
   def start(opts) when is_list(opts) do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
-    topic = Keyword.fetch!(opts, :topic)
 
-    # Resolved here rather than in start_link/1, which the supervisor runs in its own
-    # process: the lookup and its retries would block every other consumer start.
-    with {:ok, partitions} <- ServiceDiscovery.partition_count_with_retry(topic, client: client) do
-      DynamicSupervisor.start_child(
-        Pulsar.Client.consumer_supervisor(client),
-        {__MODULE__, Keyword.put(opts, :partitions, partitions)}
-      )
-    end
+    Pulsar.Client.start_resource(Pulsar.Client.consumer_supervisor(client), {__MODULE__, opts})
   end
 
   @doc """
@@ -121,11 +116,15 @@ defmodule Pulsar.Consumer do
 
   @doc """
   Returns the worker processes behind a consumer, across every partition.
+
+  Returns `{:error, :not_ready}` while its topic topology is being discovered.
   """
-  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found}
+  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found | :not_ready}
   def workers(consumer, opts \\ [])
 
-  def workers(consumer, _opts) when is_pid(consumer), do: Topology.workers(consumer)
+  def workers(consumer, _opts) when is_pid(consumer) do
+    if Topology.initialized?(consumer), do: Topology.workers(consumer), else: {:error, :not_ready}
+  end
 
   def workers(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: workers(pid)
@@ -133,11 +132,16 @@ defmodule Pulsar.Consumer do
 
   @doc """
   Returns how many partitions a consumer covers, or `0` for a non-partitioned topic.
+
+  Returns `{:error, :not_ready}` while its topic topology is being discovered.
   """
-  @spec partitions(pid() | String.t() | atom(), keyword()) :: non_neg_integer() | {:error, :not_found}
+  @spec partitions(pid() | String.t() | atom(), keyword()) ::
+          non_neg_integer() | {:error, :not_found | :not_ready}
   def partitions(consumer, opts \\ [])
 
-  def partitions(consumer, _opts) when is_pid(consumer), do: Topology.partitions(consumer)
+  def partitions(consumer, _opts) when is_pid(consumer) do
+    if Topology.initialized?(consumer), do: Topology.partitions(consumer), else: {:error, :not_ready}
+  end
 
   def partitions(name, opts) when is_binary(name) or is_atom(name) do
     with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
@@ -197,14 +201,23 @@ defmodule Pulsar.Consumer do
 
   def send_flow(consumer, permits, _opts) when is_pid(consumer) do
     case Topology.kind(consumer) do
-      :worker -> grant(consumer, permits)
-      _supervisor -> grant_all(Topology.workers(consumer), permits)
+      :worker ->
+        grant(consumer, permits)
+
+      :group ->
+        grant_all(Topology.workers(consumer), permits)
+
+      :topology ->
+        if Topology.initialized?(consumer),
+          do: grant_all(Topology.workers(consumer), permits),
+          else: {:error, :not_ready}
     end
   end
 
   def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
     case workers(name, opts) do
       {:error, :not_found} -> {:error, :consumer_not_found}
+      {:error, :not_ready} = error -> error
       workers -> grant_all(workers, permits)
     end
   end
@@ -234,12 +247,28 @@ defmodule Pulsar.Consumer do
   group, or a worker. A worker reports the partition it is subscribed to, the others the
   topic they cover.
   """
-  @spec topic(pid()) :: String.t() | {:error, :not_found}
+  @spec topic(pid()) :: String.t() | {:error, :not_found | :not_ready}
   def topic(consumer) do
     case Topology.kind(consumer) do
-      :worker -> Worker.topic(consumer)
-      :group -> worker_topic(consumer)
-      :topology -> with topic when is_binary(topic) <- worker_topic(consumer), do: Topic.base(topic)
+      :worker ->
+        Worker.topic(consumer)
+
+      :group ->
+        worker_topic(consumer)
+
+      :topology ->
+        topology_topic(consumer)
+    end
+  end
+
+  defp topology_topic(consumer) do
+    if Topology.initialized?(consumer) do
+      case worker_topic(consumer) do
+        topic when is_binary(topic) -> Topic.base(topic)
+        error -> error
+      end
+    else
+      {:error, :not_ready}
     end
   end
 
