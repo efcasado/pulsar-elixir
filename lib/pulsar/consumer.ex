@@ -6,13 +6,14 @@ defmodule Pulsar.Consumer do
   instead, so they start and restart with it, see `Pulsar.Client`. The callback module
   they dispatch into is `Pulsar.Consumer.Callback`.
 
-  `start/1` adds a consumer to a running client and `stop/2` removes it. A consumer is a
-  supervisor over one worker per partition and per `:consumer_count`, so `workers/2` and
-  `partitions/2` report what it is made of, `lookup/2` finds one by name, and `topic/1`
-  answers at any level of it.
+  `start/1` adds a consumer to a running client and `stop/2` removes it. A logical consumer
+  spans one worker per partition and per `:consumer_count`; `workers/2` and `partitions/2`
+  inspect those workers, `lookup/2` finds the stable consumer root by name, and `topic/1`
+  accepts that root or one of its workers.
 
   `ack/2` and `nack/2` acknowledge manually, from a process other than the worker that
-  delivered the message. `send_flow/3` grants permits at any level.
+  delivered the message. `send_flow/3` grants permits to a worker or every worker behind
+  the consumer root.
 
   ## Options
 
@@ -40,8 +41,7 @@ defmodule Pulsar.Consumer do
   @doc """
   Starts a consumer, linked to the calling process.
 
-  Returns the pid of the supervisor owning the consumer's workers. See the module
-  documentation for the options.
+  Returns the stable consumer root. See the module documentation for the options.
   """
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
@@ -188,10 +188,10 @@ defmodule Pulsar.Consumer do
 
   Only needed when `:flow_initial` is `0`, which turns off automatic flow control.
 
-  Takes any of the pids a consumer is made of, or its name. Every worker behind it is granted
-  the permits, and the first refusal is returned — retrying by name is safe, since a worker
-  that already holds permits is only over-credited, and a worker that refused has usually been
-  replaced by one with a different pid.
+  Takes the stable consumer root, one of its worker pids, or its name. Every worker behind a
+  root is granted the permits, and the first refusal is returned — retrying by name is safe,
+  since a worker that already holds permits is only over-credited, and a worker that refused
+  has usually been replaced by one with a different pid.
 
   A consumer with no workers is an error rather than a silent success: nothing was granted,
   so nothing will be delivered.
@@ -243,9 +243,9 @@ defmodule Pulsar.Consumer do
   @doc """
   Returns the topic a consumer is subscribed to.
 
-  Takes any of the pids a consumer is made of: the one `start/1` returns, a partition's
-  group, or a worker. A worker reports the partition it is subscribed to, the others the
-  topic they cover.
+  Takes the stable root returned by `start/1` or one of the worker pids returned by
+  `workers/2`. A worker reports the partition it is subscribed to; the root reports the
+  logical topic across all partitions.
   """
   @spec topic(pid()) :: String.t() | {:error, :not_found | :not_ready}
   def topic(consumer) do

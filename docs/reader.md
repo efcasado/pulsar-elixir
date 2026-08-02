@@ -125,6 +125,16 @@ topic
 |> Enum.to_list()
 ```
 
+Initialization has a separate five-second deadline. Set `:startup_timeout` when topic
+discovery or subscription setup may need longer:
+
+```elixir
+Pulsar.Reader.stream(topic, startup_timeout: 15_000)
+```
+
+If that deadline expires, the stream removes its temporary consumer and emits
+`{:error, :reader_start_timeout}`. `:timeout` remains the inactivity timeout after startup.
+
 ### Error Handling
 If initialization fails (e.g., invalid topic, connection error, or a client that is not running), the stream emits `{:error, reason}` as its first and only element:
 

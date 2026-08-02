@@ -49,6 +49,10 @@ defmodule Pulsar.Client do
   The two differ in one respect. Declared resources are recreated whenever the client
   restarts; resources added with `start/1` are not, because the `DynamicSupervisor` holding
   them has no static child list to bring back.
+
+  `consumers/1` and `producers/1` list the logical resources currently running under a
+  client. Partitioned resources still appear once: the returned pid is their stable root,
+  not one entry per partition or worker.
   """
 
   use Supervisor
@@ -102,8 +106,8 @@ defmodule Pulsar.Client do
 
               Consumers and producers are independent and start concurrently, so a consumer
               can receive a message before a declared producer is registered. A callback that
-              publishes has to handle `{:error, :producer_not_found}` in any case, since a
-              producer may also be restarting.
+              publishes has to handle `{:error, :producer_not_found}` and
+              `{:error, :not_ready}`, since a producer may be starting or restarting.
               """
             ]
           ] ++ BrokerOptions.schema()

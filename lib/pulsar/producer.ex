@@ -12,9 +12,9 @@ defmodule Pulsar.Producer do
   A partitioned topic needs nothing special at the call site: messages are routed across
   partitions, honouring a message's `:partition_key` when one is set.
 
-  `start/1` adds a producer to a running client and `stop/2` removes it. A producer is a
-  supervisor over one worker per partition and per `:producer_count`, so `workers/2` and
-  `partitions/2` report what it is made of, and `lookup/2` finds one by name.
+  `start/1` adds a producer to a running client and `stop/2` removes it. A logical producer
+  spans one worker per partition and per `:producer_count`; `workers/2` and `partitions/2`
+  inspect those workers, and `lookup/2` finds the stable producer root by name.
 
   ## Options
 
@@ -41,8 +41,7 @@ defmodule Pulsar.Producer do
   @doc """
   Starts a producer, linked to the calling process.
 
-  Returns the pid of the supervisor owning the producer's workers. See the module
-  documentation for the options.
+  Returns the stable producer root. See the module documentation for the options.
   """
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do

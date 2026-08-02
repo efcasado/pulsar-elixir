@@ -2,7 +2,7 @@ defmodule Pulsar do
   @moduledoc """
   An Apache Pulsar client for Elixir.
 
-  The public API is three modules:
+  The core API is centered on three modules:
 
   - `Pulsar.Client` — a connection context for one Pulsar cluster
   - `Pulsar.Consumer` — subscribes to a topic and dispatches to a callback module
@@ -88,65 +88,54 @@ defmodule Pulsar do
   Each client keeps its own broker connections, registries and supervisors, so the two are
   fully isolated.
 
-  ## Supervision tree
-
-  A consumer or producer is a supervisor in its own right, over one worker per partition and
-  per `:consumer_count` / `:producer_count`. Partitioned topics therefore need nothing
-  special at the call site.
+  ## Ownership at a glance
 
       MyApp.Supervisor
-      └── Pulsar.Client (:default)            :rest_for_one
-          ├── ProducerEpochStore (ETS)
+      └── Pulsar.Client
           ├── BrokerRegistry
           ├── BrokerSupervisor
-          │   ├── Broker 1          monitors: C1, C2, DLQ-P1, P1
-          │   └── Broker 2          monitors: C3, C4
-          └── resources                       :one_for_one
-              ├── consumers                   :rest_for_one
+          │   └── broker connection(s)
+          └── resources
+              ├── consumers
               │   ├── ConsumerRegistry
               │   ├── ConsumerSupervisor
-              │   │   ├── Pulsar.Consumer: my-topic
-              │   │   │   └── C1 (with DLQ policy)
-              │   │   │       └── DLQ-P1 (linked process)
-              │   │   └── Pulsar.Consumer: my-partitioned-topic
-              │   │       ├── partition-0 → C2
-              │   │       ├── partition-1 → C3
-              │   │       ├── partition-2 → C4
-              │   │       └── Topology.Discovery (polls for new partitions)
-              │   └── Bootstrap     (connects Broker 1, starts declared consumers)
-              └── producers                   :rest_for_one
+              │   │   └── stable consumer root(s)
+              │   │       ├── topology discovery
+              │   │       └── partition group(s)
+              │   │           └── consumer worker(s)
+              │   └── Bootstrap
+              └── producers
                   ├── ProducerRegistry
                   ├── ProducerSupervisor
-                  │   └── Pulsar.Producer: my-partitioned-topic
-                  │       ├── partition-0 → P2
-                  │       ├── partition-1 → P3
-                  │       ├── partition-2 → P4
-                  │       └── Topology.Discovery (polls for new partitions)
-                  └── Bootstrap     (connects Broker 1, starts declared producers)
+                  │   └── stable producer root(s)
+                  │       ├── topology discovery
+                  │       └── partition group(s)
+                  │           └── producer worker(s)
+                  └── Bootstrap
 
-  The strategies follow the dependencies between those children; `Pulsar.Client` covers why
-  each one was chosen. What it means for your consumers and producers:
+  Non-partitioned resources have one worker group; partitioned resources have one per
+  partition. Those groups remain internal—the stable resource root is what the public API
+  returns, registers and lists.
 
-  - A broker losing its connection does not restart anything through the tree. The connection
-    process stays up and reconnects with backoff, exiting the workers registered with it so
-    they resubscribe against the replacement. Only losing the broker registry or supervisor
-    itself restarts the resources below them.
-  - A consumer failing leaves producers alone, and the other way round.
-  - A resource that meets something a retry cannot change — a topic that does not exist, a
-    schema the broker rejects, credentials it refuses — stops and stays stopped rather than
-    restarting into the same answer. Anything that can change on its own is retried instead,
-    in place where the worker can and through a restart otherwise.
-  - The `DynamicSupervisor`s have no static child list, so a branch restart brings back only
-    the declared resources, through `Bootstrap`. Anything added with `start/1` is gone. A
-    declared one that fails is logged and retried with backoff rather than abandoned.
+  ## Lifecycle and availability
 
-  A client starts before its bootstrap connection is established: `Pulsar.Client.start_link/1`
-  returning does not mean the broker is reachable, only that the connection process exists and
-  is retrying. It is not a readiness check.
+  A client owns its broker connections, consumers and producers. Partitioned topics need
+  nothing special at the call site: each logical consumer or producer keeps one stable root
+  while its partition workers are discovered and reconciled in the background.
 
-  ## Reading without a subscription
+  Starting a client or resource is not a readiness check. A resource is registered before
+  topic discovery and worker initialization complete, so publishing and inspection may return
+  `{:error, :not_ready}` until it is usable. Broker and worker failures are recovered with
+  retry and backoff where possible.
 
-  `Pulsar.Reader` exposes a topic as an `Enumerable`, for replaying a topic from a position
-  rather than consuming it against a subscription.
+  Consumers and producers recover independently. Resources declared on a client are recreated
+  with it; resources added later with `Pulsar.Consumer.start/1` or `Pulsar.Producer.start/1` are
+  runtime state and are not recreated after a client restart. `Pulsar.Client.consumers/1` and
+  `Pulsar.Client.producers/1` list their currently running logical roots.
+
+  ## Stream-based reading
+
+  `Pulsar.Reader` exposes a topic as an `Enumerable`, using a temporary non-durable
+  subscription for replay, batch processing and one-off jobs.
   """
 end
