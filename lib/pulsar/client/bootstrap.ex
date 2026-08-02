@@ -8,14 +8,15 @@ defmodule Pulsar.Client.Bootstrap do
 
   require Logger
 
-  @settle_ms 100
-
   def start_link({kind, opts}) do
     GenServer.start_link(__MODULE__, {kind, opts})
   end
 
   defp module_for(:consumers), do: Pulsar.Consumer
   defp module_for(:producers), do: Pulsar.Producer
+
+  defp supervisor_for(:consumers, client), do: Client.consumer_supervisor(client)
+  defp supervisor_for(:producers, client), do: Client.producer_supervisor(client)
 
   @impl true
   def init({kind, opts}) do
@@ -46,7 +47,7 @@ defmodule Pulsar.Client.Bootstrap do
     outcomes =
       state.pending
       |> Enum.map(fn {module, opts} = resource -> {resource, start(module, opts)} end)
-      |> settle_contested()
+      |> settle_contested(supervisor_for(state.kind, state.client))
 
     {pending, last_error} =
       Enum.reduce(outcomes, {[], nil}, fn
@@ -66,43 +67,29 @@ defmodule Pulsar.Client.Bootstrap do
     end
   end
 
-  # A name can still be registered to a process on its way out, and Process.alive?/1 stays true
-  # until that exit is processed. Waiting for a DOWN tells a survivor from a straggler — once
-  # for the whole set, so the wait does not grow with the number of declarations.
-  defp settle_contested(outcomes) do
+  defp settle_contested(outcomes, supervisor) do
     case for {_resource, {:contested, pid}} <- outcomes, do: pid do
-      [] -> outcomes
-      pids -> settle_all(outcomes, await_exits(pids))
-    end
-  end
+      [] ->
+        outcomes
 
-  defp settle_all(outcomes, gone), do: Enum.map(outcomes, &settle(&1, gone))
+      _pids ->
+        # A current child is already supervised; any other registered pid belongs to a
+        # predecessor still exiting and must stay pending until it releases the name.
+        owned =
+          for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
+              is_pid(pid),
+              into: MapSet.new(),
+              do: pid
 
-  defp settle({resource, {:contested, pid}}, gone) do
-    if pid in gone,
-      do: {resource, {:pending, {:already_started, pid}}},
-      else: {resource, :started}
-  end
+        Enum.map(outcomes, fn
+          {resource, {:contested, pid}} ->
+            if pid in owned,
+              do: {resource, :started},
+              else: {resource, {:pending, {:already_started, pid}}}
 
-  defp settle(settled, _gone), do: settled
-
-  defp await_exits(pids) do
-    refs = Map.new(pids, fn pid -> {Process.monitor(pid), pid} end)
-    gone = collect_exits(refs, [], System.monotonic_time(:millisecond) + @settle_ms)
-    Enum.each(Map.keys(refs), &Process.demonitor(&1, [:flush]))
-    gone
-  end
-
-  defp collect_exits(refs, gone, deadline) do
-    if length(gone) == map_size(refs) do
-      gone
-    else
-      receive do
-        {:DOWN, ref, :process, pid, _reason} when is_map_key(refs, ref) ->
-          collect_exits(refs, [pid | gone], deadline)
-      after
-        max(deadline - System.monotonic_time(:millisecond), 0) -> gone
-      end
+          settled ->
+            settled
+        end)
     end
   end
 
