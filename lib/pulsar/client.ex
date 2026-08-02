@@ -154,6 +154,8 @@ defmodule Pulsar.Client do
   defp resources_spec(opts) do
     branches = Enum.map([:consumers, :producers], &branch_spec(&1, opts))
 
+    # This boundary counts whole branch failures, not the resource restarts below them. Keep
+    # OTP's default intensity so repeatedly rebuilding a branch escalates to the client.
     %{
       id: :resources,
       start: {Supervisor, :start_link, [branches, [strategy: :one_for_one]]},
@@ -174,6 +176,9 @@ defmodule Pulsar.Client do
       {Bootstrap, {kind, opts}}
     ]
 
+    # Resource roots use the wider topology budget in their DynamicSupervisor. The branch
+    # supervisor described below keeps OTP's default so repeated registry, Bootstrap, or
+    # exhausted DynamicSupervisor failures rebuild the branch instead of cycling indefinitely.
     %{
       id: kind,
       start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},

@@ -12,11 +12,12 @@ defmodule Pulsar.Topology do
   require Logger
 
   # A broker losing its connection exits every worker registered with it at once, so a group of
-  # N workers sees N restarts in the same instant. OTP's default of 3 in 5 seconds is spent by
-  # any group of four or more on a single disconnect, and since a resource is only brought back
-  # from an abnormal exit, spending it means the resource is gone for good. Sized to absorb
-  # several full reconnects of a large group rather than to catch a fast crash loop, which the
-  # workers' own bounded retry handles.
+  # N workers sees N restarts in the same instant. Correlated failures can likewise reach several
+  # partition groups or topology roots. OTP's default of 3 in 5 seconds would treat that fan-out
+  # as a crash loop, degrading groups until reconciliation, replacing stable root pids, or
+  # rebuilding a resource branch. This budget absorbs several full reconnects; bounded worker
+  # retries handle fast loops, and the supervisors above the resource branches retain OTP's
+  # default as the final escalation boundary.
   @max_restarts 100
   @max_seconds 60
 
