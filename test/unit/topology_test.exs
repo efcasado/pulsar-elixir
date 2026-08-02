@@ -2,6 +2,7 @@ defmodule Pulsar.TopologyTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Topology
+  alias Pulsar.Topology.Discovery
 
   defmodule Owner do
     @moduledoc false
@@ -69,6 +70,145 @@ defmodule Pulsar.TopologyTest do
     {root, registry}
   end
 
+  defp start_async_topology(resolver, opts \\ []) do
+    registry = :"registry-#{System.unique_integer([:positive])}"
+    start_supervised!({Registry, keys: :unique, name: registry})
+
+    topology_opts =
+      Keyword.merge(
+        [
+          topic: @topic,
+          name: @name,
+          client: :test,
+          count_key: 1,
+          partition_discovery_interval_ms: false
+        ],
+        opts
+      )
+
+    root =
+      start_supervised!(%{
+        id: {:root, System.unique_integer([:positive])},
+        start: {Topology, :start_link, [StubWorker, registry, :count_key, topology_opts, [resolver: resolver]]},
+        type: :supervisor
+      })
+
+    {root, registry}
+  end
+
+  defp eventually(fun, attempts \\ 100)
+  defp eventually(_fun, 0), do: false
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
+    end
+  end
+
+  describe "asynchronous initialization" do
+    test "starts and registers the stable root before metadata resolves" do
+      test_pid = self()
+
+      resolver = fn _topic, _opts ->
+        send(test_pid, {:resolution_started, self()})
+
+        receive do
+          :resolve -> {:ok, 2}
+        end
+      end
+
+      {root, registry} = start_async_topology(resolver)
+
+      assert_receive {:resolution_started, resolver_pid}
+      assert Process.alive?(root)
+      assert [{^root, _value}] = Registry.lookup(registry, @name)
+      assert Topology.groups(root) == []
+
+      send(resolver_pid, :resolve)
+
+      assert Topology.await_initialized(root) == {:ok, 2}
+      assert Topology.status(root) == {:ready, {:partitioned, 2}}
+      assert Topology.expected_workers(root) == {:ok, 2}
+      assert Topology.partitions(root) == 2
+    end
+
+    test "retries failed initialization without blocking the topology" do
+      attempts = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        attempt = Agent.get_and_update(attempts, &{&1, &1 + 1})
+        if attempt == 0, do: {:error, :no_broker_available}, else: {:ok, 3}
+      end
+
+      {root, _registry} = start_async_topology(resolver, count_key: 2)
+
+      assert Topology.await_initialized(root, 1_000) == {:ok, 6}
+      assert Agent.get(attempts, & &1) >= 2
+      assert Topology.partitions(root) == 3
+    end
+
+    test "a false polling interval still performs initial discovery exactly once" do
+      test_pid = self()
+
+      resolver = fn _topic, _opts ->
+        send(test_pid, :resolved)
+        {:ok, 0}
+      end
+
+      {root, _registry} = start_async_topology(resolver)
+
+      assert Topology.await_initialized(root) == {:ok, 1}
+      assert_receive :resolved
+      refute_receive :resolved, 150
+      assert Topology.status(root) == {:ready, :non_partitioned}
+      assert Topology.partitions(root) == 0
+    end
+
+    test "periodically reconciles partitions added after initialization" do
+      test_pid = self()
+      responses = start_supervised!({Agent, fn -> [2, 4, 2] end})
+
+      resolver = fn _topic, _opts ->
+        partitions =
+          Agent.get_and_update(responses, fn
+            [current] -> {current, [current]}
+            [current | rest] -> {current, rest}
+          end)
+
+        send(test_pid, {:resolved, partitions})
+        {:ok, partitions}
+      end
+
+      {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
+
+      assert_receive {:resolved, 2}
+      assert Topology.await_initialized(root) == {:ok, 2}
+      assert_receive {:resolved, 4}
+      assert eventually(fn -> Topology.partitions(root) == 4 end)
+      assert_receive {:resolved, 2}
+      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 4}} end)
+      assert Topology.status(root) == {:ready, {:partitioned, 4}}
+      assert Topology.expected_workers(root) == {:ok, 4}
+    end
+  end
+
+  describe "readiness accounting" do
+    test "uses configured topology slots even while a group is down" do
+      {root, _registry} = start_topology(3)
+
+      assert Topology.status(root) == {:ready, {:partitioned, 3}}
+      assert Topology.expected_workers(root) == {:ok, 3}
+      assert Topology.await_initialized(root) == {:ok, 3}
+
+      :ok = Supervisor.terminate_child(root, {:partition, 1})
+
+      assert Topology.expected_workers(root) == {:ok, 3}
+    end
+  end
+
   describe "partitions/1" do
     test "counts a partition whose group is not currently running" do
       # which_children reports a child's pid as :restarting or :undefined while it is between
@@ -86,6 +226,13 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_topology(0)
 
       assert Topology.partitions(root) == 0
+      assert Topology.status(root) == {:ready, :non_partitioned}
+      assert Topology.expected_workers(root) == {:ok, 1}
+
+      assert Enum.any?(Supervisor.which_children(root), fn
+               {Discovery, pid, :worker, [Discovery]} when is_pid(pid) -> true
+               _child -> false
+             end)
     end
   end
 

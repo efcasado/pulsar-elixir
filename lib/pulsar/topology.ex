@@ -1,15 +1,14 @@
 defmodule Pulsar.Topology do
   @moduledoc false
 
-  # The stable supervision root a consumer or producer has for one topic. It owns one
-  # Pulsar.Group for a non-partitioned topic, or one group per partition plus a poller for
-  # partitions added later. The root has the public registry name; its groups are internal
+  # The stable supervision root a consumer or producer has for one topic. Its Discovery
+  # controller resolves and reconciles one Pulsar.Group for a non-partitioned topic, or one
+  # group per partition. The root has the public registry name; its groups are internal
   # children identified by their place in the topology rather than additional public names.
 
   use Supervisor
 
   alias Pulsar.Group
-  alias Pulsar.ServiceDiscovery
   alias Pulsar.Topic
   alias Pulsar.Topology.Discovery
 
@@ -30,27 +29,71 @@ defmodule Pulsar.Topology do
 
   @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
-    with {:ok, partitions} <- width(opts) do
-      opts = Keyword.put(opts, :partitions, partitions)
-      name = Keyword.fetch!(opts, :name)
+    start_link(worker, registry, count_key, opts, [])
+  end
 
-      Supervisor.start_link(__MODULE__, {worker, count_key, opts}, name: {:via, Registry, {registry, name}})
+  # The fifth argument is an internal seam for exercising asynchronous discovery without a
+  # broker. Consumer and Producer deliberately expose only start_link/1.
+  @doc false
+  @spec start_link(module(), atom(), atom(), keyword(), keyword()) :: Supervisor.on_start()
+  def start_link(worker, registry, count_key, opts, controller_opts) do
+    name = Keyword.fetch!(opts, :name)
+    config = %{worker: worker, count_key: count_key, opts: opts}
+
+    Supervisor.start_link(__MODULE__, {config, controller_opts}, name: {:via, Registry, {registry, name}})
+  end
+
+  @typedoc false
+  @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}
+
+  @doc false
+  @spec status(pid()) :: status()
+  def status(root) do
+    case controller(root) do
+      {:ok, controller} -> call_controller(controller, :status, :initializing)
+      _not_running -> :initializing
     end
   end
 
-  # Resolved by the caller for Pulsar.Consumer.start/4 and Pulsar.Producer.start/2, so that
-  # the lookup and its retries do not run inside the client's supervisor.
-  defp width(opts) do
-    case Keyword.fetch(opts, :partitions) do
-      {:ok, partitions} ->
-        {:ok, partitions}
-
-      :error ->
-        ServiceDiscovery.partition_count_with_retry(Keyword.fetch!(opts, :topic), client: Keyword.fetch!(opts, :client))
+  @doc false
+  @spec expected_workers(pid()) :: {:ok, pos_integer()} | {:error, :not_ready}
+  def expected_workers(root) do
+    case controller(root) do
+      {:ok, controller} -> call_controller(controller, :expected_workers, {:error, :not_ready})
+      _not_running -> {:error, :not_ready}
     end
   end
 
-  # Checked rather than assumed: a topology also supervises its Discovery poller, which is a
+  @doc false
+  @spec await_initialized(pid(), timeout()) :: {:ok, pos_integer()} | {:error, :not_ready | :timeout}
+  def await_initialized(root, timeout \\ 5_000) do
+    case controller(root) do
+      {:ok, controller} -> GenServer.call(controller, :await_initialized, timeout)
+      _not_running -> {:error, :not_ready}
+    end
+  catch
+    :exit, {:timeout, _call} -> {:error, :timeout}
+    :exit, _reason -> {:error, :not_ready}
+  end
+
+  defp controller(root) do
+    root
+    |> Supervisor.which_children()
+    |> Enum.find_value({:error, :not_found}, fn
+      {Discovery, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
+      _child -> false
+    end)
+  catch
+    :exit, _reason -> {:error, :not_found}
+  end
+
+  defp call_controller(controller, request, fallback) do
+    GenServer.call(controller, request)
+  catch
+    :exit, _reason -> fallback
+  end
+
+  # Checked rather than assumed: a topology also supervises its Discovery controller, which is a
   # :worker too, and answering with that would have a caller send it worker calls it cannot
   # handle, taking it down.
   @worker_modules [Pulsar.Consumer.Worker, Pulsar.Producer.Worker]
@@ -84,9 +127,9 @@ defmodule Pulsar.Topology do
   @doc """
   Returns `{index, pid}` for each group under `root`.
 
-  A non-partitioned topic is the degenerate topology of one group — `root` itself — so it
-  answers `[{0, root}]` rather than nothing, and a caller routing over the result needs no
-  case for it.
+  A non-partitioned topology answers its one internal group at index zero. A `Pulsar.Group`
+  passed directly is treated the same way and answers itself, so callers routing over either
+  shape need no special case.
 
   Keyed by the index parsed from the partition's name rather than by its position: names sort
   lexicographically, which misorders partitions once there are ten or more
@@ -114,7 +157,7 @@ defmodule Pulsar.Topology do
     end
   end
 
-  # A topology may also supervise its Discovery poller, which is not a group.
+  # A topology also supervises its Discovery controller, which is not a group.
   defp topology_groups(root) do
     root
     |> Supervisor.which_children()
@@ -204,44 +247,111 @@ defmodule Pulsar.Topology do
   end
 
   @impl true
-  def init({worker, count_key, opts}) do
+  def init({config, controller_opts}) do
+    %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
-    partitions = Keyword.fetch!(opts, :partitions)
+    partitions = Keyword.get(opts, :partitions)
 
-    Logger.info("Starting #{inspect(worker)} topology for topic #{topic} with #{partitions} partitions")
+    Logger.info("Starting #{inspect(worker)} topology for topic #{topic}")
 
-    build_child_spec = &partition_child_spec(&1, worker, count_key, opts)
-
-    group_children =
-      case partitions do
-        0 -> [topic_child_spec(worker, count_key, opts)]
-        count -> Enum.map(0..(count - 1), build_child_spec)
-      end
-
-    discovery_children = discovery_child_specs(partitions, topic, build_child_spec, opts)
+    group_children = initial_group_child_specs(partitions, config)
+    discovery = Discovery.child_spec({self(), config, controller_opts})
 
     Supervisor.init(
-      group_children ++ discovery_children,
+      group_children ++ [discovery],
       [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
     )
   end
 
-  defp discovery_child_specs(0, _topic, _build_child_spec, _opts), do: []
+  defp initial_group_child_specs(nil, _config), do: []
+  defp initial_group_child_specs(0, config), do: [topic_child_spec(config)]
 
-  defp discovery_child_specs(_partitions, topic, build_child_spec, opts) do
-    Discovery.child_specs(self(),
-      topic: topic,
-      client: Keyword.fetch!(opts, :client),
-      interval_ms: Keyword.fetch!(opts, :partition_discovery_interval_ms),
-      build_child_spec: build_child_spec
-    )
+  defp initial_group_child_specs(partitions, config) when partitions > 0 do
+    Enum.map(0..(partitions - 1), &partition_child_spec(&1, config))
   end
 
-  defp topic_child_spec(worker, count_key, opts) do
+  @doc false
+  @spec reconcile(pid(), non_neg_integer(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
+    children = Supervisor.which_children(root)
+
+    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
+
+    partitions =
+      Enum.flat_map(children, fn
+        {{:partition, index}, _pid, :supervisor, _modules} -> [index]
+        _child -> []
+      end)
+
+    reconcile_shape(topology_shape(topic?, partitions), root, desired, config)
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  defp topology_shape(true, partitions) do
+    if partitions == [], do: :non_partitioned, else: :inconsistent
+  end
+
+  defp topology_shape(false, partitions) do
+    if partitions == [], do: :empty, else: {:partitioned, partitions}
+  end
+
+  defp reconcile_shape(:non_partitioned, _root, 0, _config), do: {:ok, 0}
+
+  defp reconcile_shape(:non_partitioned, _root, desired, _config) do
+    {:error, {:incompatible_topology, :non_partitioned, desired}}
+  end
+
+  defp reconcile_shape(:inconsistent, _root, _desired, _config) do
+    {:error, :inconsistent_topology}
+  end
+
+  defp reconcile_shape({:partitioned, partitions}, _root, 0, _config) do
+    {:ok, partition_width(partitions)}
+  end
+
+  defp reconcile_shape({:partitioned, partitions}, root, desired, config) do
+    with :ok <- add_missing_partitions(root, desired, partitions, config) do
+      {:ok, max(desired, partition_width(partitions))}
+    end
+  end
+
+  defp reconcile_shape(:empty, root, 0, config) do
+    with :ok <- start_group(root, topic_child_spec(config)), do: {:ok, 0}
+  end
+
+  defp reconcile_shape(:empty, root, desired, config) do
+    with :ok <- add_missing_partitions(root, desired, [], config), do: {:ok, desired}
+  end
+
+  defp partition_width(partitions), do: Enum.max(partitions) + 1
+
+  defp add_missing_partitions(root, desired, existing, config) do
+    0..(desired - 1)
+    |> Enum.reject(&(&1 in existing))
+    |> Enum.reduce_while(:ok, fn index, :ok ->
+      case start_group(root, partition_child_spec(index, config)) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:partition_start_failed, index, reason}}}
+      end
+    end)
+  end
+
+  defp start_group(root, child_spec) do
+    case Supervisor.start_child(root, child_spec) do
+      {:ok, _pid} -> :ok
+      {:ok, _pid, _info} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, :already_present} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp topic_child_spec(%{worker: worker, count_key: count_key, opts: opts}) do
     group_child_spec({:topic, :non_partitioned}, worker, count_key, opts)
   end
 
-  defp partition_child_spec(partition_index, worker, count_key, opts) do
+  defp partition_child_spec(partition_index, %{worker: worker, count_key: count_key, opts: opts}) do
     partition_topic = Topic.partition(Keyword.fetch!(opts, :topic), partition_index)
 
     partition_opts =

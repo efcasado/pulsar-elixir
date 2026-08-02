@@ -1,119 +1,124 @@
 defmodule Pulsar.Topology.Discovery do
   @moduledoc false
 
-  # Polls a topic's metadata and adds the partitions a Pulsar.Topology supervisor is missing.
-  # Pulsar only ever increases a partition count, so this is grow-only: existing partitions
-  # are left alone, and a count that is not larger than the current one — including the count
-  # a failed lookup reports — is ignored.
+  # Initializes a topology from broker metadata, then keeps a partitioned one reconciled as
+  # its partition count grows. Resolution and retry happen in this process so the stable
+  # Pulsar.Topology root can start even while no broker is available.
 
   use GenServer
 
+  alias Pulsar.Backoff
+  alias Pulsar.ServiceDiscovery
   alias Pulsar.Topology
 
   require Logger
 
-  @doc """
-  Returns the child spec(s) for a discovery poller attached to `supervisor`.
-
-  Returns a single-element list when discovery is enabled, or an empty list when
-  it is disabled, so the supervisor never starts a poller process it doesn't
-  need.
-
-  `opts`:
-    * `:topic` - base partitioned topic name (required)
-    * `:client` - client name (required)
-    * `:build_child_spec` - 1-arity fun mapping a partition index to the child
-      spec for that partition's consumer/producer group (required)
-    * `:interval_ms` - poll interval in milliseconds (required), or `false` to
-      disable discovery.
-  """
-  @spec child_specs(pid(), keyword()) :: [Supervisor.child_spec()]
-  def child_specs(supervisor, opts) do
-    if enabled?(Keyword.fetch!(opts, :interval_ms)) do
-      [
-        %{
-          id: __MODULE__,
-          start: {__MODULE__, :start_link, [supervisor, opts]},
-          restart: :permanent,
-          type: :worker
-        }
-      ]
-    else
-      []
-    end
-  end
-
-  def start_link(supervisor, opts) do
-    GenServer.start_link(__MODULE__, {supervisor, opts})
-  end
+  @spec start_link({pid(), map(), keyword()}) :: GenServer.on_start()
+  def start_link(args), do: GenServer.start_link(__MODULE__, args)
 
   @impl true
-  def init({supervisor, opts}) do
-    interval = Keyword.fetch!(opts, :interval_ms)
+  def init({topology, config, controller_opts}) do
+    opts = config.opts
+    initial_partitions = Keyword.get(opts, :partitions)
 
     state = %{
-      supervisor: supervisor,
+      topology: topology,
+      config: config,
       topic: Keyword.fetch!(opts, :topic),
       client: Keyword.fetch!(opts, :client),
-      interval: interval,
-      build_child_spec: Keyword.fetch!(opts, :build_child_spec)
+      count: Keyword.fetch!(opts, config.count_key),
+      interval: Keyword.fetch!(opts, :partition_discovery_interval_ms),
+      resolver: Keyword.get(controller_opts, :resolver, &ServiceDiscovery.partition_count/2),
+      status: status(initial_partitions),
+      expected_workers: expected_workers(initial_partitions, Keyword.fetch!(opts, config.count_key)),
+      waiters: [],
+      backoff: 0
     }
 
-    schedule(interval)
-
-    {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:discover, state) do
-    discover(state)
-    schedule(state.interval)
-    {:noreply, state}
-  end
-
-  defp discover(state) do
-    case Pulsar.ServiceDiscovery.partition_count(state.topic, client: state.client) do
-      {:ok, desired} ->
-        grow(state, desired)
-
-      {:error, reason} ->
-        Logger.warning("Partition discovery for #{state.topic} skipped: #{inspect(reason)}")
+    # Topology.init/1 has already constructed groups when its caller supplied a partition
+    # hint. Without one, this controller must perform the initial metadata lookup itself.
+    case Keyword.fetch(opts, :partitions) do
+      {:ok, _partitions} -> {:ok, schedule_poll(state)}
+      :error -> {:ok, state, {:continue, :discover}}
     end
   end
 
-  defp grow(state, desired) when desired > 0 do
-    existing = MapSet.new(Topology.groups(state.supervisor), &elem(&1, 0))
-    missing = Enum.reject(0..(desired - 1), &MapSet.member?(existing, &1))
-    add_partitions(state, missing)
+  @impl true
+  def handle_continue(:discover, state), do: discover(state)
+
+  @impl true
+  def handle_call(:status, _from, state), do: {:reply, state.status, state}
+
+  def handle_call(:expected_workers, _from, %{expected_workers: nil} = state) do
+    {:reply, {:error, :not_ready}, state}
   end
 
-  defp grow(_state, _desired), do: :ok
-
-  defp add_partitions(_state, []), do: :ok
-
-  defp add_partitions(state, missing) do
-    Logger.info("Partition discovery: adding partition(s) #{inspect(missing)} for #{state.topic}")
-
-    Enum.each(missing, fn index ->
-      case Supervisor.start_child(state.supervisor, state.build_child_spec.(index)) do
-        {:ok, _pid} ->
-          :ok
-
-        {:ok, _pid, _info} ->
-          :ok
-
-        {:error, {:already_started, _pid}} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Partition discovery: failed to start partition #{index} for #{state.topic}: #{inspect(reason)}")
-      end
-    end)
+  def handle_call(:expected_workers, _from, state) do
+    {:reply, {:ok, state.expected_workers}, state}
   end
 
-  defp schedule(interval), do: Process.send_after(self(), :discover, interval)
+  def handle_call(:await_initialized, from, %{expected_workers: nil} = state) do
+    {:noreply, %{state | waiters: [from | state.waiters]}}
+  end
 
-  defp enabled?(false), do: false
-  defp enabled?(interval) when is_integer(interval) and interval > 0, do: true
-  defp enabled?(_interval), do: false
+  def handle_call(:await_initialized, _from, state) do
+    {:reply, {:ok, state.expected_workers}, state}
+  end
+
+  @impl true
+  def handle_info(:discover, state), do: discover(state)
+
+  defp discover(state) do
+    case resolve_metadata(state) do
+      {:ok, partitions} ->
+        ready(state, partitions)
+
+      {:error, reason} ->
+        wait = Backoff.next(state.backoff)
+
+        Logger.warning("Topology discovery for #{state.topic} failed: #{inspect(reason)}; retrying in #{wait}ms")
+
+        Process.send_after(self(), :discover, wait)
+        {:noreply, %{state | backoff: wait}}
+    end
+  end
+
+  defp resolve_metadata(state) do
+    case state.resolver.(state.topic, client: state.client) do
+      {:ok, desired} when is_integer(desired) and desired >= 0 ->
+        Topology.reconcile(state.topology, desired, state.config)
+
+      {:ok, invalid} ->
+        {:error, {:invalid_partition_count, invalid}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  catch
+    kind, reason -> {:error, {:resolver_failed, kind, reason}}
+  end
+
+  defp ready(state, desired) do
+    expected_workers = expected_workers(desired, state.count)
+    Enum.each(state.waiters, &GenServer.reply(&1, {:ok, expected_workers}))
+
+    status = status(desired)
+    state = %{state | status: status, expected_workers: expected_workers, waiters: [], backoff: 0}
+    {:noreply, schedule_poll(state)}
+  end
+
+  defp schedule_poll(%{interval: false} = state), do: state
+
+  defp schedule_poll(state) do
+    Process.send_after(self(), :discover, state.interval)
+    state
+  end
+
+  defp status(nil), do: :initializing
+  defp status(0), do: {:ready, :non_partitioned}
+  defp status(partitions), do: {:ready, {:partitioned, partitions}}
+
+  defp expected_workers(nil, _count), do: nil
+  defp expected_workers(0, count), do: count
+  defp expected_workers(partitions, count), do: partitions * count
 end
