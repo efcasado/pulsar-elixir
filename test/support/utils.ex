@@ -65,10 +65,6 @@ defmodule Pulsar.Test.Support.Utils do
           Process.sleep(min(interval, deadline - now))
           poll(fun, deadline, interval, description)
         end
-
-      other ->
-        raise ArgumentError,
-              "poll callback must return {:ok, value} or {:retry, observation}, got: #{inspect(other)}"
     end
   end
 
