@@ -2,12 +2,12 @@ defmodule Pulsar.Producer.Worker do
   @moduledoc false
 
   # The GenServer behind a single producer. Pulsar.Producer starts these through
-  # Pulsar.Group, one per partition and per :producer_count.
+  # Pulsar.Topology.Group, one per partition and per :producer_count.
 
   use GenServer
 
   alias Pulsar.Backoff
-  alias Pulsar.ProducerEpochStore
+  alias Pulsar.Producer.EpochStore
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
@@ -121,7 +121,7 @@ defmodule Pulsar.Producer.Worker do
 
     # Restored from ETS when this producer is restarting.
     topic_epoch =
-      case ProducerEpochStore.get(client, topic, name, Keyword.fetch!(opts, :access_mode)) do
+      case EpochStore.get(client, topic, name, Keyword.fetch!(opts, :access_mode)) do
         {:ok, epoch} -> epoch
         :error -> nil
       end
@@ -169,7 +169,7 @@ defmodule Pulsar.Producer.Worker do
         {:noreply, new_state, {:continue, :monitor_broker}}
 
       {:error, {:ProducerFenced, _msg}} ->
-        ProducerEpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
+        EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
         {:stop, {:shutdown, :producer_fenced}, state}
 
       # Errors a second attempt cannot change; see Pulsar.Consumer.Worker.
@@ -368,7 +368,7 @@ defmodule Pulsar.Producer.Worker do
   def handle_info({:broker_message, %Binary.CommandProducerSuccess{} = command}, state) do
     if state.registration_request_id == command.request_id do
       if not is_nil(command.topic_epoch) do
-        ProducerEpochStore.put(state.client, state.topic, state.producer_name, state.access_mode, command.topic_epoch)
+        EpochStore.put(state.client, state.topic, state.producer_name, state.access_mode, command.topic_epoch)
       end
 
       new_state =
@@ -550,7 +550,7 @@ defmodule Pulsar.Producer.Worker do
           with :ok <- Pulsar.Broker.register_producer(broker_pid, state.producer_id, self()),
                {:ok, response} <- create_producer(broker_pid, state) do
             if not is_nil(response.topic_epoch) do
-              ProducerEpochStore.put(
+              EpochStore.put(
                 state.client,
                 state.topic,
                 response.producer_name,

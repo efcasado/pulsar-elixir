@@ -152,7 +152,7 @@ defmodule Pulsar.Client do
     # Store broker opts in client state (passed to children via registry metadata)
     :persistent_term.put({__MODULE__, client_name, :broker_opts}, broker_opts)
 
-    Pulsar.ProducerEpochStore.init(client_name)
+    Pulsar.Producer.EpochStore.init(client_name)
 
     children = [
       {Registry, keys: :unique, name: broker_registry(client_name)},

@@ -2,15 +2,15 @@ defmodule Pulsar.Topology do
   @moduledoc false
 
   # The stable supervision root a consumer or producer has for one topic. Its Discovery
-  # controller resolves and reconciles one Pulsar.Group for a non-partitioned topic, or one
+  # controller resolves and reconciles one Pulsar.Topology.Group for a non-partitioned topic, or one
   # group per partition. The root has the public registry name; its groups are internal
   # children identified by their place in the topology rather than additional public names.
 
   use Supervisor
 
-  alias Pulsar.Group
   alias Pulsar.Topic
   alias Pulsar.Topology.Discovery
+  alias Pulsar.Topology.Group
 
   require Logger
 
@@ -110,7 +110,7 @@ defmodule Pulsar.Topology do
   @doc """
   Returns `{index, pid}` for each group under `root`.
 
-  A non-partitioned topology answers its one internal group at index zero. A `Pulsar.Group`
+  A non-partitioned topology answers its one internal group at index zero. A `Pulsar.Topology.Group`
   passed directly is treated the same way and answers itself, so callers routing over either
   shape need no special case.
 

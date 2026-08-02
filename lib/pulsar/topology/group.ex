@@ -1,4 +1,4 @@
-defmodule Pulsar.Group do
+defmodule Pulsar.Topology.Group do
   @moduledoc false
 
   # Supervises the worker processes for one topic, or for one partition of it, for

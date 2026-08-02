@@ -1,4 +1,4 @@
-defmodule Pulsar.ProducerEpochStore do
+defmodule Pulsar.Producer.EpochStore do
   @moduledoc false
 
   # Topic epochs per client, in ETS, so a restarting producer can tell whether a newer one
@@ -57,13 +57,13 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> Pulsar.ProducerEpochStore.init(:stored)
-      iex> Pulsar.ProducerEpochStore.put(:stored, "my-topic", "my-producer", :Exclusive, 5)
-      iex> Pulsar.ProducerEpochStore.get(:stored, "my-topic", "my-producer", :Exclusive)
+      iex> Pulsar.Producer.EpochStore.init(:stored)
+      iex> Pulsar.Producer.EpochStore.put(:stored, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.Producer.EpochStore.get(:stored, "my-topic", "my-producer", :Exclusive)
       {:ok, 5}
 
-      iex> Pulsar.ProducerEpochStore.init(:unstored)
-      iex> Pulsar.ProducerEpochStore.get(:unstored, "new-topic", "new-producer", :Shared)
+      iex> Pulsar.Producer.EpochStore.init(:unstored)
+      iex> Pulsar.Producer.EpochStore.get(:unstored, "new-topic", "new-producer", :Shared)
       :error
   """
   @spec get(atom(), String.t(), String.t(), atom()) :: {:ok, integer()} | :error
@@ -97,8 +97,8 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> Pulsar.ProducerEpochStore.init(:written)
-      iex> Pulsar.ProducerEpochStore.put(:written, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.Producer.EpochStore.init(:written)
+      iex> Pulsar.Producer.EpochStore.put(:written, "my-topic", "my-producer", :Exclusive, 5)
       :ok
   """
   @spec put(atom(), String.t(), String.t(), atom(), integer()) :: :ok | :error
@@ -129,11 +129,11 @@ defmodule Pulsar.ProducerEpochStore do
 
   ## Examples
 
-      iex> Pulsar.ProducerEpochStore.init(:removed)
-      iex> Pulsar.ProducerEpochStore.put(:removed, "my-topic", "my-producer", :Exclusive, 5)
-      iex> Pulsar.ProducerEpochStore.delete(:removed, "my-topic", "my-producer", :Exclusive)
+      iex> Pulsar.Producer.EpochStore.init(:removed)
+      iex> Pulsar.Producer.EpochStore.put(:removed, "my-topic", "my-producer", :Exclusive, 5)
+      iex> Pulsar.Producer.EpochStore.delete(:removed, "my-topic", "my-producer", :Exclusive)
       :ok
-      iex> Pulsar.ProducerEpochStore.get(:removed, "my-topic", "my-producer", :Exclusive)
+      iex> Pulsar.Producer.EpochStore.get(:removed, "my-topic", "my-producer", :Exclusive)
       :error
   """
   @spec delete(atom(), String.t(), String.t(), atom()) :: :ok | :error
