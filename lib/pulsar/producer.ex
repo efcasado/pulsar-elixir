@@ -50,7 +50,7 @@ defmodule Pulsar.Producer do
     client = Keyword.fetch!(opts, :client)
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
-    Topology.start_link(Worker, Pulsar.Client.producer_registry(client), :producer_count, opts)
+    Topology.start_link(Worker, Pulsar.Client.registry(:producers, client), :producer_count, opts)
   end
 
   @doc """
@@ -70,7 +70,7 @@ defmodule Pulsar.Producer do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
 
-    Pulsar.Client.start_resource(Pulsar.Client.producer_supervisor(client), {__MODULE__, opts})
+    Pulsar.Client.start_resource(Pulsar.Client.resource_supervisor(:producers, client), {__MODULE__, opts})
   end
 
   @doc """
@@ -122,7 +122,7 @@ defmodule Pulsar.Producer do
 
   def stop(producer, opts) when is_pid(producer) do
     client = Keyword.get(opts, :client, @default_client)
-    Topology.remove(producer, Pulsar.Client.producer_supervisor(client))
+    Topology.remove(producer, Pulsar.Client.resource_supervisor(:producers, client))
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
@@ -184,7 +184,7 @@ defmodule Pulsar.Producer do
   defp resolve(name, opts) do
     client = Keyword.get(opts, :client, @default_client)
 
-    Pulsar.Client.lookup(Pulsar.Client.producer_registry(client), name)
+    Pulsar.Client.lookup(Pulsar.Client.registry(:producers, client), name)
   end
 
   # Two producers in one static supervision tree need distinct ids, so the id follows

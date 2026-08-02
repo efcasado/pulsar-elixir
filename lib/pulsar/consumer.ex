@@ -53,7 +53,7 @@ defmodule Pulsar.Consumer do
         default_name(topic, Keyword.fetch!(opts, :subscription_name))
       end)
 
-    Topology.start_link(Worker, Pulsar.Client.consumer_registry(client), :consumer_count, opts)
+    Topology.start_link(Worker, Pulsar.Client.registry(:consumers, client), :consumer_count, opts)
   end
 
   @doc """
@@ -71,7 +71,7 @@ defmodule Pulsar.Consumer do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
 
-    Pulsar.Client.start_resource(Pulsar.Client.consumer_supervisor(client), {__MODULE__, opts})
+    Pulsar.Client.start_resource(Pulsar.Client.resource_supervisor(:consumers, client), {__MODULE__, opts})
   end
 
   @doc """
@@ -99,7 +99,7 @@ defmodule Pulsar.Consumer do
 
   def stop(consumer, opts) when is_pid(consumer) do
     client = Keyword.get(opts, :client, @default_client)
-    Topology.remove(consumer, Pulsar.Client.consumer_supervisor(client))
+    Topology.remove(consumer, Pulsar.Client.resource_supervisor(:consumers, client))
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
@@ -246,7 +246,7 @@ defmodule Pulsar.Consumer do
   defp resolve(name, opts) do
     client = Keyword.get(opts, :client, @default_client)
 
-    Pulsar.Client.lookup(Pulsar.Client.consumer_registry(client), name)
+    Pulsar.Client.lookup(Pulsar.Client.registry(:consumers, client), name)
   end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows

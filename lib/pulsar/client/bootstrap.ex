@@ -12,19 +12,13 @@ defmodule Pulsar.Client.Bootstrap do
     GenServer.start_link(__MODULE__, {kind, opts})
   end
 
-  defp module_for(:consumers), do: Pulsar.Consumer
-  defp module_for(:producers), do: Pulsar.Producer
-
-  defp supervisor_for(:consumers, client), do: Client.consumer_supervisor(client)
-  defp supervisor_for(:producers, client), do: Client.producer_supervisor(client)
-
   @impl true
   def init({kind, opts}) do
     client = Keyword.fetch!(opts, :name)
 
     {:ok, _broker} = Client.start_broker(Keyword.fetch!(opts, :host), client: client)
 
-    pending = Enum.map(Keyword.fetch!(opts, kind), &{module_for(kind), &1})
+    pending = Enum.map(Keyword.fetch!(opts, kind), &{Client.resource_module(kind), &1})
 
     state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
 
@@ -47,7 +41,7 @@ defmodule Pulsar.Client.Bootstrap do
     outcomes =
       state.pending
       |> Enum.map(fn {module, opts} = resource -> {resource, start(module, opts)} end)
-      |> settle_contested(supervisor_for(state.kind, state.client))
+      |> settle_contested(Client.resource_supervisor(state.kind, state.client))
 
     {pending, last_error} =
       Enum.reduce(outcomes, {[], nil}, fn

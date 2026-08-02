@@ -61,6 +61,8 @@ defmodule Pulsar.Client do
   alias Pulsar.Client.Bootstrap
   alias Pulsar.Producer.EpochStore
 
+  @resource_modules %{consumers: Pulsar.Consumer, producers: Pulsar.Producer}
+
   @schema [
             name: [
               type: :atom,
@@ -168,12 +170,7 @@ defmodule Pulsar.Client do
   # other. One flat :rest_for_one chain made them dependants of whichever came first, so a
   # consumer supervisor exceeding its restart intensity took every runtime producer with it.
   defp resources_spec(opts) do
-    client_name = Keyword.fetch!(opts, :name)
-
-    branches = [
-      branch_spec(:consumers, consumer_registry(client_name), consumer_supervisor(client_name), opts),
-      branch_spec(:producers, producer_registry(client_name), producer_supervisor(client_name), opts)
-    ]
+    branches = Enum.map([:consumers, :producers], &branch_spec(&1, opts))
 
     %{
       id: :resources,
@@ -184,7 +181,11 @@ defmodule Pulsar.Client do
 
   # Within a branch the order is a dependency: resources register their names in the registry
   # as they start, so a registry that came back empty would leave them alive and unreachable.
-  defp branch_spec(kind, registry, supervisor, opts) do
+  defp branch_spec(kind, opts) do
+    client = Keyword.fetch!(opts, :name)
+    registry = registry(kind, client)
+    supervisor = resource_supervisor(kind, client)
+
     children = [
       {Registry, keys: :unique, name: registry},
       {DynamicSupervisor, [strategy: :one_for_one, name: supervisor] ++ Pulsar.Topology.restart_intensity()},
@@ -229,7 +230,7 @@ defmodule Pulsar.Client do
   """
   @spec consumers(atom()) :: [pid()]
   def consumers(client_name \\ :default) do
-    client_name |> consumer_supervisor() |> resource_roots()
+    :consumers |> resource_supervisor(client_name) |> resource_roots()
   end
 
   @doc """
@@ -241,10 +242,10 @@ defmodule Pulsar.Client do
   """
   @spec producers(atom()) :: [pid()]
   def producers(client_name \\ :default) do
-    client_name |> producer_supervisor() |> resource_roots()
+    :producers |> resource_supervisor(client_name) |> resource_roots()
   end
 
-  ## Registry and Supervisor Name Helpers
+  ## Process Name Helpers
 
   @doc false
   def broker_registry(client_name) do
@@ -252,14 +253,12 @@ defmodule Pulsar.Client do
   end
 
   @doc false
-  def consumer_registry(client_name) do
-    Module.concat([__MODULE__, client_name, ConsumerRegistry])
-  end
+  @spec resource_module(:consumers | :producers) :: module()
+  def resource_module(kind), do: Map.fetch!(@resource_modules, kind)
 
   @doc false
-  def producer_registry(client_name) do
-    Module.concat([__MODULE__, client_name, ProducerRegistry])
-  end
+  @spec registry(:consumers | :producers, atom()) :: atom()
+  def registry(kind, client_name), do: process_name(kind, client_name, "Registry")
 
   @doc false
   def broker_supervisor(client_name) do
@@ -267,13 +266,12 @@ defmodule Pulsar.Client do
   end
 
   @doc false
-  def consumer_supervisor(client_name) do
-    Module.concat([__MODULE__, client_name, ConsumerSupervisor])
-  end
+  @spec resource_supervisor(:consumers | :producers, atom()) :: atom()
+  def resource_supervisor(kind, client_name), do: process_name(kind, client_name, "Supervisor")
 
-  @doc false
-  def producer_supervisor(client_name) do
-    Module.concat([__MODULE__, client_name, ProducerSupervisor])
+  defp process_name(kind, client_name, suffix) do
+    resource = kind |> resource_module() |> Module.split() |> List.last()
+    Module.concat([__MODULE__, client_name, resource <> suffix])
   end
 
   @doc false
