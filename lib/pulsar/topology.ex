@@ -100,6 +100,8 @@ defmodule Pulsar.Topology do
       _child ->
         []
     end)
+  catch
+    :exit, _reason -> []
   end
 
   @doc """

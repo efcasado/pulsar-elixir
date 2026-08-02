@@ -68,6 +68,21 @@ defmodule Pulsar.TopologyTest do
     def start_link(opts), do: Agent.start_link(fn -> Keyword.fetch!(opts, :topic) end)
   end
 
+  defmodule DisappearingSupervisor do
+    @moduledoc false
+
+    def start_link(_opts) do
+      pid =
+        spawn_link(fn ->
+          receive do
+            _message -> exit(:gone)
+          end
+        end)
+
+      {:ok, pid}
+    end
+  end
+
   @topic "persistent://public/default/t"
   @name "#{@topic}-producer"
 
@@ -302,6 +317,17 @@ defmodule Pulsar.TopologyTest do
       :ok = Supervisor.terminate_child(root, "w-1")
 
       assert Topology.workers(root) == []
+    end
+
+    test "leaves out a supervisor that disappears during traversal" do
+      child = %{
+        id: :disappearing,
+        start: {DisappearingSupervisor, :start_link, [[]]},
+        restart: :temporary,
+        type: :supervisor
+      }
+
+      assert Topology.workers(start_supervisor([child])) == []
     end
   end
 
