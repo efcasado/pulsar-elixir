@@ -289,6 +289,51 @@ defmodule Pulsar.TopologyTest do
       assert length(Topology.groups(root)) == 4
     end
 
+    test "facade operations do not wait for an in-flight metadata poll" do
+      test_pid = self()
+      resolutions = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        case Agent.get_and_update(resolutions, &{&1, &1 + 1}) do
+          0 ->
+            {:ok, 0}
+
+          _later ->
+            send(test_pid, {:resolution_started, self()})
+
+            receive do
+              :resolve -> {:ok, 0}
+            end
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
+
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
+      assert_receive {:resolution_started, discovery}, 1_000
+
+      operations =
+        Task.async(fn ->
+          {
+            Pulsar.Producer.send(root, "payload"),
+            Pulsar.Consumer.send_flow(root, 1),
+            Pulsar.Consumer.topic(root)
+          }
+        end)
+
+      try do
+        assert Task.yield(operations, 500) ==
+                 {:ok,
+                  {
+                    {:error, :no_producers_available},
+                    {:error, :no_consumers_available},
+                    {:error, :not_found}
+                  }}
+      after
+        send(discovery, :resolve)
+      end
+    end
+
     test "periodically revives every partition group after they stop normally" do
       test_pid = self()
       resolutions = start_supervised!({Agent, fn -> 0 end})

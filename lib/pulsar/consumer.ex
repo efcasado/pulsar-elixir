@@ -170,9 +170,10 @@ defmodule Pulsar.Consumer do
         grant_all(Topology.workers(consumer), permits)
 
       :topology ->
-        if Topology.initialized?(consumer),
-          do: grant_all(Topology.workers(consumer), permits),
-          else: {:error, :not_ready}
+        case topology_workers(consumer) do
+          :initializing -> {:error, :not_ready}
+          {:ready, workers} -> grant_all(workers, permits)
+        end
     end
   catch
     :exit, reason -> {:error, reason}
@@ -226,13 +227,36 @@ defmodule Pulsar.Consumer do
   end
 
   defp topology_topic(consumer) do
-    if Topology.initialized?(consumer) do
-      case worker_topic(consumer) do
-        topic when is_binary(topic) -> Topic.base(topic)
-        error -> error
-      end
-    else
-      {:error, :not_ready}
+    case topology_workers(consumer) do
+      :initializing ->
+        {:error, :not_ready}
+
+      {:ready, [worker | _rest]} ->
+        case Worker.topic(worker) do
+          topic when is_binary(topic) -> Topic.base(topic)
+          error -> error
+        end
+
+      {:ready, []} ->
+        {:error, :not_found}
+    end
+  end
+
+  # Initial discovery has no groups. Once constructed, their child ids remain present while
+  # workers restart, so this distinguishes initialization without calling the discovery process.
+  defp topology_workers(consumer) do
+    case Topology.groups(consumer) do
+      [] ->
+        :initializing
+
+      groups ->
+        workers =
+          Enum.flat_map(groups, fn
+            {_index, group} when is_pid(group) -> Topology.workers(group)
+            {_index, _not_running} -> []
+          end)
+
+        {:ready, workers}
     end
   end
 

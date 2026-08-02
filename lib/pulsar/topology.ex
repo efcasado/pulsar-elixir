@@ -53,15 +53,6 @@ defmodule Pulsar.Topology do
     end
   end
 
-  @doc false
-  @spec initialized?(pid()) :: boolean()
-  def initialized?(root) do
-    case kind(root) do
-      :topology -> match?({:ready, _topology}, status(root))
-      _group_or_worker -> true
-    end
-  end
-
   defp controller(root) do
     root
     |> Supervisor.which_children()

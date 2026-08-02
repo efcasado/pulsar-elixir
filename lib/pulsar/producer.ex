@@ -143,9 +143,7 @@ defmodule Pulsar.Producer do
         route(Topology.groups(producer), message, opts)
 
       :topology ->
-        if Topology.initialized?(producer),
-          do: route(Topology.groups(producer), message, opts),
-          else: {:error, :not_ready}
+        route(Topology.groups(producer), message, opts)
     end
   catch
     # The producer went away while we were looking at it, which is what a caller holding
