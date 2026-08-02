@@ -143,7 +143,7 @@ startup proceeds in stages:
 
 1. The client starts its registries and supervisors.
 2. A consumer or producer registers its stable topology root.
-3. <code>Pulsar.Topology.Discovery</code> asks the broker for partition metadata.
+3. <code>Pulsar.Topology.Discovery</code> asks <code>Pulsar.Topology.Resolver</code> for partition metadata.
 4. The topology creates the required groups and workers.
 5. Workers resolve the topic broker and register or subscribe.
 
@@ -155,10 +155,11 @@ For example, publishing by name can return `{:error, :producer_not_found}` befor
 producer has been registered, and `{:error, :not_ready}` while its topology is initializing.
 Applications that publish during startup or from a consumer callback should handle both.
 
-Initial metadata failures are retried with backoff by the discovery process. Once a
-partitioned topology is ready, discovery periodically checks for newly added partitions and
-adds the missing groups without replacing the existing ones. Pulsar topics do not shrink,
-so a lower transient metadata result does not remove groups.
+Initial metadata failures are retried with backoff by the discovery process. Resolver also
+finds the topic owner when workers connect. Once a partitioned topology is ready, discovery
+periodically checks for newly added partitions and adds the missing groups without replacing
+the existing ones. Pulsar topics do not shrink, so a lower transient metadata result does not
+remove groups.
 
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
@@ -207,9 +208,9 @@ consumers and producers:
 
 - <code>Pulsar.Topology</code> owns one logical resource;
 - <code>Pulsar.Topology.Discovery</code> initializes and reconciles its partitions;
+- <code>Pulsar.Topology.Resolver</code> resolves topic owners and partition metadata;
 - <code>Pulsar.Topology.Group</code> owns the workers for one topic or partition;
 - <code>Pulsar.Consumer.Worker</code> and <code>Pulsar.Producer.Worker</code> implement broker-facing behavior;
-- <code>Pulsar.ServiceDiscovery</code> resolves topic brokers and partition metadata;
 - <code>Pulsar.Backoff</code> provides the common retry policy.
 
 These modules are implementation details rather than additional application-facing APIs.

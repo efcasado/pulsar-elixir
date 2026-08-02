@@ -11,7 +11,7 @@ defmodule Pulsar.Producer.Worker do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
-  alias Pulsar.ServiceDiscovery
+  alias Pulsar.Topology.Resolver
 
   require Logger
 
@@ -196,7 +196,7 @@ defmodule Pulsar.Producer.Worker do
   end
 
   defp register(state) do
-    case ServiceDiscovery.lookup_topic(state.topic, client: state.client) do
+    case Resolver.lookup_topic(state.topic, client: state.client) do
       {:ok, broker_pid} ->
         register_with_broker(state, broker_pid)
 

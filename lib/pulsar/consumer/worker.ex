@@ -12,7 +12,7 @@ defmodule Pulsar.Consumer.Worker do
   alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
-  alias Pulsar.ServiceDiscovery
+  alias Pulsar.Topology.Resolver
 
   require Logger
 
@@ -316,7 +316,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp subscribe(state) do
-    with {:ok, broker_pid} <- ServiceDiscovery.lookup_topic(state.topic, client: state.client),
+    with {:ok, broker_pid} <- Resolver.lookup_topic(state.topic, client: state.client),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, _response} <-
            subscribe_to_topic(

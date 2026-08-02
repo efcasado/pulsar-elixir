@@ -8,8 +8,8 @@ defmodule Pulsar.Topology.Discovery do
   use GenServer
 
   alias Pulsar.Backoff
-  alias Pulsar.ServiceDiscovery
   alias Pulsar.Topology
+  alias Pulsar.Topology.Resolver
 
   require Logger
 
@@ -27,7 +27,7 @@ defmodule Pulsar.Topology.Discovery do
       topic: Keyword.fetch!(opts, :topic),
       client: Keyword.fetch!(opts, :client),
       interval: Keyword.fetch!(opts, :partition_discovery_interval_ms),
-      resolver: Keyword.get(controller_opts, :resolver, &ServiceDiscovery.partition_count/2),
+      resolver: Keyword.get(controller_opts, :resolver, &Resolver.partition_count/2),
       status: status(initial_partitions),
       backoff: 0
     }

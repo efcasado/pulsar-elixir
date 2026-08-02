@@ -1,8 +1,9 @@
-defmodule Pulsar.ServiceDiscovery do
+defmodule Pulsar.Topology.Resolver do
   @moduledoc false
 
-  # Topic lookup: which broker owns a topic, and how many partitions it has. A lookup may be
-  # redirected across several brokers before reaching the authoritative one.
+  # Resolves broker-owned topology metadata: which broker owns a topic and how many
+  # partitions it has. A topic lookup may be redirected across several brokers before
+  # reaching the authoritative one.
 
   require Logger
 

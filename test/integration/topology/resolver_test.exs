@@ -1,15 +1,15 @@
-defmodule Pulsar.Integration.Client.ServiceDiscoveryTest do
+defmodule Pulsar.Integration.Topology.ResolverTest do
   use ExUnit.Case, async: true
 
   import TelemetryTest
 
-  alias Pulsar.ServiceDiscovery
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology.Resolver
 
   @moduletag :integration
-  @client :service_discovery_test_client
-  @topic "persistent://public/default/service-discovery-test-topic"
+  @client :topology_resolver_test_client
+  @topic "persistent://public/default/topology-resolver-test-topic"
 
   setup_all do
     broker = System.broker()
@@ -31,7 +31,7 @@ defmodule Pulsar.Integration.Client.ServiceDiscoveryTest do
 
   @tag telemetry_listen: [[:pulsar, :service_discovery, :lookup_topic, :stop]]
   test "topic lookup retrieves broker PID" do
-    assert {:ok, broker_pid} = ServiceDiscovery.lookup_topic(@topic, client: @client)
+    assert {:ok, broker_pid} = Resolver.lookup_topic(@topic, client: @client)
     assert Process.alive?(broker_pid)
 
     stats = Utils.collect_lookup_stats(client: @client)
@@ -40,10 +40,10 @@ defmodule Pulsar.Integration.Client.ServiceDiscoveryTest do
 
   @tag telemetry_listen: [[:pulsar, :service_discovery, :lookup_topic, :stop]]
   test "topic lookup fails for non-existing topics" do
-    result1 = ServiceDiscovery.lookup_topic("persistent://fake/fake/fake", client: @client)
+    result1 = Resolver.lookup_topic("persistent://fake/fake/fake", client: @client)
     assert {:error, _reason} = result1
 
-    result2 = ServiceDiscovery.lookup_topic("persistent://public/fake/fake", client: @client)
+    result2 = Resolver.lookup_topic("persistent://public/fake/fake", client: @client)
     assert {:error, _reason} = result2
 
     stats = Utils.collect_lookup_stats(client: @client)
