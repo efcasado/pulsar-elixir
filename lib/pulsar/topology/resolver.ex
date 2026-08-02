@@ -20,11 +20,19 @@ defmodule Pulsar.Topology.Resolver do
 
     :telemetry.span(
       [:pulsar, :service_discovery, :partition_count],
-      %{},
+      %{topic: topic, client: client},
       fn ->
         result = do_partition_count(Pulsar.Client.random_broker(client), topic)
 
-        metadata = %{success: match?({:ok, _}, result), client: client}
+        metadata =
+          case result do
+            {:ok, partitions} ->
+              %{success: true, topic: topic, client: client, partition_count: partitions}
+
+            {:error, reason} ->
+              %{success: false, topic: topic, client: client, error: reason}
+          end
+
         {result, metadata}
       end
     )

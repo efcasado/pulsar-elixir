@@ -165,10 +165,14 @@ Applications that publish during startup or from a consumer callback should hand
 Initial metadata failures are retried with backoff by the discovery process. Resolver also
 finds the topic owner when workers connect. Once a partitioned topology is ready, discovery
 periodically checks for newly added partitions and adds the missing groups without replacing
-the existing ones. The same pass revives a partition group that previously stopped. Pulsar
-topics do not shrink, so a lower transient metadata result does not remove groups. Setting
-`:partition_discovery_interval_ms` to `false` disables these later reconciliation passes, but
-not initial discovery.
+the existing ones. Pulsar topics do not shrink, so a lower transient metadata result does not
+remove groups.
+
+Independently of those broker checks, Discovery periodically reconciles the topology shape it
+already knows. This local pass revives stopped groups for both partitioned and non-partitioned
+topics without making a metadata request. Setting `:partition_discovery_interval_ms` to
+`false` disables only later metadata checks; initial discovery and local group recovery remain
+enabled.
 
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
@@ -235,21 +239,30 @@ it asks a broker for partition metadata and is also reused by workers when they 
 owner of a topic.
 
 After each metadata lookup, Discovery asks <code>Pulsar.Topology</code> to reconcile the stable
-root. The child ids describe its shape: `{:topic, :non_partitioned}` identifies the one group
-for a non-partitioned topic, while `{:partition, index}` identifies each partition group.
-Using ids rather than names or child-list positions makes partition identity independent of
-supervisor ordering.
+root. It retains the resulting partition count and also reconciles that known shape locally,
+on a separate schedule that does not contact a broker. The child ids describe the shape:
+`{:topic, :non_partitioned}` identifies the one group for a non-partitioned topic, while
+`{:partition, index}` identifies each partition group. Using ids rather than names or
+child-list positions makes partition identity independent of supervisor ordering.
 
 Reconciliation first restarts any group whose child specification remains under the root but
 whose process has stopped. It then adds groups for partition indexes reported by the broker
 but not yet present. Existing groups are left alone, and a lower partition count never removes
-them. A failed lookup or reconciliation is retried with backoff; after a successful pass,
-Discovery schedules the next one at `:partition_discovery_interval_ms` when polling is enabled.
+them. Failed metadata checks and reconciliation attempts are retried with backoff. Metadata
+polling follows `:partition_discovery_interval_ms`; local reconciliation remains enabled even
+when metadata polling is disabled.
 
 This gives a terminal worker response a useful boundary. The worker does not immediately
 restart into the same rejection, but the stable root can try the stopped group again on a
-later discovery pass, after broker-side state may have changed. This remains true when every
-group is stopped: the logical resource becomes degraded rather than disappearing.
+later local pass, after broker-side state may have changed. This remains true when every group
+is stopped: the logical resource becomes degraded rather than disappearing.
+
+Discovery and reconciliation passes emit debug logs with their result. Adding partitions after
+initialization or reviving groups is reported at info level, while failures identify the
+metadata or reconciliation stage at warning level. The
+`[:pulsar, :topology, :discovery, ...]` and
+`[:pulsar, :topology, :reconciliation, ...]` telemetry spans carry the topic, client, partition
+counts, changed group indexes, and outcome for programmatic monitoring.
 
 ### Traversing a Topology
 

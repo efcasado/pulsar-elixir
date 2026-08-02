@@ -1,9 +1,13 @@
 defmodule Pulsar.TopologyTest do
   use ExUnit.Case, async: true
 
+  import TelemetryTest
+
   alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
   alias Pulsar.Topology.Discovery
+
+  setup [:telemetry_listen]
 
   defmodule Owner do
     @moduledoc false
@@ -100,7 +104,7 @@ defmodule Pulsar.TopologyTest do
     {root, registry}
   end
 
-  defp start_async_topology(resolver, opts \\ []) do
+  defp start_async_topology(resolver, opts \\ [], controller_opts \\ []) do
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
@@ -119,7 +123,9 @@ defmodule Pulsar.TopologyTest do
     root =
       start_supervised!(%{
         id: {:root, System.unique_integer([:positive])},
-        start: {Topology, :start_link, [StubWorker, registry, :count_key, topology_opts, [resolver: resolver]]},
+        start:
+          {Topology, :start_link,
+           [StubWorker, registry, :count_key, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
         type: :supervisor
       })
 
@@ -183,6 +189,76 @@ defmodule Pulsar.TopologyTest do
       assert Topology.status(root) == {:ready, :non_partitioned}
       assert [{0, group}] = Topology.groups(root)
       assert is_pid(group)
+    end
+
+    @tag telemetry_listen: [
+           [:pulsar, :topology, :discovery, :stop],
+           [:pulsar, :topology, :reconciliation, :stop]
+         ]
+    test "locally revives a non-partitioned group when metadata polling is disabled" do
+      test_pid = self()
+      topic = "#{@topic}-local-reconciliation"
+
+      resolver = fn resolved_topic, _opts ->
+        send(test_pid, {:resolved, resolved_topic})
+        {:ok, 0}
+      end
+
+      {root, _registry} =
+        start_async_topology(
+          resolver,
+          [topic: topic, name: "#{topic}-producer", partition_discovery_interval_ms: false],
+          reconciliation_interval_ms: 250
+        )
+
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
+      assert_receive {:resolved, ^topic}
+
+      assert_receive {:telemetry_event,
+                      %{
+                        event: [:pulsar, :topology, :discovery, :stop],
+                        metadata: %{
+                          topic: ^topic,
+                          client: :test,
+                          success: true,
+                          partition_count: 0
+                        }
+                      }}
+
+      [{0, old_group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(old_group)
+      ref = Process.monitor(old_group)
+
+      :ok = Agent.stop(worker)
+      assert_receive {:DOWN, ^ref, :process, ^old_group, _reason}
+      assert Topology.groups(root) == [{0, :undefined}]
+
+      :ok =
+        Utils.wait_for(
+          fn ->
+            case Topology.groups(root) do
+              [{0, new_group}] when is_pid(new_group) -> new_group != old_group
+              _not_running -> false
+            end
+          end,
+          100,
+          10
+        )
+
+      assert_receive {:telemetry_event,
+                      %{
+                        event: [:pulsar, :topology, :reconciliation, :stop],
+                        metadata: %{
+                          topic: ^topic,
+                          source: :local,
+                          success: true,
+                          desired_partition_count: 0,
+                          partition_count: 0,
+                          revived_groups: [0]
+                        }
+                      }}
+
+      refute_receive {:resolved, ^topic}, 300
     end
 
     test "periodically reconciles partitions added after initialization" do
