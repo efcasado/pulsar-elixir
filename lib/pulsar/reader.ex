@@ -208,12 +208,12 @@ defmodule Pulsar.Reader do
 
     case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
       {:ok, consumer} ->
-        case build_reader_state(consumer, reader_ref, flow_permits, timeout, startup_timeout) do
+        case build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
           {:ok, state} ->
             {:ok, state}
 
           {:error, _reason} = error ->
-            stop_consumer(consumer)
+            stop_consumer(consumer, client_name)
             error
         end
 
@@ -222,7 +222,7 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp build_reader_state(consumer, reader_ref, flow_permits, timeout, startup_timeout) do
+  defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
     startup_deadline = deadline(startup_timeout)
 
     with {:ok, expected_count} <- wait_for_topology(consumer, startup_deadline),
@@ -232,6 +232,7 @@ defmodule Pulsar.Reader do
 
       {:ok,
        %{
+         client: client_name,
          consumer_pids: consumer_pids,
          consumer_group_pid: consumer,
          flow_permits: flow_permits,
@@ -276,7 +277,7 @@ defmodule Pulsar.Reader do
   defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
-    case Consumer.stop(state.consumer_group_pid) do
+    case Consumer.stop(state.consumer_group_pid, client: state.client) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
@@ -398,8 +399,8 @@ defmodule Pulsar.Reader do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp stop_consumer(consumer) do
-    Consumer.stop(consumer)
+  defp stop_consumer(consumer, client_name) do
+    Consumer.stop(consumer, client: client_name)
   catch
     :exit, _reason -> :ok
   end
