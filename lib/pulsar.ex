@@ -2,11 +2,12 @@ defmodule Pulsar do
   @moduledoc """
   An Apache Pulsar client for Elixir.
 
-  The core API is centered on three modules:
+  The core API is centered on four modules:
 
   - `Pulsar.Client` — a connection context for one Pulsar cluster
   - `Pulsar.Consumer` — subscribes to a topic and dispatches to a callback module
   - `Pulsar.Producer` — publishes to a topic
+  - `Pulsar.Reader` — exposes stream-based, non-durable reading
 
   ## Getting started
 
@@ -117,6 +118,9 @@ defmodule Pulsar do
   partition. Those groups remain internal—the stable resource root is what the public API
   returns, registers and lists.
 
+  See the [architecture guide](architecture.html) for the ownership and recovery model in
+  more detail.
+
   ## Lifecycle and availability
 
   A client owns its broker connections, consumers and producers. Partitioned topics need
@@ -124,9 +128,9 @@ defmodule Pulsar do
   while its partition workers are discovered and reconciled in the background.
 
   Starting a client or resource is not a readiness check. A resource is registered before
-  topic discovery and worker initialization complete, so publishing and inspection may return
-  `{:error, :not_ready}` until it is usable. Broker and worker failures are recovered with
-  retry and backoff where possible.
+  topic discovery and worker initialization complete, so consumer topic and flow operations
+  and producer publishing may return `{:error, :not_ready}` until it is usable. Broker and
+  worker failures are recovered with retry and backoff where possible.
 
   Consumers and producers recover independently. Resources declared on a client are recreated
   with it; resources added later with `Pulsar.Consumer.start/1` or `Pulsar.Producer.start/1` are
