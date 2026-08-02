@@ -72,8 +72,6 @@ defmodule Pulsar.Reader do
   alias Pulsar.Consumer
   alias Pulsar.Topology
 
-  require Logger
-
   @default_startup_timeout 5_000
 
   @schema [
@@ -288,15 +286,7 @@ defmodule Pulsar.Reader do
   @spec stream_options_docs() :: String.t()
   def stream_options_docs, do: NimbleOptions.docs(@schema)
 
-  defp validate_options!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar.Reader ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    NimbleOptions.validate!(known, @schema)
-  end
+  defp validate_options!(opts), do: NimbleOptions.validate!(opts, @schema)
 
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)

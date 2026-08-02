@@ -1,8 +1,6 @@
 defmodule Pulsar.Consumer.OptionsTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias Pulsar.Consumer.Options
 
   @required [topic: "t", subscription_name: "s", callback_module: MyApp.Handler]
@@ -48,12 +46,10 @@ defmodule Pulsar.Consumer.OptionsTest do
       end
     end
 
-    test "warns about unknown options rather than failing" do
-      log = capture_log(fn -> validate!(flow_intial: 10, nonsense: true) end)
-
-      assert log =~ "ignoring unknown options"
-      assert log =~ ":flow_intial"
-      assert log =~ ":nonsense"
+    test "rejects unknown options" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:flow_intial.*:nonsense/, fn ->
+        validate!(flow_intial: 10, nonsense: true)
+      end
     end
   end
 

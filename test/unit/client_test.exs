@@ -1,8 +1,6 @@
 defmodule Pulsar.ClientTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias Pulsar.Client
 
   describe "start_link/1 option validation" do
@@ -27,23 +25,15 @@ defmodule Pulsar.ClientTest do
       end
     end
 
-    test "warns about unknown options rather than failing" do
-      log =
-        capture_log(fn ->
-          {:ok, _pid} =
-            Client.start_link(
-              name: :unknown_opts,
-              host: "pulsar://127.0.0.1:1",
-              conn_timout: 500,
-              bogus: true
-            )
-
-          Client.stop(:unknown_opts)
-        end)
-
-      assert log =~ "ignoring unknown options"
-      assert log =~ ":conn_timout"
-      assert log =~ ":bogus"
+    test "rejects unknown options" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:conn_timout.*:bogus/, fn ->
+        Client.start_link(
+          name: :unknown_opts,
+          host: "pulsar://127.0.0.1:1",
+          conn_timout: 500,
+          bogus: true
+        )
+      end
     end
   end
 

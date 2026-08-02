@@ -1,8 +1,6 @@
 defmodule Pulsar.Producer.OptionsTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias Pulsar.Producer.Options
 
   @required [topic: "t"]
@@ -50,12 +48,10 @@ defmodule Pulsar.Producer.OptionsTest do
       assert validate!(partition_discovery_interval_ms: 5_000)[:partition_discovery_interval_ms] == 5_000
     end
 
-    test "warns about unknown options rather than failing" do
-      log = capture_log(fn -> validate!(batch_sze: 10, nonsense: true) end)
-
-      assert log =~ "ignoring unknown options"
-      assert log =~ ":batch_sze"
-      assert log =~ ":nonsense"
+    test "rejects unknown options" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:batch_sze.*:nonsense/, fn ->
+        validate!(batch_sze: 10, nonsense: true)
+      end
     end
   end
 end

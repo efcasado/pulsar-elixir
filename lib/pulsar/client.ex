@@ -61,8 +61,6 @@ defmodule Pulsar.Client do
   alias Pulsar.Client.Bootstrap
   alias Pulsar.Producer.EpochStore
 
-  require Logger
-
   @schema [
             name: [
               type: :atom,
@@ -416,16 +414,8 @@ defmodule Pulsar.Client do
 
   ## Private Functions
 
-  # Unknown options are only warned about for now, and will be rejected in the next
-  # major version.
   defp validate_options!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar.Client ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    known
+    opts
     |> NimbleOptions.validate!(@schema)
     |> validate_resources!()
   end

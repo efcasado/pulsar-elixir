@@ -1,16 +1,13 @@
 defmodule Pulsar.ReaderOptionsTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   # stream/2 is lazy, so the options are only validated once something enumerates it.
   defp start(opts), do: "persistent://public/default/unread" |> Pulsar.Reader.stream(opts) |> Enum.take(1)
 
-  test "warns about unknown options rather than raising, as the other surfaces do" do
-    log = capture_log(fn -> assert_raise NimbleOptions.ValidationError, fn -> start(timeut: 5, timeout: :soon) end end)
-
-    assert log =~ "Pulsar.Reader ignoring unknown options"
-    assert log =~ ":timeut"
+  test "rejects unknown options" do
+    assert_raise NimbleOptions.ValidationError, ~r/unknown options \[:timeut\]/, fn ->
+      start(timeut: 5)
+    end
   end
 
   test "rejects an option of the wrong type" do

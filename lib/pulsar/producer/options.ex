@@ -1,8 +1,6 @@
 defmodule Pulsar.Producer.Options do
   @moduledoc false
 
-  require Logger
-
   @schema [
     topic: [
       type: :string,
@@ -97,18 +95,8 @@ defmodule Pulsar.Producer.Options do
   def docs, do: NimbleOptions.docs(@schema)
 
   @doc """
-  Validates producer options, warning about any the schema does not know.
-
-  Unknown options will be rejected in the next major version.
+  Validates producer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar producer ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    NimbleOptions.validate!(known, @schema)
-  end
+  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
 end
