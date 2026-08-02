@@ -213,24 +213,15 @@ defmodule Pulsar.Topology do
   def init({config, controller_opts}) do
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
-    partitions = Keyword.get(opts, :partitions)
 
     Logger.info("Starting #{inspect(worker)} topology for topic #{topic}")
 
-    group_children = initial_group_child_specs(partitions, config)
     discovery = Discovery.child_spec({self(), config, controller_opts})
 
     Supervisor.init(
-      group_children ++ [discovery],
+      [discovery],
       [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
     )
-  end
-
-  defp initial_group_child_specs(nil, _config), do: []
-  defp initial_group_child_specs(0, config), do: [topic_child_spec(config)]
-
-  defp initial_group_child_specs(partitions, config) when partitions > 0 do
-    Enum.map(0..(partitions - 1), &partition_child_spec(&1, config))
   end
 
   @doc false

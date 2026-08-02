@@ -49,24 +49,15 @@ defmodule Pulsar.TopologyTest do
   @name "#{@topic}-producer"
 
   defp start_topology(partitions) do
-    registry = :"registry-#{System.unique_integer([:positive])}"
-    start_supervised!({Registry, keys: :unique, name: registry})
+    resolver = fn _topic, _opts -> {:ok, partitions} end
+    {root, registry} = start_async_topology(resolver)
 
-    opts = [
-      topic: @topic,
-      name: @name,
-      client: :test,
-      partitions: partitions,
-      count_key: 1,
-      partition_discovery_interval_ms: false
-    ]
+    expected_status =
+      if partitions == 0,
+        do: {:ready, :non_partitioned},
+        else: {:ready, {:partitioned, partitions}}
 
-    root =
-      start_supervised!(%{
-        id: :root,
-        start: {Topology, :start_link, [StubWorker, registry, :count_key, opts]},
-        type: :supervisor
-      })
+    :ok = Utils.wait_for(fn -> Topology.status(root) == expected_status end, 100, 10)
 
     {root, registry}
   end

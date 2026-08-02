@@ -19,10 +19,6 @@ defmodule Pulsar.Topology.Group do
   @spec start_link(module(), atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, count_key, opts), do: Supervisor.start_link(__MODULE__, {worker, count_key, opts})
 
-  def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
-    Supervisor.stop(supervisor_pid, reason, timeout)
-  end
-
   @impl true
   def init({worker, count_key, opts}) do
     name = Keyword.fetch!(opts, :name)

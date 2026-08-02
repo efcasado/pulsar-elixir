@@ -19,7 +19,6 @@ defmodule Pulsar.Topology.Discovery do
   @impl true
   def init({topology, config, controller_opts}) do
     opts = config.opts
-    initial_partitions = Keyword.get(opts, :partitions)
 
     state = %{
       topology: topology,
@@ -28,16 +27,11 @@ defmodule Pulsar.Topology.Discovery do
       client: Keyword.fetch!(opts, :client),
       interval: Keyword.fetch!(opts, :partition_discovery_interval_ms),
       resolver: Keyword.get(controller_opts, :resolver, &Resolver.partition_count/2),
-      status: status(initial_partitions),
+      status: :initializing,
       backoff: 0
     }
 
-    # Topology.init/1 has already constructed groups when its caller supplied a partition
-    # hint. Without one, this controller must perform the initial metadata lookup itself.
-    case Keyword.fetch(opts, :partitions) do
-      {:ok, _partitions} -> {:ok, schedule_poll(state)}
-      :error -> {:ok, state, {:continue, :discover}}
-    end
+    {:ok, state, {:continue, :discover}}
   end
 
   @impl true
@@ -92,7 +86,6 @@ defmodule Pulsar.Topology.Discovery do
     state
   end
 
-  defp status(nil), do: :initializing
   defp status(0), do: {:ready, :non_partitioned}
   defp status(partitions), do: {:ready, {:partitioned, partitions}}
 end

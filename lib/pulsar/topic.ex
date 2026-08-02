@@ -16,21 +16,6 @@ defmodule Pulsar.Topic do
   def partition(base, index), do: "#{base}#{@separator}#{index}"
 
   @doc """
-  Extracts the numeric partition index from a partition topic/group name.
-
-      iex> Pulsar.Topic.index("persistent://public/default/t-partition-3")
-      3
-  """
-  @spec index(String.t() | atom()) :: non_neg_integer()
-  def index(partition_name) do
-    partition_name
-    |> to_string()
-    |> String.split(@separator)
-    |> List.last()
-    |> String.to_integer()
-  end
-
-  @doc """
   Strips the partition suffix, returning the name a partition belongs to. A name without
   one is returned unchanged.
 
