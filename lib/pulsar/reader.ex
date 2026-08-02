@@ -16,6 +16,8 @@ defmodule Pulsar.Reader do
       |> Stream.each(&IO.inspect(&1.payload))
       |> Stream.run()
 
+      :ok = Pulsar.Client.stop(:default)
+
   Reading always uses a non-durable subscription, so a reader keeps no position and
   starts fresh each time.
 
@@ -66,6 +68,7 @@ defmodule Pulsar.Reader do
   - The stream is halted by downstream processing
   """
 
+  alias Pulsar.Backoff
   alias Pulsar.Consumer
   alias Pulsar.Topology
 
@@ -223,10 +226,10 @@ defmodule Pulsar.Reader do
   end
 
   defp build_reader_state(consumer, reader_ref, flow_permits, timeout, startup_timeout) do
-    deadline = deadline(startup_timeout)
+    startup_deadline = deadline(startup_timeout)
 
-    with {:ok, expected_count} <- wait_for_topology(consumer, deadline),
-         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, expected_count, deadline),
+    with {:ok, expected_count} <- wait_for_topology(consumer, startup_deadline),
+         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, expected_count, startup_deadline),
          :ok <- Consumer.send_flow(consumer, flow_permits) do
       permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
@@ -318,38 +321,36 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_topology(consumer, deadline) do
-    case expected_consumer_count(consumer) do
-      {:ok, expected_count} ->
-        {:ok, expected_count}
-
-      :initializing ->
-        retry_topology(consumer, deadline)
-    end
-  end
-
-  defp retry_topology(consumer, deadline) do
-    case remaining(deadline) do
-      0 ->
+  defp wait_for_topology(consumer, startup_deadline) do
+    case Backoff.run(
+           fn ->
+             case expected_consumer_count(consumer) do
+               {:ok, _expected_count} = ready -> ready
+               :initializing -> {:error, :initializing}
+             end
+           end,
+           &(&1 == :initializing),
+           remaining(startup_deadline)
+         ) do
+      {:error, :initializing} ->
         {:error, :reader_start_timeout}
 
-      remaining ->
-        Process.sleep(min_timeout(remaining, 25))
-        wait_for_topology(consumer, deadline)
+      {:ok, _expected_count} = ready ->
+        ready
     end
   end
 
-  defp wait_for_consumers_ready(consumer, reader_ref, expected_count, deadline) do
-    collect_ready_messages(consumer, reader_ref, expected_count, %{}, deadline)
+  defp wait_for_consumers_ready(consumer, reader_ref, expected_count, startup_deadline) do
+    collect_ready_messages(consumer, reader_ref, expected_count, %{}, startup_deadline)
   end
 
-  defp collect_ready_messages(consumer, reader_ref, expected_count, ready, deadline) do
+  defp collect_ready_messages(consumer, reader_ref, expected_count, ready, startup_deadline) do
     case ready_consumers(consumer, expected_count, ready) do
       {:ok, consumers} ->
         {:ok, consumers}
 
       {:waiting, expected_count} ->
-        receive_ready(consumer, reader_ref, expected_count, ready, deadline)
+        receive_ready(consumer, reader_ref, expected_count, ready, startup_deadline)
     end
   end
 
@@ -381,8 +382,8 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp receive_ready(consumer, reader_ref, expected_count, ready, deadline) do
-    case remaining(deadline) do
+  defp receive_ready(consumer, reader_ref, expected_count, ready, startup_deadline) do
+    case remaining(startup_deadline) do
       0 ->
         {:error, :reader_start_timeout}
 
@@ -390,7 +391,7 @@ defmodule Pulsar.Reader do
         receive do
           {:reader_ready, ^reader_ref, pid} ->
             ready = Map.put(ready, pid, true)
-            collect_ready_messages(consumer, reader_ref, expected_count, ready, deadline)
+            collect_ready_messages(consumer, reader_ref, expected_count, ready, startup_deadline)
         after
           timeout -> {:error, :reader_start_timeout}
         end
@@ -405,9 +406,6 @@ defmodule Pulsar.Reader do
   defp remaining(deadline) do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
-
-  defp min_timeout(:infinity, timeout), do: timeout
-  defp min_timeout(remaining, timeout), do: min(remaining, timeout)
 
   defp stop_consumer(consumer) do
     Consumer.stop(consumer)

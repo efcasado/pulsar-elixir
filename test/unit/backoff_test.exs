@@ -68,6 +68,24 @@ defmodule Pulsar.BackoffTest do
       assert result == {:ok, 3}
     end
 
+    test "supports an infinite budget" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      result =
+        Backoff.run(
+          fn ->
+            case Agent.get_and_update(counter, &{&1 + 1, &1 + 1}) do
+              1 -> {:error, :transient}
+              attempt -> {:ok, attempt}
+            end
+          end,
+          &retryable?/1,
+          :infinity
+        )
+
+      assert result == {:ok, 2}
+    end
+
     test "gives up with the error unchanged once the budget is spent" do
       assert Backoff.run(fn -> {:error, :transient} end, &retryable?/1, 200) == {:error, :transient}
     end

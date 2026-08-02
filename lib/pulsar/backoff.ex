@@ -18,15 +18,22 @@ defmodule Pulsar.Backoff do
   Runs `fun`, retrying the failures `retryable?` accepts and backing off between attempts.
 
   `fun` returns `{:error, reason}` to fail and anything else to succeed. `budget` is how long
-  retrying may take in total, in milliseconds; the error is returned unchanged once `retryable?`
-  rejects its reason or the next wait would outlast what is left of the budget, so giving up
-  reads the same as failing outright.
+  retrying may take in total, in milliseconds, or `:infinity`; the error is returned unchanged
+  once `retryable?` rejects its reason or the next wait would outlast what is left of the budget,
+  so giving up reads the same as failing outright.
 
   Blocks the calling process, so this is for a process with nothing else to do meanwhile —
   a worker resolving its own startup, not one that owes replies.
   """
-  @spec run((-> result), (term() -> boolean()), non_neg_integer()) :: result when result: term()
-  def run(fun, retryable?, budget \\ @retry_budget) when is_function(fun, 0) and is_function(retryable?, 1) do
+  @spec run((-> result), (term() -> boolean()), timeout()) :: result when result: term()
+  def run(fun, retryable?, budget \\ @retry_budget)
+
+  def run(fun, retryable?, :infinity) when is_function(fun, 0) and is_function(retryable?, 1) do
+    run(fun, retryable?, :infinity, 0)
+  end
+
+  def run(fun, retryable?, budget)
+      when is_function(fun, 0) and is_function(retryable?, 1) and is_integer(budget) and budget >= 0 do
     run(fun, retryable?, now() + budget, 0)
   end
 
@@ -39,7 +46,7 @@ defmodule Pulsar.Backoff do
       {:error, reason} = error ->
         wait = next(backoff)
 
-        if retryable?.(reason) and now() + wait <= deadline do
+        if retryable?.(reason) and within_budget?(deadline, wait) do
           Process.sleep(wait)
           run(fun, retryable?, deadline, wait)
         else
@@ -50,6 +57,9 @@ defmodule Pulsar.Backoff do
         result
     end
   end
+
+  defp within_budget?(:infinity, _wait), do: true
+  defp within_budget?(deadline, wait), do: now() + wait <= deadline
 
   defp now, do: System.monotonic_time(:millisecond)
 end

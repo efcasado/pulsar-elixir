@@ -23,13 +23,15 @@ belongs in your supervision tree; in a script, start it directly:
 |> Pulsar.Reader.stream()
 |> Stream.map(fn msg -> msg.payload end)
 |> Enum.take(10)
+
+:ok = Pulsar.Client.stop(:default)
 ```
 
 This creates a stream that:
 1. Subscribes through the client
 2. Reads 10 messages from the topic (starting from `:earliest` by default)
 3. Extracts the payload
-4. Unsubscribes when done, leaving the client running
+4. Unsubscribes when done; the example then stops the directly started client
 
 > #### Note {: .info}
 >

@@ -215,10 +215,8 @@ defmodule Pulsar.Integration.AccessModesTest do
       &(&1.success == false and &1.error == :producer_fenced and
           String.starts_with?(&1.producer_name, "original-exclusive"))
 
-    # collect_events/2 drains what has arrived so far, so the results are accumulated
-    # until the fencing shows up. Asserting an exact count would instead measure how
-    # often the fenced producer retried before we looked.
-    # Waits on a broker reconnect, so the window is generous.
+    # Fencing is observed asynchronously after the broker reconnects, so accumulate events
+    # across collection windows until the original producer reports the terminal error.
     all_events =
       Enum.reduce_while(1..150, [], fn _attempt, collected ->
         collected =

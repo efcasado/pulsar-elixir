@@ -145,8 +145,6 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
     group_ref = Process.monitor(producer_group)
 
-    # An incompatible schema will not become compatible, so the logical producer stops
-    # rather than restarting into the same rejection or lingering with no usable workers.
     assert_receive {:DOWN, ^group_ref, :process, ^producer_group, _reason}, 5_000
   end
 

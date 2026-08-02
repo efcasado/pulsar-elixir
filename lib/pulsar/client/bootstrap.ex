@@ -21,15 +21,12 @@ defmodule Pulsar.Client.Bootstrap do
   def init({kind, opts}) do
     client = Keyword.fetch!(opts, :name)
 
-    # Idempotent, and each branch runs it, so the connection is re-established whichever
-    # branch a restart brings back.
     {:ok, _broker} = Client.start_broker(Keyword.fetch!(opts, :host), client: client)
 
     pending = Enum.map(Keyword.fetch!(opts, kind), &{module_for(kind), &1})
 
     state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
 
-    # Off init/1 so declared resources are added after the client tree itself is available.
     {:ok, state, {:continue, :start_declared}}
   end
 
