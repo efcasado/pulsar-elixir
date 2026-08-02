@@ -171,6 +171,8 @@ defmodule Pulsar.Consumer do
           do: grant_all(Topology.workers(consumer), permits),
           else: {:error, :not_ready}
     end
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
@@ -216,6 +218,8 @@ defmodule Pulsar.Consumer do
       :topology ->
         topology_topic(consumer)
     end
+  catch
+    :exit, _reason -> {:error, :not_found}
   end
 
   defp topology_topic(consumer) do
