@@ -4,11 +4,11 @@ defmodule Pulsar.Group do
   # Supervises the worker processes for one topic, or for one partition of it, for
   # consumers and for producers alike.
   #
-  # Started by Pulsar.Consumer and Pulsar.Producer, which own the option surface and have
-  # already validated these options, so they are threaded through untouched apart from
-  # the per-worker :name. Each worker gets its own name because the broker identifies a
-  # producer by it and the topic epoch is stored against it, so sharing one name across a
-  # group would have them overwrite each other.
+  # Started beneath Pulsar.Topology, after Pulsar.Consumer or Pulsar.Producer has validated
+  # the option surface, so options are threaded through untouched apart from the per-worker
+  # :name. Each worker gets its own name because the broker identifies a producer by it and
+  # the topic epoch is stored against it, so sharing one name across a group would have them
+  # overwrite each other.
 
   use Supervisor
 
@@ -16,12 +16,8 @@ defmodule Pulsar.Group do
 
   require Logger
 
-  @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, registry, count_key, opts) do
-    name = Keyword.fetch!(opts, :name)
-
-    Supervisor.start_link(__MODULE__, {worker, count_key, opts}, name: {:via, Registry, {registry, name}})
-  end
+  @spec start_link(module(), atom(), keyword()) :: Supervisor.on_start()
+  def start_link(worker, count_key, opts), do: Supervisor.start_link(__MODULE__, {worker, count_key, opts})
 
   def stop(supervisor_pid, reason \\ :normal, timeout \\ :infinity) do
     Supervisor.stop(supervisor_pid, reason, timeout)

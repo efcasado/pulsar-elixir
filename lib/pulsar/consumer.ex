@@ -239,7 +239,7 @@ defmodule Pulsar.Consumer do
     case Topology.kind(consumer) do
       :worker -> Worker.topic(consumer)
       :group -> worker_topic(consumer)
-      :partitioned -> with topic when is_binary(topic) <- worker_topic(consumer), do: Topic.base(topic)
+      :topology -> with topic when is_binary(topic) <- worker_topic(consumer), do: Topic.base(topic)
     end
   end
 

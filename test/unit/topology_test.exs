@@ -60,15 +60,11 @@ defmodule Pulsar.TopologyTest do
     ]
 
     root =
-      if partitions == 0 do
-        start_supervised!(%{id: :root, start: {Pulsar.Group, :start_link, [StubWorker, registry, :count_key, opts]}})
-      else
-        start_supervised!(%{
-          id: :root,
-          start: {Supervisor, :start_link, [Topology, {StubWorker, registry, :count_key, opts}]},
-          type: :supervisor
-        })
-      end
+      start_supervised!(%{
+        id: :root,
+        start: {Topology, :start_link, [StubWorker, registry, :count_key, opts]},
+        type: :supervisor
+      })
 
     {root, registry}
   end
@@ -81,7 +77,7 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_topology(3)
       assert Topology.partitions(root) == 3
 
-      :ok = Supervisor.terminate_child(root, Pulsar.Topic.partition(@topic, 1))
+      :ok = Supervisor.terminate_child(root, {:partition, 1})
 
       assert Topology.partitions(root) == 3
     end
@@ -143,31 +139,34 @@ defmodule Pulsar.TopologyTest do
   end
 
   describe "groups/1" do
-    # Checked against the registry rather than by counting: an index taken from a child's
-    # position rather than parsed from its name would still produce 0..11, but would pair the
-    # wrong group with it as soon as which_children reports them in any other order.
-    test "pairs each index with the group registered for that partition" do
+    test "pairs each index with the group for that partition" do
       {root, registry} = start_topology(12)
       groups = Topology.groups(root)
 
       assert length(groups) == 12
+      assert [{^root, _value}] = Registry.lookup(registry, @name)
 
       for {index, pid} <- groups do
-        assert [{^pid, _value}] = Registry.lookup(registry, Pulsar.Topic.partition(@name, index))
+        assert [{_id, worker, :worker, _modules}] = Supervisor.which_children(pid)
+        assert Agent.get(worker, & &1) == Pulsar.Topic.partition(@topic, index)
+        assert Registry.lookup(registry, Pulsar.Topic.partition(@name, index)) == []
       end
     end
 
     test "reports a partition between lives without dropping it" do
       {root, _registry} = start_topology(3)
-      :ok = Supervisor.terminate_child(root, Pulsar.Topic.partition(@topic, 1))
+      :ok = Supervisor.terminate_child(root, {:partition, 1})
 
       assert List.keyfind(Topology.groups(root), 1, 0) == {1, :undefined}
     end
 
-    test "answers a non-partitioned topic with itself as the only group" do
+    test "answers a non-partitioned topic with its internal group" do
       {root, _registry} = start_topology(0)
 
-      assert Topology.groups(root) == [{0, root}]
+      assert [{0, group}] = Topology.groups(root)
+      assert group != root
+      assert Topology.kind(root) == :topology
+      assert Topology.kind(group) == :group
     end
   end
 end

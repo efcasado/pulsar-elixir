@@ -1,13 +1,10 @@
 defmodule Pulsar.Topology do
   @moduledoc false
 
-  # The supervision shape a consumer or producer takes for one topic: a single `Pulsar.Group`
-  # when the topic is not partitioned, or one group per partition plus a poller for partitions
-  # added later. `start_link/4` resolves the width and starts whichever fits, so
-  # `Pulsar.Consumer` and `Pulsar.Producer` do not each carry that decision.
-  #
-  # The rest is what both need to introspect or tear one down, whichever shape it took — a
-  # `Pulsar.Group` is the degenerate topology, so these take either root.
+  # The stable supervision root a consumer or producer has for one topic. It owns one
+  # Pulsar.Group for a non-partitioned topic, or one group per partition plus a poller for
+  # partitions added later. The root has the public registry name; its groups are internal
+  # children identified by their place in the topology rather than additional public names.
 
   use Supervisor
 
@@ -34,19 +31,11 @@ defmodule Pulsar.Topology do
   @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
     with {:ok, partitions} <- width(opts) do
-      start_link(worker, registry, count_key, opts, partitions)
+      opts = Keyword.put(opts, :partitions, partitions)
+      name = Keyword.fetch!(opts, :name)
+
+      Supervisor.start_link(__MODULE__, {worker, count_key, opts}, name: {:via, Registry, {registry, name}})
     end
-  end
-
-  defp start_link(worker, registry, count_key, opts, 0) do
-    Group.start_link(worker, registry, count_key, opts)
-  end
-
-  defp start_link(worker, registry, count_key, opts, partitions) do
-    opts = Keyword.put(opts, :partitions, partitions)
-    name = Keyword.fetch!(opts, :name)
-
-    Supervisor.start_link(__MODULE__, {worker, registry, count_key, opts}, name: {:via, Registry, {registry, name}})
   end
 
   # Resolved by the caller for Pulsar.Consumer.start/4 and Pulsar.Producer.start/2, so that
@@ -110,7 +99,7 @@ defmodule Pulsar.Topology do
   def groups(root) do
     case kind(root) do
       :group -> [{0, root}]
-      :partitioned -> partition_children(root)
+      :topology -> topology_groups(root)
     end
   end
 
@@ -121,32 +110,41 @@ defmodule Pulsar.Topology do
   def partitions(root) do
     case kind(root) do
       :group -> 0
-      :partitioned -> length(partition_children(root))
+      :topology -> count_partitions(root)
     end
   end
 
-  # A partitioned root also supervises its Discovery poller, which is not a partition.
-  defp partition_children(root) do
+  # A topology may also supervise its Discovery poller, which is not a group.
+  defp topology_groups(root) do
     root
     |> Supervisor.which_children()
     |> Enum.flat_map(fn
-      {partition_name, pid, :supervisor, _modules} -> [{Topic.index(partition_name), pid}]
+      {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
+      {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
     end)
   end
 
+  defp count_partitions(root) do
+    root
+    |> Supervisor.which_children()
+    |> Enum.count(fn
+      {{:partition, _index}, _pid, :supervisor, _modules} -> true
+      _child -> false
+    end)
+  end
+
   @doc """
-  Which level of a topology `pid` is: the partitioned supervisor, one partition's group, or a
-  worker.
+  Which level of a topology `pid` is: the stable topology root, one of its groups, or a worker.
 
   Callers need this because a supervisor cannot answer a `GenServer` call — asking one for a
   worker's answer would take it down. Taken from `:proc_lib.initial_call/1` rather than by
   walking the tree, which is what an earlier partition-routing bug turned on.
   """
-  @spec kind(pid()) :: :partitioned | :group | :worker
+  @spec kind(pid()) :: :topology | :group | :worker
   def kind(pid) do
     case :proc_lib.initial_call(pid) do
-      {:supervisor, __MODULE__, _args} -> :partitioned
+      {:supervisor, __MODULE__, _args} -> :topology
       {:supervisor, Group, _args} -> :group
       _worker -> :worker
     end
@@ -206,31 +204,44 @@ defmodule Pulsar.Topology do
   end
 
   @impl true
-  def init({worker, registry, count_key, opts}) do
+  def init({worker, count_key, opts}) do
     topic = Keyword.fetch!(opts, :topic)
     partitions = Keyword.fetch!(opts, :partitions)
 
-    Logger.info("Starting partitioned #{inspect(worker)} for topic #{topic} with #{partitions} partitions")
+    Logger.info("Starting #{inspect(worker)} topology for topic #{topic} with #{partitions} partitions")
 
-    build_child_spec = &partition_child_spec(&1, worker, registry, count_key, opts)
+    build_child_spec = &partition_child_spec(&1, worker, count_key, opts)
 
-    discovery_children =
-      Discovery.child_specs(self(),
-        topic: topic,
-        client: Keyword.fetch!(opts, :client),
-        interval_ms: Keyword.fetch!(opts, :partition_discovery_interval_ms),
-        build_child_spec: build_child_spec
-      )
+    group_children =
+      case partitions do
+        0 -> [topic_child_spec(worker, count_key, opts)]
+        count -> Enum.map(0..(count - 1), build_child_spec)
+      end
 
-    partition_children = Enum.map(0..(partitions - 1), build_child_spec)
+    discovery_children = discovery_child_specs(partitions, topic, build_child_spec, opts)
 
     Supervisor.init(
-      partition_children ++ discovery_children,
+      group_children ++ discovery_children,
       [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
     )
   end
 
-  defp partition_child_spec(partition_index, worker, registry, count_key, opts) do
+  defp discovery_child_specs(0, _topic, _build_child_spec, _opts), do: []
+
+  defp discovery_child_specs(_partitions, topic, build_child_spec, opts) do
+    Discovery.child_specs(self(),
+      topic: topic,
+      client: Keyword.fetch!(opts, :client),
+      interval_ms: Keyword.fetch!(opts, :partition_discovery_interval_ms),
+      build_child_spec: build_child_spec
+    )
+  end
+
+  defp topic_child_spec(worker, count_key, opts) do
+    group_child_spec({:topic, :non_partitioned}, worker, count_key, opts)
+  end
+
+  defp partition_child_spec(partition_index, worker, count_key, opts) do
     partition_topic = Topic.partition(Keyword.fetch!(opts, :topic), partition_index)
 
     partition_opts =
@@ -238,9 +249,13 @@ defmodule Pulsar.Topology do
       |> Keyword.put(:topic, partition_topic)
       |> Keyword.put(:name, Topic.partition(Keyword.fetch!(opts, :name), partition_index))
 
+    group_child_spec({:partition, partition_index}, worker, count_key, partition_opts)
+  end
+
+  defp group_child_spec(id, worker, count_key, opts) do
     %{
-      id: partition_topic,
-      start: {Group, :start_link, [worker, registry, count_key, partition_opts]},
+      id: id,
+      start: {Group, :start_link, [worker, count_key, opts]},
       restart: :transient,
       significant: true,
       type: :supervisor
