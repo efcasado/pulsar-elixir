@@ -59,6 +59,7 @@ defmodule Pulsar.Client do
 
   alias Pulsar.Broker.Options, as: BrokerOptions
   alias Pulsar.Client.Bootstrap
+  alias Pulsar.Producer.EpochStore
 
   require Logger
 
@@ -152,7 +153,7 @@ defmodule Pulsar.Client do
     # Store broker opts in client state (passed to children via registry metadata)
     :persistent_term.put({__MODULE__, client_name, :broker_opts}, broker_opts)
 
-    Pulsar.Producer.EpochStore.init(client_name)
+    EpochStore.init(client_name)
 
     children = [
       {Registry, keys: :unique, name: broker_registry(client_name)},
