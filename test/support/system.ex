@@ -38,46 +38,6 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
-  def broker_for_consumer(consumer, client \\ :default) when is_pid(consumer) do
-    Enum.find(
-      @brokers,
-      nil,
-      fn broker ->
-        broker.service_url
-        |> consumers_on(client)
-        |> Enum.any?(fn {_id, pid} -> pid == consumer end)
-      end
-    )
-  end
-
-  def broker_for_producer(producer, client \\ :default) when is_pid(producer) do
-    Enum.find(
-      @brokers,
-      nil,
-      fn broker ->
-        broker.service_url
-        |> producers_on(client)
-        |> Enum.any?(fn {_id, pid} -> pid == producer end)
-      end
-    )
-  end
-
-  def consumers_on(broker_url, client \\ :default) when is_binary(broker_url) do
-    on_broker(broker_url, client, &Pulsar.Broker.get_consumers/1)
-  end
-
-  def producers_on(broker_url, client \\ :default) when is_binary(broker_url) do
-    on_broker(broker_url, client, &Pulsar.Broker.get_producers/1)
-  end
-
-  # Resolving a URL to a broker process is the client's job, not the broker's.
-  defp on_broker(broker_url, client, fun) do
-    case Pulsar.Client.lookup_broker(broker_url, client: client) do
-      {:ok, broker_pid} -> fun.(broker_pid)
-      {:error, :not_found} -> %{}
-    end
-  end
-
   def start_pulsar do
     Logger.info("Starting Pulsar ...")
     {_output, 0} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)

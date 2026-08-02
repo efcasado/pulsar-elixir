@@ -30,22 +30,14 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     {:ok, group_pid} = Pulsar.Producer.start(@topic, producer_options())
 
     [producer_pid_before_crash] = Utils.wait_for_workers(group_pid)
+    broker_pid = Utils.wait_for_broker(producer_pid_before_crash)
 
-    :ok =
-      Utils.wait_for(fn ->
-        System.broker_for_producer(producer_pid_before_crash, @client) != nil
-      end)
-
-    broker = System.broker_for_producer(producer_pid_before_crash, @client)
-
-    {:ok, broker_pid} = Pulsar.Client.lookup_broker(broker.service_url, client: @client)
+    assert is_pid(broker_pid)
     Process.exit(broker_pid, :kill)
 
-    Utils.wait_for(fn -> not Process.alive?(producer_pid_before_crash) end)
+    :ok = Utils.wait_for(fn -> not Process.alive?(producer_pid_before_crash) end)
 
     [producer_pid_after_crash] = Utils.wait_for_workers(group_pid)
-
-    Utils.wait_for(fn -> Process.alive?(producer_pid_before_crash) end)
 
     # producer crashed due to broker link
     refute Process.alive?(producer_pid_before_crash)
@@ -92,17 +84,12 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
       )
 
     [consumer_pid_before_crash] = Utils.wait_for_workers(group_pid)
+    broker_pid = Utils.wait_for_broker(consumer_pid_before_crash)
 
-    Utils.wait_for(fn ->
-      System.broker_for_consumer(consumer_pid_before_crash, @client) != nil
-    end)
-
-    broker = System.broker_for_consumer(consumer_pid_before_crash, @client)
-
-    {:ok, broker_pid} = Pulsar.Client.lookup_broker(broker.service_url, client: @client)
+    assert is_pid(broker_pid)
     Process.exit(broker_pid, :kill)
 
-    Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
+    :ok = Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
 
     [consumer_pid_after_crash] = Utils.wait_for_workers(group_pid)
 

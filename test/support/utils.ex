@@ -36,6 +36,33 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
+  Waits until a consumer or producer worker has connected and returns its broker pid.
+  """
+  def wait_for_broker(worker, attempts \\ 100, interval_ms \\ 100)
+
+  def wait_for_broker(worker, 0, _interval_ms), do: broker_pid(worker)
+
+  def wait_for_broker(worker, attempts, interval_ms) do
+    case broker_pid(worker) do
+      broker when is_pid(broker) ->
+        broker
+
+      nil ->
+        Process.sleep(interval_ms)
+        wait_for_broker(worker, attempts - 1, interval_ms)
+    end
+  end
+
+  defp broker_pid(worker) do
+    case :sys.get_state(worker) do
+      %{broker_pid: broker} when is_pid(broker) -> broker
+      _state -> nil
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
+  @doc """
   Collects flow control telemetry events and returns aggregated statistics.
   Returns a map with statistics grouped by consumer_id.
   """
