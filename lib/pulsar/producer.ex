@@ -120,7 +120,10 @@ defmodule Pulsar.Producer do
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
-  def stop(producer, _opts) when is_pid(producer), do: Topology.remove(producer)
+  def stop(producer, opts) when is_pid(producer) do
+    client = Keyword.get(opts, :client, @default_client)
+    Topology.remove(producer, Pulsar.Client.producer_supervisor(client))
+  end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     case resolve(name, opts) do

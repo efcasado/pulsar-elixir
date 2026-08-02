@@ -97,7 +97,10 @@ defmodule Pulsar.Consumer do
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
-  def stop(consumer, _opts) when is_pid(consumer), do: Topology.remove(consumer)
+  def stop(consumer, opts) when is_pid(consumer) do
+    client = Keyword.get(opts, :client, @default_client)
+    Topology.remove(consumer, Pulsar.Client.consumer_supervisor(client))
+  end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     case resolve(name, opts) do

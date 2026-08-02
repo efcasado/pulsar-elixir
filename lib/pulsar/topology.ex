@@ -150,16 +150,23 @@ defmodule Pulsar.Topology do
   @doc """
   Removes `root` from the supervisor that owns it.
 
-  Asks the process which supervisor that is, rather than deriving one from `:client`: a pid
-  carries no clue which client it belongs to, and stopping a permanent child any other way
-  just has its supervisor start it again. One supervised by the caller has no owning
-  `DynamicSupervisor`, so it is stopped directly.
+  Used without a known owner for resources started directly with `start_link/1` and as the
+  fallback when the expected client supervisor does not own `root`.
   """
   @spec remove(pid()) :: :ok
   def remove(root) do
     case terminate_child(owning_supervisor(root), root) do
       :ok -> :ok
       {:error, :not_found} -> stop_directly(root)
+    end
+  end
+
+  @doc false
+  @spec remove(pid(), GenServer.server()) :: :ok
+  def remove(root, supervisor) do
+    case terminate_child(supervisor, root) do
+      :ok -> :ok
+      {:error, :not_found} -> remove(root)
     end
   end
 

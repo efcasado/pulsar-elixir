@@ -38,6 +38,29 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
+  describe "remove/2 with an expected owner" do
+    test "removes the resource directly and falls back when the expected owner is wrong" do
+      owner = start_dynamic_supervisor()
+      other = start_dynamic_supervisor()
+
+      {:ok, directly_removed} = DynamicSupervisor.start_child(owner, {Agent, fn -> :resource end})
+      assert Topology.remove(directly_removed, owner) == :ok
+      refute Process.alive?(directly_removed)
+
+      {:ok, removed_via_fallback} = DynamicSupervisor.start_child(owner, {Agent, fn -> :resource end})
+      assert Topology.remove(removed_via_fallback, other) == :ok
+      refute Process.alive?(removed_via_fallback)
+    end
+  end
+
+  defp start_dynamic_supervisor do
+    start_supervised!(%{
+      id: {:dynamic_supervisor, System.unique_integer([:positive])},
+      start: {DynamicSupervisor, :start_link, [[strategy: :one_for_one]]},
+      type: :supervisor
+    })
+  end
+
   defmodule StubWorker do
     @moduledoc false
     use Agent
