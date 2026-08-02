@@ -75,8 +75,8 @@ Supervisor.start_link(children, strategy: :one_for_one)
 
 The client is the only thing your tree holds; consumers and producers run under it. Sets
 only known at runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
-Each logical resource keeps one stable root while its partitions and workers initialize in
-the background; operations may return `{:error, :not_ready}` during that interval.
+Resource initialization is asynchronous, so operations may temporarily return
+`{:error, :not_ready}`.
 
 Sending a message using the configured producer can be done as follows:
 
@@ -103,8 +103,7 @@ children = [
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
-Anything declared on a client belongs to it. A consumer or producer added at runtime picks
-one with `:client`:
+A consumer or producer added at runtime selects its client with `:client`:
 
 ```elixir
 Pulsar.Producer.start(
@@ -113,6 +112,9 @@ Pulsar.Producer.start(
   name: :my_producer_1
 )
 ```
+
+See the [architecture guide](https://hexdocs.pm/pulsar_elixir/architecture.html) for ownership,
+resource lifecycle, and recovery details.
 
 If your Pulsar cluster requires authentication, you can configure it in the client
 using the `auth` key:

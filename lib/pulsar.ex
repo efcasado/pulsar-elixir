@@ -33,8 +33,7 @@ defmodule Pulsar do
 
       {:ok, message_id} = Pulsar.Producer.send(:audit, "payload")
 
-  The client is the only thing your tree holds. See `Pulsar.Client` for what that buys, and
-  for adding consumers and producers to a running client.
+  See `Pulsar.Client` for adding consumers and producers to a running client.
 
   ## Scripts and IEx
 
@@ -86,27 +85,16 @@ defmodule Pulsar do
         {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
       ]
 
-  Each client keeps its own broker connections, registries and supervisors, so the two are
-  fully isolated.
-
-  See the [architecture guide](architecture.html) for the complete ownership tree and recovery
-  model.
+  Each client has an isolated connection context and resource set.
 
   ## Lifecycle and availability
 
-  A client owns its broker connections, consumers and producers. Partitioned topics need
-  nothing special at the call site: each logical consumer or producer keeps one stable root
-  while its partition workers are discovered and reconciled in the background.
+  Starting establishes ownership, not readiness, so resource operations may temporarily return
+  `{:error, :not_ready}`. Resources declared on a client are restored with it; callers must
+  restore resources added later at runtime.
 
-  Starting a client or resource is not a readiness check. A resource is registered before
-  topic discovery and worker initialization complete, so consumer topic and flow operations
-  and producer publishing may return `{:error, :not_ready}` until it is usable. Broker and
-  worker failures are recovered with retry and backoff where possible.
-
-  Consumers and producers recover independently. Resources declared on a client are recreated
-  with it; resources added later with `Pulsar.Consumer.start/1` or `Pulsar.Producer.start/1` are
-  runtime state and are not recreated after a client restart. `Pulsar.Client.consumers/1` and
-  `Pulsar.Client.producers/1` list their currently running logical roots.
+  See the [architecture guide](architecture.html) for the ownership tree, asynchronous startup,
+  and recovery model.
 
   ## Stream-based reading
 

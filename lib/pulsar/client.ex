@@ -1,11 +1,7 @@
 defmodule Pulsar.Client do
   @moduledoc """
-  A client represents an isolated Pulsar connection context.
-
-  Each client maintains:
-  - Separate broker connections
-  - Independent consumer/producer registries
-  - Isolated broker configuration
+  A client represents an isolated Pulsar connection context and owns the consumers and
+  producers that use it.
 
   ## Usage
 
@@ -22,22 +18,13 @@ defmodule Pulsar.Client do
 
       Supervisor.start_link(children, strategy: :one_for_one)
 
-  Declaring them here rather than beside the client means the tree matches the dependency:
-  a consumer resolves brokers through registries the client owns, and cannot outlive a
-  client restart holding a registration the replacement registries know nothing about.
-
-  Several clients can coexist, each with its own connections and registries:
-
-      children = [
-        {Pulsar.Client, name: :analytics, host: "pulsar://analytics:6650"},
-        {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
-      ]
+  Several named clients can coexist. Consumers and producers select one with `:client`,
+  defaulting to `:default`.
 
   ## Declared and runtime resources
 
-  Anything declared on a client belongs to it. For sets only known at runtime — a consumer
-  per tenant, say — `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1` add to a running
-  client, picking it with `:client`:
+  For sets only known at runtime — a consumer per tenant, say — `Pulsar.Consumer.start/1`
+  and `Pulsar.Producer.start/1` add to a running client:
 
       Pulsar.Consumer.start(
         topic: topic,
@@ -46,13 +33,18 @@ defmodule Pulsar.Client do
         client: :analytics
       )
 
-  The two differ in one respect. Declared resources are recreated whenever the client
-  restarts; resources added with `start/1` are not, because the `DynamicSupervisor` holding
-  them has no static child list to bring back.
+  Declared resources are recreated after their client or resource branch restarts. Runtime
+  resources are not; their caller must restore them.
+
+  Starting a client or resource establishes ownership, not readiness. Resource initialization
+  continues in the background, so operations may temporarily return `{:error, :not_ready}`.
 
   `consumers/1` and `producers/1` list the logical resources currently running under a
   client. Partitioned resources still appear once: the returned pid is their stable root,
   not one entry per partition or worker.
+
+  See the [architecture guide](architecture.html) for the complete ownership and recovery
+  model.
   """
 
   use Supervisor
@@ -82,20 +74,9 @@ defmodule Pulsar.Client do
               default: [],
               doc: """
               Consumers to run under this client, each a keyword list of `Pulsar.Consumer`
-              options. Their `:client` is set to this one. They are started again whenever
-              the client restarts, unlike consumers added later with `Pulsar.Consumer.start/1`.
-
-              They start just after the client rather than during its startup, so a client that
-              is up may not have them yet.
-
-              Nor is a consumer that exists one that is consuming. Its stable supervisor is
-              registered first; topic discovery, worker startup, subscription, and callback
-              initialization then happen in the background. Neither declaring a consumer nor
-              starting one is a readiness signal; the first
-              `c:Pulsar.Consumer.Callback.handle_message/2` is.
-
-              An unreachable broker does not stop the client: topology discovery is retried
-              with backoff until the broker becomes reachable.
+              options. Their `:client` is set to this one, and they are restored after the
+              client or consumer branch restarts. They initialize asynchronously after the
+              client starts; declaration is not a readiness signal.
               """
             ],
             producers: [
@@ -103,7 +84,8 @@ defmodule Pulsar.Client do
               default: [],
               doc: """
               Producers to run under this client, each a keyword list of `Pulsar.Producer`
-              options, on the same terms as `:consumers`.
+              options, with the same asynchronous lifecycle and restoration guarantees as
+              `:consumers`.
 
               Consumers and producers are independent and start concurrently, so a consumer
               can receive a message before a declared producer is registered. A callback that
