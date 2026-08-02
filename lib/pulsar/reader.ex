@@ -225,8 +225,8 @@ defmodule Pulsar.Reader do
   defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
     startup_deadline = deadline(startup_timeout)
 
-    with {:ok, expected_count} <- wait_for_topology(consumer, startup_deadline),
-         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, expected_count, startup_deadline),
+    with :ok <- wait_for_topology(consumer, startup_deadline),
+         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, startup_deadline),
          :ok <- Consumer.send_flow(consumer, flow_permits) do
       permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
@@ -320,8 +320,8 @@ defmodule Pulsar.Reader do
       {:error, :initializing} ->
         {:error, :reader_start_timeout}
 
-      {:ok, _expected_count} = ready ->
-        ready
+      {:ok, _expected_count} ->
+        :ok
     end
   end
 
@@ -332,27 +332,27 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_consumers_ready(consumer, reader_ref, expected_count, startup_deadline) do
-    collect_ready_messages(consumer, reader_ref, expected_count, %{}, startup_deadline)
+  defp wait_for_consumers_ready(consumer, reader_ref, startup_deadline) do
+    collect_ready_messages(consumer, reader_ref, %{}, startup_deadline)
   end
 
-  defp collect_ready_messages(consumer, reader_ref, expected_count, ready, startup_deadline) do
-    case ready_consumers(consumer, expected_count, ready) do
+  defp collect_ready_messages(consumer, reader_ref, ready, startup_deadline) do
+    case ready_consumers(consumer, ready) do
       {:ok, consumers} ->
         {:ok, consumers}
 
-      {:waiting, expected_count} ->
-        receive_ready(consumer, reader_ref, expected_count, ready, startup_deadline)
+      :waiting ->
+        receive_ready(consumer, reader_ref, ready, startup_deadline)
     end
   end
 
-  defp ready_consumers(consumer, expected_count, ready) do
+  defp ready_consumers(consumer, ready) do
     case expected_consumer_count(consumer) do
       {:ok, current_expected_count} ->
         current_ready_consumers(consumer, current_expected_count, ready)
 
       :initializing ->
-        {:waiting, expected_count}
+        :waiting
     end
   end
 
@@ -370,11 +370,11 @@ defmodule Pulsar.Reader do
     if length(consumers) == expected_count and Enum.all?(consumers, &Map.has_key?(ready, &1)) do
       {:ok, consumers}
     else
-      {:waiting, expected_count}
+      :waiting
     end
   end
 
-  defp receive_ready(consumer, reader_ref, expected_count, ready, startup_deadline) do
+  defp receive_ready(consumer, reader_ref, ready, startup_deadline) do
     case remaining(startup_deadline) do
       0 ->
         {:error, :reader_start_timeout}
@@ -383,7 +383,7 @@ defmodule Pulsar.Reader do
         receive do
           {:reader_ready, ^reader_ref, pid} ->
             ready = Map.put(ready, pid, true)
-            collect_ready_messages(consumer, reader_ref, expected_count, ready, startup_deadline)
+            collect_ready_messages(consumer, reader_ref, ready, startup_deadline)
         after
           timeout -> {:error, :reader_start_timeout}
         end

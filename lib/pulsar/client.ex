@@ -132,7 +132,6 @@ defmodule Pulsar.Client do
     client_name = Keyword.fetch!(opts, :name)
     broker_opts = build_broker_opts(opts)
 
-    # Store broker opts in client state (passed to children via registry metadata)
     :persistent_term.put({__MODULE__, client_name, :broker_opts}, broker_opts)
 
     EpochStore.init(client_name)

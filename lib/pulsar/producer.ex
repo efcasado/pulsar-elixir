@@ -117,7 +117,7 @@ defmodule Pulsar.Producer do
   A producer in a supervision tree will be restarted by its supervisor; stop those by
   removing them from the tree.
   """
-  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
+  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :producer_not_found}
   def stop(producer, opts \\ [])
 
   def stop(producer, opts) when is_pid(producer) do
@@ -128,7 +128,7 @@ defmodule Pulsar.Producer do
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     case resolve(name, opts) do
       {:ok, producer} -> stop(producer, opts)
-      {:error, :not_found} = error -> error
+      {:error, :not_found} -> {:error, :producer_not_found}
     end
   end
 

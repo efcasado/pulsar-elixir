@@ -54,6 +54,7 @@ defmodule Pulsar.TopologyTest do
       {:ok, removed_via_fallback} = DynamicSupervisor.start_child(owner, {Agent, fn -> :resource end})
       assert Topology.remove(removed_via_fallback, other) == :ok
       refute Process.alive?(removed_via_fallback)
+      assert DynamicSupervisor.which_children(owner) == []
     end
   end
 

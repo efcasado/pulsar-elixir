@@ -17,6 +17,13 @@ defmodule Pulsar.ConsumerTest do
   end
 
   describe "send_flow/3" do
+    test "reports a missing name consistently with stop/2" do
+      opts = [client: :consumer_missing_client]
+
+      assert Consumer.send_flow(:missing, 1, opts) == {:error, :consumer_not_found}
+      assert Consumer.stop(:missing, opts) == {:error, :consumer_not_found}
+    end
+
     test "requires a positive permit count for pids and names" do
       assert_raise FunctionClauseError, fn -> Consumer.send_flow(self(), 0) end
       assert_raise FunctionClauseError, fn -> Consumer.send_flow(:consumer, 0) end

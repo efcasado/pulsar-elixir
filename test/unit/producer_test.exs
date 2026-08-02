@@ -9,6 +9,7 @@ defmodule Pulsar.ProducerTest do
 
       assert Producer.send(:missing, "payload", opts) == {:error, :producer_not_found}
       assert Producer.send("missing", "payload", opts) == {:error, :producer_not_found}
+      assert Producer.stop(:missing, opts) == {:error, :producer_not_found}
     end
 
     test "rejects unsupported target types" do
