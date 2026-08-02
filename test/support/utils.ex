@@ -1,65 +1,75 @@
 defmodule Pulsar.Test.Support.Utils do
   @moduledoc false
-  def wait_for(_fun, attempts \\ 100, interval_ms \\ 100)
+  import ExUnit.Assertions, only: [flunk: 1]
 
-  def wait_for(_fun, 0, _interval_ms) do
-    :error
-  end
-
-  def wait_for(fun, attempts, interval_ms) do
-    if fun.() do
-      :ok
-    else
-      Process.sleep(interval_ms)
-      wait_for(fun, attempts - 1, interval_ms)
-    end
-  end
+  @default_attempts 100
+  @default_interval_ms 100
 
   @doc """
-  Waits until a topology has the expected number of running workers and returns them.
+  Waits until `fun` returns a truthy value, failing when the time budget expires.
+
+  The attempts-based interface is retained for existing tests, but elapsed time is tracked with
+  a monotonic deadline so time spent evaluating `fun` also consumes the budget. Pass an `:until`
+  predicate to wait for and return a particular observed value.
   """
-  def wait_for_workers(root, expected_count \\ 1, attempts \\ 100, interval_ms \\ 100)
+  def wait_for(fun), do: wait_for(fun, @default_attempts, @default_interval_ms)
+  def wait_for(fun, attempts) when is_integer(attempts), do: wait_for(fun, attempts, @default_interval_ms)
 
-  def wait_for_workers(root, _expected_count, 0, _interval_ms) do
-    Pulsar.Topology.workers(root)
+  def wait_for(fun, opts) when is_list(opts) do
+    timeout = Keyword.get(opts, :timeout, @default_attempts * @default_interval_ms)
+    interval = Keyword.get(opts, :interval, @default_interval_ms)
+    description = Keyword.get(opts, :description, "condition")
+    until = Keyword.fetch!(opts, :until)
+
+    poll(
+      fn ->
+        observation = fun.()
+
+        if until.(observation),
+          do: {:ok, observation},
+          else: {:retry, observation}
+      end,
+      deadline(timeout),
+      interval,
+      description
+    )
   end
 
-  def wait_for_workers(root, expected_count, attempts, interval_ms) do
-    workers = Pulsar.Topology.workers(root)
+  def wait_for(fun, attempts, interval_ms) when is_integer(attempts) do
+    _observation =
+      wait_for(fun,
+        until: &truthy?/1,
+        timeout: attempts * interval_ms,
+        interval: interval_ms,
+        description: "condition to become true"
+      )
 
-    if length(workers) == expected_count do
-      workers
-    else
-      Process.sleep(interval_ms)
-      wait_for_workers(root, expected_count, attempts - 1, interval_ms)
-    end
+    :ok
   end
 
-  @doc """
-  Waits until a consumer or producer worker has connected and returns its broker pid.
-  """
-  def wait_for_broker(worker, attempts \\ 100, interval_ms \\ 100)
+  defp truthy?(result), do: result not in [false, nil]
 
-  def wait_for_broker(worker, 0, _interval_ms), do: broker_pid(worker)
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
 
-  def wait_for_broker(worker, attempts, interval_ms) do
-    case broker_pid(worker) do
-      broker when is_pid(broker) ->
-        broker
+  defp poll(fun, deadline, interval, description) do
+    case fun.() do
+      {:ok, value} ->
+        value
 
-      nil ->
-        Process.sleep(interval_ms)
-        wait_for_broker(worker, attempts - 1, interval_ms)
+      {:retry, observation} ->
+        now = System.monotonic_time(:millisecond)
+
+        if now >= deadline do
+          flunk("Timed out waiting for #{description}; last observation: #{inspect(observation)}")
+        else
+          Process.sleep(min(interval, deadline - now))
+          poll(fun, deadline, interval, description)
+        end
+
+      other ->
+        raise ArgumentError,
+              "poll callback must return {:ok, value} or {:retry, observation}, got: #{inspect(other)}"
     end
-  end
-
-  defp broker_pid(worker) do
-    case :sys.get_state(worker) do
-      %{broker_pid: broker} when is_pid(broker) -> broker
-      _state -> nil
-    end
-  catch
-    :exit, _reason -> nil
   end
 
   @doc """
@@ -197,18 +207,6 @@ defmodule Pulsar.Test.Support.Utils do
     after
       0 -> Enum.reverse(acc)
     end
-  end
-
-  @doc """
-  Waits for the producer to be ready.
-  """
-  def wait_for_producer_ready(group_pid) do
-    wait_for(fn ->
-      case Pulsar.Topology.workers(group_pid) do
-        [p | _] -> :sys.get_state(p).ready == true
-        _ -> false
-      end
-    end)
   end
 
   @doc """

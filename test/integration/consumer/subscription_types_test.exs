@@ -3,6 +3,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :subscription_types_test_client
@@ -181,7 +182,11 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       )
 
     assert Process.alive?(exclusive_multi_group)
-    assert length(Utils.wait_for_workers(exclusive_multi_group)) == 1
+
+    assert [_worker] =
+             Utils.wait_for(fn -> Topology.workers(exclusive_multi_group) end,
+               until: &match?([_worker], &1)
+             )
   end
 
   defp subscription_options(type, count) do

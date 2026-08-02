@@ -1,6 +1,7 @@
 defmodule Pulsar.TopologyTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
   alias Pulsar.Topology.Discovery
 
@@ -96,18 +97,6 @@ defmodule Pulsar.TopologyTest do
     {root, registry}
   end
 
-  defp eventually(fun, attempts \\ 100)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(10)
-      eventually(fun, attempts - 1)
-    end
-  end
-
   describe "asynchronous initialization" do
     test "starts and registers the stable root before metadata resolves" do
       test_pid = self()
@@ -129,9 +118,9 @@ defmodule Pulsar.TopologyTest do
 
       send(resolver_pid, :resolve)
 
-      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
       assert Topology.status(root) == {:ready, {:partitioned, 2}}
-      assert Topology.partitions(root) == 2
+      assert length(Topology.groups(root)) == 2
     end
 
     test "retries failed initialization without blocking the topology" do
@@ -144,9 +133,9 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver, count_key: 2)
 
-      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 3}} end)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 3}} end, 100, 10)
       assert Agent.get(attempts, & &1) >= 2
-      assert Topology.partitions(root) == 3
+      assert length(Topology.groups(root)) == 3
     end
 
     test "a false polling interval still performs initial discovery exactly once" do
@@ -159,11 +148,12 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver)
 
-      assert eventually(fn -> Topology.status(root) == {:ready, :non_partitioned} end)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
       assert_receive :resolved
       refute_receive :resolved, 150
       assert Topology.status(root) == {:ready, :non_partitioned}
-      assert Topology.partitions(root) == 0
+      assert [{0, group}] = Topology.groups(root)
+      assert is_pid(group)
     end
 
     test "periodically reconciles partitions added after initialization" do
@@ -184,39 +174,13 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
 
       assert_receive {:resolved, 2}
-      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
       assert_receive {:resolved, 4}
-      assert eventually(fn -> Topology.partitions(root) == 4 end)
+      :ok = Utils.wait_for(fn -> length(Topology.groups(root)) == 4 end, 100, 10)
       assert_receive {:resolved, 2}
-      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 4}} end)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 4}} end, 100, 10)
       assert Topology.status(root) == {:ready, {:partitioned, 4}}
-    end
-  end
-
-  describe "partitions/1" do
-    test "counts a partition whose group is not currently running" do
-      # which_children reports a child's pid as :restarting or :undefined while it is between
-      # lives. Pulsar partitions never shrink, so a transient drop in the count would be wrong,
-      # and routing already hashes over every configured partition including those.
-      {root, _registry} = start_topology(3)
-      assert Topology.partitions(root) == 3
-
-      :ok = Supervisor.terminate_child(root, {:partition, 1})
-
-      assert Topology.partitions(root) == 3
-      assert Topology.status(root) == {:ready, {:partitioned, 3}}
-    end
-
-    test "is zero for a non-partitioned topic" do
-      {root, _registry} = start_topology(0)
-
-      assert Topology.partitions(root) == 0
-      assert Topology.status(root) == {:ready, :non_partitioned}
-
-      assert Enum.any?(Supervisor.which_children(root), fn
-               {Discovery, pid, :worker, [Discovery]} when is_pid(pid) -> true
-               _child -> false
-             end)
+      assert length(Topology.groups(root)) == 4
     end
   end
 

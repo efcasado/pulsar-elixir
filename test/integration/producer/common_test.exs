@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :producer_common_test_client
@@ -47,7 +48,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
                name: producer_group_name
              )
 
-    [producer] = Utils.wait_for_workers(group_pid)
+    [producer] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
 
     :ok =
       Utils.wait_for(fn ->

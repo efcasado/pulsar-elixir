@@ -3,6 +3,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
 
   alias Pulsar.Client
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
 
@@ -54,8 +55,8 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     assert [_client] = Supervisor.which_children(supervisor)
 
     # Declared resources are started off the client's boot, so the client is up before they are.
-    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
-    assert eventually(fn -> match?([_consumer], Client.consumers(client)) end)
+    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
+    :ok = Utils.wait_for(fn -> match?([_consumer], Client.consumers(client)) end)
 
     {:ok, _message_id} = Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: client)
 
@@ -78,7 +79,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         ]
       )
 
-    assert eventually(fn -> match?([_consumer], Client.consumers(client)) end)
+    :ok = Utils.wait_for(fn -> match?([_consumer], Client.consumers(client)) end)
     [before] = Client.consumers(client)
 
     # Not Process.exit/2: a supervisor traps exits, so an abnormal signal is ignored and
@@ -88,9 +89,10 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     Supervisor.stop(client, :shutdown)
     assert_receive {:DOWN, ^ref, :process, _, :shutdown}, 5_000
 
-    assert eventually(fn ->
-             match?([pid] when is_pid(pid) and pid != before, Client.consumers(client))
-           end)
+    :ok =
+      Utils.wait_for(fn ->
+        match?([pid] when is_pid(pid) and pid != before, Client.consumers(client))
+      end)
 
     assert [_client] = Supervisor.which_children(supervisor)
   end
@@ -104,7 +106,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     # this kind shows whether the branches are genuinely independent.
     {:ok, _producer} = Pulsar.Producer.start(topic: @topic, name: :isolation_producer, client: client)
 
-    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
+    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
     assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "before", client: client)
 
     # The whole consumer branch, as when its children exhaust their restart intensity —
@@ -114,7 +116,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     Supervisor.stop(branch, :shutdown)
     assert_receive {:DOWN, ^ref, :process, _pid, :shutdown}, 5_000
 
-    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
+    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
     assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "after", client: client)
 
     assert [_client] = Supervisor.which_children(supervisor)
@@ -129,13 +131,5 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     supervisor
     |> Supervisor.which_children()
     |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
-  end
-
-  defp eventually(fun, attempts \\ 100) do
-    cond do
-      fun.() -> true
-      attempts == 0 -> false
-      true -> Process.sleep(100) && eventually(fun, attempts - 1)
-    end
   end
 end

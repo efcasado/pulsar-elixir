@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :producer_schema_test_client
@@ -195,7 +196,14 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
   defp start_producer(topic, opts) do
     {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
-    Utils.wait_for_producer_ready(pid)
+
+    Utils.wait_for(fn -> Topology.workers(pid) end,
+      until: fn
+        [producer] -> :sys.get_state(producer).ready
+        _workers -> false
+      end
+    )
+
     pid
   end
 
@@ -212,7 +220,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   end
 
   defp get_producer_state(producer_pid) do
-    [producer] = Utils.wait_for_workers(producer_pid)
+    [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
     :sys.get_state(producer)
   end
 

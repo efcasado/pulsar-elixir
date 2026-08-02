@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :partitioned_producer_test_client
@@ -37,9 +38,13 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     assert Pulsar.Client.producers(@client) == [producer_pid]
 
-    :ok = wait_for_producers_ready(producer_pid)
-
-    all_producers = Pulsar.Topology.workers(producer_pid)
+    all_producers =
+      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+        until: fn producers ->
+          length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
+        end,
+        description: "partitioned producers to become ready"
+      )
 
     assert Enum.count(all_producers) == 3
 
@@ -57,7 +62,12 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    :ok = wait_for_producers_ready(producer_pid)
+    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+      until: fn producers ->
+        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
+      end,
+      description: "partitioned producers to become ready"
+    )
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -116,7 +126,12 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    :ok = wait_for_producers_ready(producer_pid)
+    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+      until: fn producers ->
+        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
+      end,
+      description: "partitioned producers to become ready"
+    )
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -171,40 +186,30 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         partition_discovery_interval_ms: @discovery_interval_ms
       )
 
-    assert wait_for_worker_count(producer_pid, 3) == :ok
-    initial_workers = Pulsar.Topology.workers(producer_pid)
+    initial_workers =
+      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+        until: &(length(&1) == 3),
+        description: "initial producer partitions to start"
+      )
 
     System.update_partitions(topic, 6)
 
     # The discovery poller should pick up the new partitions and start a
     # producer group for each one, without restarting the existing groups.
-    assert wait_for_worker_count(producer_pid, 6) == :ok
-    current_workers = Pulsar.Topology.workers(producer_pid)
+    current_workers =
+      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+        until: &(length(&1) == 6),
+        description: "added producer partitions to start"
+      )
+
     assert Enum.all?(initial_workers, &(&1 in current_workers))
 
     :ok = Pulsar.Producer.stop(producer_pid)
   end
 
-  defp wait_for_producers_ready(partitioned_producer_pid) do
-    Utils.wait_for(fn ->
-      case Pulsar.Topology.workers(partitioned_producer_pid) do
-        producers when is_list(producers) ->
-          Enum.count(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-
-        _not_ready ->
-          false
-      end
-    end)
-  end
-
-  defp producer_ready?(producer), do: :sys.get_state(producer).producer_name != nil
-
-  defp wait_for_worker_count(partitioned_producer_pid, expected) do
-    Utils.wait_for(fn ->
-      case Pulsar.Topology.workers(partitioned_producer_pid) do
-        workers when is_list(workers) -> length(workers) == expected
-        _not_ready -> false
-      end
-    end)
+  defp producer_ready?(producer) do
+    :sys.get_state(producer).ready
+  catch
+    :exit, _reason -> false
   end
 end

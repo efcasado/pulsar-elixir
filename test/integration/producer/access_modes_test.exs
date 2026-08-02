@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.AccessModesTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :access_modes_test_client
@@ -46,8 +47,8 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for_workers(group_pid_1)
-    [producer_2] = Utils.wait_for_workers(group_pid_2)
+    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
+    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
 
     # Wait for both producers to register
     Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
@@ -67,7 +68,7 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :Exclusive, client: @client)
 
-    [producer_1] = Utils.wait_for_workers(group_pid_1)
+    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
 
     Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
 
@@ -103,7 +104,7 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_2] = Utils.wait_for_workers(group_pid_2)
+    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
     Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "New exclusive owner", client: @client)
@@ -122,7 +123,7 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for_workers(group_pid_1)
+    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
     Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
 
     # Start second producer with :WaitForExclusive. It should not be ready
@@ -133,7 +134,7 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_2] = Utils.wait_for_workers(group_pid_2)
+    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
 
     assert :ok =
              Utils.wait_for(fn ->
@@ -171,7 +172,7 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_1] = Utils.wait_for_workers(group_pid_1)
+    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
     Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
 
     assert :sys.get_state(producer_1).topic_epoch == 0
@@ -185,7 +186,7 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_2] = Utils.wait_for_workers(group_pid_2)
+    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
     Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
 
     producer_2_state = :sys.get_state(producer_2)

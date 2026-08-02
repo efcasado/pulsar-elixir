@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :producer_compression_test_client
@@ -64,7 +65,7 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
         subscription_options()
       )
 
-    [consumer] = Utils.wait_for_workers(consumer_pid)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_pid) end, until: &match?([_], &1))
     Utils.wait_for(fn -> Process.alive?(consumer) end)
 
     # Wait for consumer to be ready to receive messages

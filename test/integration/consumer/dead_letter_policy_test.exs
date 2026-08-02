@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :dead_letter_policy_test_client
@@ -46,7 +47,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         dead_letter_policy: [max_redelivery: 1, topic: dlq_topic]
       )
 
-    [consumer] = Utils.wait_for_workers(consumer_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     {:ok, dlq_group} =
       Pulsar.Consumer.start(dlq_topic, "dlq-consumer", DummyConsumer,
@@ -54,7 +55,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Utils.wait_for_workers(dlq_group)
+    [dlq_consumer] = Utils.wait_for(fn -> Topology.workers(dlq_group) end, until: &match?([_], &1))
 
     command = %Proto.CommandMessage{
       consumer_id: 1,
@@ -97,7 +98,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] = Utils.wait_for_workers(consumer_group)
+    [failing_consumer] =
+      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -109,7 +111,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Utils.wait_for_workers(dlq_consumer_group)
+    [dlq_consumer] =
+      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)
@@ -147,7 +150,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         redelivery_interval: 100
       )
 
-    [failing_consumer] = Utils.wait_for_workers(consumer_group)
+    [failing_consumer] =
+      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(failing_consumer) >= length(@messages) * 2
@@ -180,7 +184,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [_failing_consumer] = Utils.wait_for_workers(consumer_group)
+    [_failing_consumer] =
+      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -192,7 +197,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Utils.wait_for_workers(dlq_consumer_group)
+    [dlq_consumer] =
+      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)

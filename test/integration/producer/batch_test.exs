@@ -6,6 +6,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :producer_batch_test_client
@@ -25,7 +26,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for_workers(producer_pid)
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
       producer_name = :sys.get_state(producer).producer_name
 
       messages = Enum.map(1..12, &"msg-#{&1}")
@@ -44,7 +45,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
-      [producer] = Utils.wait_for_workers(producer_pid)
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
       producer_name = :sys.get_state(producer).producer_name
 
       assert {:ok, _} = Pulsar.Producer.send(producer_pid, "single-msg")
@@ -61,7 +62,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Wait for a few timer cycles without sending anything
       Process.sleep(200)
 
-      [producer] = Utils.wait_for_workers(producer_pid)
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
       state = :sys.get_state(producer)
       assert state.ready == true
       assert state.batch == []
@@ -91,7 +92,12 @@ defmodule Pulsar.Integration.Producer.BatchTest do
         [client: @client, name: "#{suffix}-producer", batch_enabled: true] ++ opts
       )
 
-    Utils.wait_for_producer_ready(producer_pid)
+    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
+      until: fn
+        [producer] -> :sys.get_state(producer).ready
+        _workers -> false
+      end
+    )
 
     {consumer_pid, producer_pid}
   end

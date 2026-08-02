@@ -129,17 +129,6 @@ defmodule Pulsar.Topology do
     end
   end
 
-  @doc """
-  Returns how many partitions `root` covers, or `0` when the topic is not partitioned.
-  """
-  @spec partitions(pid()) :: non_neg_integer()
-  def partitions(root) do
-    case kind(root) do
-      :group -> 0
-      :topology -> count_partitions(root)
-    end
-  end
-
   # A topology also supervises its Discovery controller, which is not a group.
   defp topology_groups(root) do
     root
@@ -148,15 +137,6 @@ defmodule Pulsar.Topology do
       {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
       {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
-    end)
-  end
-
-  defp count_partitions(root) do
-    root
-    |> Supervisor.which_children()
-    |> Enum.count(fn
-      {{:partition, _index}, _pid, :supervisor, _modules} -> true
-      _child -> false
     end)
   end
 

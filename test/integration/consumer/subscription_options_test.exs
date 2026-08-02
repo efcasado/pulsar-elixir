@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :subscription_options_test_client
@@ -61,9 +62,13 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
     on_exit(fn -> Pulsar.Consumer.stop("naming-group", client: @client) end)
 
+    workers =
+      Utils.wait_for(fn -> Topology.workers(group) end,
+        until: fn workers -> length(workers) == 2 end
+      )
+
     names =
-      group
-      |> Utils.wait_for_workers(2)
+      workers
       |> Enum.map(fn pid -> :sys.get_state(pid).consumer_name end)
       |> Enum.sort()
 
@@ -79,7 +84,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:latest)
       )
 
-    [consumer] = Utils.wait_for_workers(latest_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(latest_group) end, until: &match?([_], &1))
 
     # Give it time to potentially receive messages (if bug)
     Process.sleep(1000)
@@ -98,7 +103,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [consumer] = Utils.wait_for_workers(earliest_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(earliest_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -118,7 +123,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [setup_consumer] = Utils.wait_for_workers(setup_group)
+    [setup_consumer] = Utils.wait_for(fn -> Topology.workers(setup_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(setup_consumer) == expected_count
@@ -137,7 +142,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_message_id: message_id)
       )
 
-    [message_id_consumer] = Utils.wait_for_workers(message_id_group)
+    [message_id_consumer] =
+      Utils.wait_for(fn -> Topology.workers(message_id_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(message_id_consumer) == expected_count - 1
@@ -157,7 +163,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [setup_consumer] = Utils.wait_for_workers(setup_group)
+    [setup_consumer] = Utils.wait_for(fn -> Topology.workers(setup_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(setup_consumer) == expected_count
@@ -195,9 +201,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_timestamp: future_timestamp)
       )
 
-    [timestamp_consumer1] = Utils.wait_for_workers(timestamp_group1)
-    [timestamp_consumer2] = Utils.wait_for_workers(timestamp_group2)
-    [timestamp_consumer3] = Utils.wait_for_workers(timestamp_group3)
+    [timestamp_consumer1] =
+      Utils.wait_for(fn -> Topology.workers(timestamp_group1) end, until: &match?([_], &1))
+
+    [timestamp_consumer2] =
+      Utils.wait_for(fn -> Topology.workers(timestamp_group2) end, until: &match?([_], &1))
+
+    [timestamp_consumer3] =
+      Utils.wait_for(fn -> Topology.workers(timestamp_group3) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       messages1 = @consumer_callback.get_messages(timestamp_consumer1)
@@ -224,7 +235,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, durable: true)
       )
 
-    [durable_consumer] = Utils.wait_for_workers(durable_group)
+    [durable_consumer] = Utils.wait_for(fn -> Topology.workers(durable_group) end, until: &match?([_], &1))
 
     :ok = Pulsar.Consumer.stop(durable_consumer)
 
@@ -243,7 +254,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, durable: false)
       )
 
-    [non_durable_consumer] = Utils.wait_for_workers(non_durable_group)
+    [non_durable_consumer] =
+      Utils.wait_for(fn -> Topology.workers(non_durable_group) end, until: &match?([_], &1))
 
     :ok = Pulsar.Consumer.stop(non_durable_consumer)
 
@@ -282,7 +294,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, read_compacted: true)
       )
 
-    [compacted_consumer] = Utils.wait_for_workers(compacted_group)
+    [compacted_consumer] =
+      Utils.wait_for(fn -> Topology.workers(compacted_group) end, until: &match?([_], &1))
 
     {:ok, non_compacted_group} =
       Pulsar.Consumer.start(
@@ -292,7 +305,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, read_compacted: false)
       )
 
-    [non_compacted_consumer] = Utils.wait_for_workers(non_compacted_group)
+    [non_compacted_consumer] =
+      Utils.wait_for(fn -> Topology.workers(non_compacted_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(compacted_consumer) == 4 and
