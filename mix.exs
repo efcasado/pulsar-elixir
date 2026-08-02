@@ -30,6 +30,19 @@ defmodule Pulsar.MixProject do
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
+        ],
+        skip_code_autolink_to: [
+          "Pulsar.Backoff",
+          "Pulsar.Client.Bootstrap",
+          "Pulsar.Consumer.Worker",
+          "Pulsar.Producer.Worker",
+          "Pulsar.Topology",
+          "Pulsar.Topology.Discovery",
+          "Pulsar.Topology.Group",
+          "Pulsar.Topology.Resolver",
+          "Pulsar.Topology.groups/1",
+          "Pulsar.Topology.kind/1",
+          "Pulsar.Topology.workers/1"
         ]
       ]
     ]
