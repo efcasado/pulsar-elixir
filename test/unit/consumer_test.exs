@@ -17,6 +17,11 @@ defmodule Pulsar.ConsumerTest do
   end
 
   describe "send_flow/3" do
+    test "requires a positive permit count for pids and names" do
+      assert_raise FunctionClauseError, fn -> Consumer.send_flow(self(), 0) end
+      assert_raise FunctionClauseError, fn -> Consumer.send_flow(:consumer, 0) end
+    end
+
     test "returns an error for a stale worker pid" do
       assert {:error, _reason} = Consumer.send_flow(dead_pid(), 1)
     end
@@ -29,7 +34,7 @@ defmodule Pulsar.ConsumerTest do
   defp dead_pid do
     pid = spawn(fn -> :ok end)
     ref = Process.monitor(pid)
-    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
     pid
   end
 

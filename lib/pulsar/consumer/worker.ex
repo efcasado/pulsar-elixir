@@ -124,7 +124,7 @@ defmodule Pulsar.Consumer.Worker do
   @doc """
   Grants this worker more flow permits. Backs `Pulsar.Consumer.send_flow/3`.
   """
-  @spec send_flow(pid(), non_neg_integer()) :: :ok | {:error, term()}
+  @spec send_flow(pid(), pos_integer()) :: :ok | {:error, term()}
   def send_flow(consumer, permits) when is_integer(permits) and permits > 0 do
     GenServer.call(consumer, {:send_flow, permits})
   end

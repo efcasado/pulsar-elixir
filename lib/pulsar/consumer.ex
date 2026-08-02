@@ -155,10 +155,10 @@ defmodule Pulsar.Consumer do
   A consumer with no workers is an error rather than a silent success: nothing was granted,
   so nothing will be delivered.
   """
-  @spec send_flow(pid() | String.t() | atom(), non_neg_integer(), keyword()) :: :ok | {:error, term()}
+  @spec send_flow(pid() | String.t() | atom(), pos_integer(), keyword()) :: :ok | {:error, term()}
   def send_flow(consumer, permits, opts \\ [])
 
-  def send_flow(consumer, permits, _opts) when is_pid(consumer) do
+  def send_flow(consumer, permits, _opts) when is_pid(consumer) and is_integer(permits) and permits > 0 do
     case Topology.kind(consumer) do
       :worker ->
         grant(consumer, permits)
@@ -175,7 +175,7 @@ defmodule Pulsar.Consumer do
     :exit, reason -> {:error, reason}
   end
 
-  def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
+  def send_flow(name, permits, opts) when (is_binary(name) or is_atom(name)) and is_integer(permits) and permits > 0 do
     case resolve(name, opts) do
       {:ok, consumer} -> send_flow(consumer, permits, opts)
       {:error, :not_found} -> {:error, :consumer_not_found}
