@@ -48,8 +48,9 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       )
 
     assert Pulsar.Client.consumers(@client) == [partitioned_consumer_pid]
+    assert :ok = wait_for_worker_count(partitioned_consumer_pid, 6)
 
-    consumers = Pulsar.Consumer.workers(partitioned_consumer_pid)
+    consumers = Pulsar.Topology.workers(partitioned_consumer_pid)
 
     Utils.wait_for(fn ->
       consumers
@@ -64,14 +65,6 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         @consumer_callback.count_messages(consumer_pid) + acc
       end)
 
-    partition_count = Pulsar.Consumer.partitions(partitioned_consumer_pid)
-
-    # The number of partition groups should be equal to the number of
-    # partitions in the topic. The total number of consumers should be
-    # equal to the number of partitions times the number of consumers per
-    # partition. Last but not least, all messages produced should be
-    # consumed.
-    assert partition_count == 3
     assert Enum.count(consumers) == 6
     assert consumed_messages == expected_count
 
@@ -89,13 +82,16 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     {:ok, partitioned_consumer_pid} =
       Pulsar.Consumer.start(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
 
-    assert wait_for_partition_count(partitioned_consumer_pid, 3) == :ok
+    assert wait_for_worker_count(partitioned_consumer_pid, 3) == :ok
+    initial_workers = Pulsar.Topology.workers(partitioned_consumer_pid)
 
     System.update_partitions(topic, 6)
 
     # The discovery poller should pick up the new partitions and start a
     # consumer group for each one, without restarting the existing groups.
-    assert wait_for_partition_count(partitioned_consumer_pid, 6) == :ok
+    assert wait_for_worker_count(partitioned_consumer_pid, 6) == :ok
+    current_workers = Pulsar.Topology.workers(partitioned_consumer_pid)
+    assert Enum.all?(initial_workers, &(&1 in current_workers))
 
     :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
@@ -106,7 +102,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert :ok = Utils.wait_for(fn -> Pulsar.Consumer.topic(partitioned) == @topic end)
 
-    workers = Pulsar.Consumer.workers(partitioned)
+    workers = Pulsar.Topology.workers(partitioned)
 
     assert Pulsar.Consumer.topic(partitioned) == @topic
     assert length(workers) == 3
@@ -129,9 +125,12 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     ]
   end
 
-  defp wait_for_partition_count(partitioned_consumer_pid, expected) do
+  defp wait_for_worker_count(partitioned_consumer_pid, expected) do
     Utils.wait_for(fn ->
-      Pulsar.Consumer.partitions(partitioned_consumer_pid) == expected
+      case Pulsar.Topology.workers(partitioned_consumer_pid) do
+        workers when is_list(workers) -> length(workers) == expected
+        _not_ready -> false
+      end
     end)
   end
 end

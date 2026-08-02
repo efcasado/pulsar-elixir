@@ -64,7 +64,7 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
         subscription_options()
       )
 
-    [consumer] = Pulsar.Consumer.workers(consumer_pid)
+    [consumer] = Utils.wait_for_workers(consumer_pid)
     Utils.wait_for(fn -> Process.alive?(consumer) end)
 
     # Wait for consumer to be ready to receive messages

@@ -25,7 +25,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Pulsar.Producer.workers(producer_pid)
+      [producer] = Utils.wait_for_workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       messages = Enum.map(1..12, &"msg-#{&1}")
@@ -44,7 +44,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
-      [producer] = Pulsar.Producer.workers(producer_pid)
+      [producer] = Utils.wait_for_workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       assert {:ok, _} = Pulsar.Producer.send(producer_pid, "single-msg")
@@ -61,7 +61,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Wait for a few timer cycles without sending anything
       Process.sleep(200)
 
-      [producer] = Pulsar.Producer.workers(producer_pid)
+      [producer] = Utils.wait_for_workers(producer_pid)
       state = :sys.get_state(producer)
       assert state.ready == true
       assert state.batch == []

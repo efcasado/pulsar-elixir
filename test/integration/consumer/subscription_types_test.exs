@@ -180,10 +180,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:Exclusive, 2)
       )
 
-    Utils.wait_for(fn -> length(Pulsar.Consumer.workers(exclusive_multi_group)) == 1 end)
-
     assert Process.alive?(exclusive_multi_group)
-    assert length(Pulsar.Consumer.workers(exclusive_multi_group)) == 1
+    assert length(Utils.wait_for_workers(exclusive_multi_group)) == 1
   end
 
   defp subscription_options(type, count) do

@@ -143,15 +143,10 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         name: "compat-test-producer-2"
       )
 
-    [producer_pid] = Pulsar.Producer.workers(producer_group)
-    worker_ref = Process.monitor(producer_pid)
     group_ref = Process.monitor(producer_group)
 
-    assert_receive {:DOWN, ^worker_ref, :process, ^producer_pid, _reason}, 5_000
-
-    # An incompatible schema will not become compatible, so the worker stops rather than
-    # restarting into the same rejection, and the group follows it down rather than lingering
-    # with nothing in it.
+    # An incompatible schema will not become compatible, so the logical producer stops
+    # rather than restarting into the same rejection or lingering with no usable workers.
     assert_receive {:DOWN, ^group_ref, :process, ^producer_group, _reason}, 5_000
   end
 
@@ -219,7 +214,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   end
 
   defp get_producer_state(producer_pid) do
-    [producer] = Pulsar.Producer.workers(producer_pid)
+    [producer] = Utils.wait_for_workers(producer_pid)
     :sys.get_state(producer)
   end
 

@@ -29,7 +29,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   test "producer recovers from broker crash" do
     {:ok, group_pid} = Pulsar.Producer.start(@topic, producer_options())
 
-    [producer_pid_before_crash] = Pulsar.Producer.workers(group_pid)
+    [producer_pid_before_crash] = Utils.wait_for_workers(group_pid)
 
     :ok =
       Utils.wait_for(fn ->
@@ -43,7 +43,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     Utils.wait_for(fn -> not Process.alive?(producer_pid_before_crash) end)
 
-    [producer_pid_after_crash] = Pulsar.Producer.workers(group_pid, client: @client)
+    [producer_pid_after_crash] = Utils.wait_for_workers(group_pid)
 
     Utils.wait_for(fn -> Process.alive?(producer_pid_before_crash) end)
 
@@ -64,7 +64,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     topic = "persistent://public/default/producer-unload-test"
 
     {:ok, group_pid} = Pulsar.Producer.start(topic, producer_options())
-    [producer_pid_before_unload] = Pulsar.Producer.workers(group_pid)
+    [producer_pid_before_unload] = Utils.wait_for_workers(group_pid)
 
     Utils.wait_for(fn -> :sys.get_state(producer_pid_before_unload).producer_name != nil end)
 
@@ -72,7 +72,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     Utils.wait_for(fn -> not Process.alive?(producer_pid_before_unload) end)
 
-    [producer_pid_after_unload] = Pulsar.Producer.workers(group_pid)
+    [producer_pid_after_unload] = Utils.wait_for_workers(group_pid)
 
     refute Process.alive?(producer_pid_before_unload)
     assert Process.alive?(group_pid)
@@ -91,7 +91,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    [consumer_pid_before_crash] = Pulsar.Consumer.workers(group_pid, client: @client)
+    [consumer_pid_before_crash] = Utils.wait_for_workers(group_pid)
 
     Utils.wait_for(fn ->
       System.broker_for_consumer(consumer_pid_before_crash, @client) != nil
@@ -104,7 +104,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
 
-    [consumer_pid_after_crash] = Pulsar.Consumer.workers(group_pid, client: @client)
+    [consumer_pid_after_crash] = Utils.wait_for_workers(group_pid)
 
     # consumer crashed due to broker link
     refute Process.alive?(consumer_pid_before_crash)
@@ -125,13 +125,13 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    [consumer_pid_before_unload] = Pulsar.Consumer.workers(group_pid, client: @client)
+    [consumer_pid_before_unload] = Utils.wait_for_workers(group_pid)
 
     :ok = System.unload_topic(@topic)
 
     Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_unload) end)
 
-    [consumer_pid_after_unload] = Pulsar.Consumer.workers(group_pid, client: @client)
+    [consumer_pid_after_unload] = Utils.wait_for_workers(group_pid)
 
     # original consumer crashed due to topic unload
     refute Process.alive?(consumer_pid_before_unload)

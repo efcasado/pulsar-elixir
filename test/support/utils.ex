@@ -16,6 +16,26 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
+  Waits until a topology has the expected number of running workers and returns them.
+  """
+  def wait_for_workers(root, expected_count \\ 1, attempts \\ 100, interval_ms \\ 100)
+
+  def wait_for_workers(root, _expected_count, 0, _interval_ms) do
+    Pulsar.Topology.workers(root)
+  end
+
+  def wait_for_workers(root, expected_count, attempts, interval_ms) do
+    workers = Pulsar.Topology.workers(root)
+
+    if length(workers) == expected_count do
+      workers
+    else
+      Process.sleep(interval_ms)
+      wait_for_workers(root, expected_count, attempts - 1, interval_ms)
+    end
+  end
+
+  @doc """
   Collects flow control telemetry events and returns aggregated statistics.
   Returns a map with statistics grouped by consumer_id.
   """
@@ -157,7 +177,7 @@ defmodule Pulsar.Test.Support.Utils do
   """
   def wait_for_producer_ready(group_pid) do
     wait_for(fn ->
-      case Pulsar.Producer.workers(group_pid) do
+      case Pulsar.Topology.workers(group_pid) do
         [p | _] -> :sys.get_state(p).ready == true
         _ -> false
       end

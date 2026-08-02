@@ -60,7 +60,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 1, 0, 1)
       )
 
-    [consumer] = Pulsar.Consumer.workers(consumer_group)
+    [consumer] = Utils.wait_for_workers(consumer_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -86,7 +86,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 5, 3, 4)
       )
 
-    [consumer] = Pulsar.Consumer.workers(consumer_group)
+    [consumer] = Utils.wait_for_workers(consumer_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -111,7 +111,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 0, 0, 0)
       )
 
-    [consumer] = Pulsar.Consumer.workers(consumer_group)
+    [consumer] = Utils.wait_for_workers(consumer_group)
 
     # Initially, no messages should be received
     Process.sleep(500)
@@ -138,7 +138,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     {:ok, consumer_group} =
       Pulsar.Consumer.start(@topic, "group-flow", @consumer_callback, subscription_options(2, 0, 0, 0))
 
-    workers = Pulsar.Consumer.workers(consumer_group)
+    workers = Utils.wait_for_workers(consumer_group, 2)
     assert length(workers) == 2
 
     # The pid start/1 returns is a supervisor, which cannot answer the worker's call.

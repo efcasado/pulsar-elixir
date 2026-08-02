@@ -234,7 +234,7 @@ defmodule Pulsar.TopologyTest do
     })
   end
 
-  describe "workers/2" do
+  describe "workers/1" do
     test "collects the workers across every partition" do
       partitions =
         for index <- 0..2 do

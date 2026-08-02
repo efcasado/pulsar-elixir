@@ -39,10 +39,8 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     :ok = wait_for_producers_ready(producer_pid)
 
-    partition_count = Pulsar.Producer.partitions(producer_pid)
-    all_producers = Pulsar.Producer.workers(producer_pid)
+    all_producers = Pulsar.Topology.workers(producer_pid)
 
-    assert partition_count == 3
     assert Enum.count(all_producers) == 3
 
     :ok = Pulsar.Producer.stop(producer_pid)
@@ -173,32 +171,40 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         partition_discovery_interval_ms: @discovery_interval_ms
       )
 
-    assert wait_for_partition_count(producer_pid, 3) == :ok
+    assert wait_for_worker_count(producer_pid, 3) == :ok
+    initial_workers = Pulsar.Topology.workers(producer_pid)
 
     System.update_partitions(topic, 6)
 
     # The discovery poller should pick up the new partitions and start a
     # producer group for each one, without restarting the existing groups.
-    assert wait_for_partition_count(producer_pid, 6) == :ok
+    assert wait_for_worker_count(producer_pid, 6) == :ok
+    current_workers = Pulsar.Topology.workers(producer_pid)
+    assert Enum.all?(initial_workers, &(&1 in current_workers))
 
     :ok = Pulsar.Producer.stop(producer_pid)
   end
 
   defp wait_for_producers_ready(partitioned_producer_pid) do
     Utils.wait_for(fn ->
-      producers = Pulsar.Producer.workers(partitioned_producer_pid)
+      case Pulsar.Topology.workers(partitioned_producer_pid) do
+        producers when is_list(producers) ->
+          Enum.count(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
 
-      Enum.count(producers) == 3 and
-        Enum.all?(producers, fn producer ->
-          state = :sys.get_state(producer)
-          state.producer_name != nil
-        end)
+        _not_ready ->
+          false
+      end
     end)
   end
 
-  defp wait_for_partition_count(partitioned_producer_pid, expected) do
+  defp producer_ready?(producer), do: :sys.get_state(producer).producer_name != nil
+
+  defp wait_for_worker_count(partitioned_producer_pid, expected) do
     Utils.wait_for(fn ->
-      Pulsar.Producer.partitions(partitioned_producer_pid) == expected
+      case Pulsar.Topology.workers(partitioned_producer_pid) do
+        workers when is_list(workers) -> length(workers) == expected
+        _not_ready -> false
+      end
     end)
   end
 end

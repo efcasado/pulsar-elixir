@@ -2,7 +2,7 @@ defmodule Pulsar.Producer do
   @moduledoc """
   A producer publishes messages to a topic.
 
-  This module is how you add, publish through, inspect and stop producers. To declare them
+  This module is how you add, publish through and stop producers. To declare them
   on a client instead, so they start and restart with it, see `Pulsar.Client`.
 
   `send/3` publishes, taking a producer's pid or the name it was registered under:
@@ -12,9 +12,9 @@ defmodule Pulsar.Producer do
   A partitioned topic needs nothing special at the call site: messages are routed across
   partitions, honouring a message's `:partition_key` when one is set.
 
-  `start/1` adds a producer to a running client and `stop/2` removes it. A logical producer
-  spans one worker per partition and per `:producer_count`; `workers/2` and `partitions/2`
-  inspect those workers, and `lookup/2` finds the stable producer root by name.
+  `start/1` adds a producer to a running client and `stop/2` removes it. Operations target
+  the logical producer by its stable root or registered name without exposing its partition
+  workers.
 
   ## Options
 
@@ -60,8 +60,8 @@ defmodule Pulsar.Producer do
   ones known up front: a producer added here is not recreated if the client restarts.
 
   Returns once the stable producer supervisor has been registered. Topic discovery and
-  worker initialization continue asynchronously; publishing and inspection return
-  `{:error, :not_ready}` until discovery completes.
+  worker initialization continue asynchronously; publishing returns `{:error, :not_ready}`
+  until discovery completes.
   """
   @spec start(keyword() | String.t()) :: DynamicSupervisor.on_start_child()
   def start(topic) when is_binary(topic), do: start(topic: topic)
@@ -105,7 +105,7 @@ defmodule Pulsar.Producer do
   def send(producer, message, opts) when is_pid(producer), do: publish(producer, message, opts)
 
   def send(name, message, opts) when is_binary(message) do
-    case lookup(name, opts) do
+    case resolve(name, opts) do
       {:ok, pid} -> publish(pid, message, opts)
       {:error, :not_found} -> {:error, :producer_not_found}
     end
@@ -123,50 +123,10 @@ defmodule Pulsar.Producer do
   def stop(producer, _opts) when is_pid(producer), do: Topology.remove(producer)
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
-  end
-
-  @doc """
-  Looks up a producer by name, returning `{:ok, pid}` or `{:error, :not_found}`.
-  """
-  @spec lookup(String.t() | atom(), keyword()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup(name, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-
-    Pulsar.Client.lookup(Pulsar.Client.producer_registry(client), name)
-  end
-
-  @doc """
-  Returns the worker processes behind a producer, across every partition.
-
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
-  """
-  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found | :not_ready}
-  def workers(producer, opts \\ [])
-
-  def workers(producer, _opts) when is_pid(producer) do
-    if Topology.initialized?(producer), do: Topology.workers(producer), else: {:error, :not_ready}
-  end
-
-  def workers(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: workers(pid)
-  end
-
-  @doc """
-  Returns how many partitions a producer covers, or `0` for a non-partitioned topic.
-
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
-  """
-  @spec partitions(pid() | String.t() | atom(), keyword()) ::
-          non_neg_integer() | {:error, :not_found | :not_ready}
-  def partitions(producer, opts \\ [])
-
-  def partitions(producer, _opts) when is_pid(producer) do
-    if Topology.initialized?(producer), do: Topology.partitions(producer), else: {:error, :not_ready}
-  end
-
-  def partitions(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
+    case resolve(name, opts) do
+      {:ok, producer} -> stop(producer, opts)
+      {:error, :not_found} = error -> error
+    end
   end
 
   # Resolving the partition here keeps topology knowledge in one module: the partition
@@ -216,6 +176,12 @@ defmodule Pulsar.Producer do
 
   defp send_to_worker([worker | _rest], message, opts) do
     Worker.send_message(worker, message, opts)
+  end
+
+  defp resolve(name, opts) do
+    client = Keyword.get(opts, :client, @default_client)
+
+    Pulsar.Client.lookup(Pulsar.Client.producer_registry(client), name)
   end
 
   # Two producers in one static supervision tree need distinct ids, so the id follows

@@ -95,55 +95,7 @@ defmodule Pulsar.Consumer.Callback do
           IO.puts("Processed \#{callback_state.count} messages")
           :ok
         end
-        
-        # Optional: Add custom GenServer calls for external access
-        def handle_call(:get_count, _from, callback_state) do
-          {:reply, callback_state.count, callback_state}
-        end
-        
-        def handle_call(:get_messages, _from, callback_state) do
-          {:reply, Enum.reverse(callback_state.messages), callback_state}
-        end
-        
-        def handle_cast(:reset, callback_state) do
-          {:noreply, %{callback_state | count: 0, messages: []}}
-        end
       end
-
-  ## Extending the Consumer
-
-  The consumer callback module has default implementations for all optional callbacks.
-  You can override these by simply defining the callback in your module:
-
-      defmodule MyApp.MessageCounter do
-        use Pulsar.Consumer.Callback
-
-        def init(opts) do
-          {:ok, %{count: 0, max: Keyword.get(opts, :max, 100)}}
-        end
-
-        def handle_message(message, state) do
-          {:ok, %{state | count: state.count + 1}}
-        end
-
-        # Override default handle_call to add custom functionality
-        def handle_call(:get_count, _from, state) do
-          {:reply, state.count, state}
-        end
-
-        # Override default handle_cast for custom async operations
-        def handle_cast(:reset, state) do
-          {:noreply, %{state | count: 0}}
-        end
-      end
-
-  These are implemented by the workers, which `Pulsar.Consumer.workers/2` returns. A
-  consumer's own pid is the supervisor above them, and answers neither:
-
-      [worker | _rest] = Pulsar.Consumer.workers(:orders)
-
-      count = GenServer.call(worker, :get_count)
-      GenServer.cast(worker, :reset)
 
   ## Multiple Consumers
 
@@ -161,13 +113,9 @@ defmodule Pulsar.Consumer.Callback do
           name: :orders]
        ]}
 
-  A consumer is a supervisor over its workers, so `Pulsar.Consumer.workers/2` is what
-  returns the processes holding the state, one per `:consumer_count` and per partition:
-
-      Enum.each(Pulsar.Consumer.workers(:orders), fn worker ->
-        count = GenServer.call(worker, :get_count)
-        IO.puts("Consumer \#{inspect(worker)} processed \#{count} messages")
-      end)
+  Each process has independent callback state. The consumer facade intentionally hides
+  those short-lived worker processes, so state that must be shared, queried, or aggregated
+  across consumers should live in an application process with its own public API.
 
   ## Return Values
 
@@ -215,15 +163,17 @@ defmodule Pulsar.Consumer.Callback do
       def handle_message(%Pulsar.Message{payload: payload, message_id_to_ack: message_id_to_ack}, state) do
         # Use message_id_to_ack (not command.message_id) for manual ACK/NACK
         # This ensures batch messages are ACKed with the correct batch_index
-        
+
+        consumer = self()
+
         # Send to async processor
-        Task.async(fn ->
+        Task.start(fn ->
           case process_async(payload) do
-            :ok -> Pulsar.Consumer.ack(self(), message_id_to_ack)
-            {:error, _} -> Pulsar.Consumer.nack(self(), message_id_to_ack)
+            :ok -> Pulsar.Consumer.ack(consumer, message_id_to_ack)
+            {:error, _} -> Pulsar.Consumer.nack(consumer, message_id_to_ack)
           end
         end)
-        
+
         {:noreply, state}
       end
   """

@@ -130,8 +130,8 @@ The broker enforces compatibility when registering schemas:
 # Different schema type - REJECTED by broker
 {:ok, p2} = Pulsar.Producer.start("topic", name: :evolving, schema: [type: :Int32])
 
-# The second producer's worker terminates with {:IncompatibleSchema, ...}, so it stops
-# without being restarted and Pulsar.Producer.workers(p2) is empty.
+# The incompatible producer stops with {:IncompatibleSchema, ...} instead of retrying a
+# terminal broker rejection indefinitely.
 ```
 
 **Compatible changes:**

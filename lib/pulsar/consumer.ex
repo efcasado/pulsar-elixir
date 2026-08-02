@@ -6,10 +6,9 @@ defmodule Pulsar.Consumer do
   instead, so they start and restart with it, see `Pulsar.Client`. The callback module
   they dispatch into is `Pulsar.Consumer.Callback`.
 
-  `start/1` adds a consumer to a running client and `stop/2` removes it. A logical consumer
-  spans one worker per partition and per `:consumer_count`; `workers/2` and `partitions/2`
-  inspect those workers, `lookup/2` finds the stable consumer root by name, and `topic/1`
-  accepts that root or one of its workers.
+  `start/1` adds a consumer to a running client and `stop/2` removes it. Operations target
+  the logical consumer by its stable root or registered name without exposing its partition
+  workers.
 
   `ack/2` and `nack/2` acknowledge manually, from a process other than the worker that
   delivered the message. `send_flow/3` grants permits to a worker or every worker behind
@@ -101,50 +100,10 @@ defmodule Pulsar.Consumer do
   def stop(consumer, _opts) when is_pid(consumer), do: Topology.remove(consumer)
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: stop(pid, opts)
-  end
-
-  @doc """
-  Looks up a consumer by name, returning `{:ok, pid}` or `{:error, :not_found}`.
-  """
-  @spec lookup(String.t() | atom(), keyword()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup(name, opts \\ []) do
-    client = Keyword.get(opts, :client, @default_client)
-
-    Pulsar.Client.lookup(Pulsar.Client.consumer_registry(client), name)
-  end
-
-  @doc """
-  Returns the worker processes behind a consumer, across every partition.
-
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
-  """
-  @spec workers(pid() | String.t() | atom(), keyword()) :: [pid()] | {:error, :not_found | :not_ready}
-  def workers(consumer, opts \\ [])
-
-  def workers(consumer, _opts) when is_pid(consumer) do
-    if Topology.initialized?(consumer), do: Topology.workers(consumer), else: {:error, :not_ready}
-  end
-
-  def workers(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: workers(pid)
-  end
-
-  @doc """
-  Returns how many partitions a consumer covers, or `0` for a non-partitioned topic.
-
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
-  """
-  @spec partitions(pid() | String.t() | atom(), keyword()) ::
-          non_neg_integer() | {:error, :not_found | :not_ready}
-  def partitions(consumer, opts \\ [])
-
-  def partitions(consumer, _opts) when is_pid(consumer) do
-    if Topology.initialized?(consumer), do: Topology.partitions(consumer), else: {:error, :not_ready}
-  end
-
-  def partitions(name, opts) when is_binary(name) or is_atom(name) do
-    with {:ok, pid} <- lookup(name, opts), do: partitions(pid)
+    case resolve(name, opts) do
+      {:ok, consumer} -> stop(consumer, opts)
+      {:error, :not_found} = error -> error
+    end
   end
 
   @doc """
@@ -215,10 +174,9 @@ defmodule Pulsar.Consumer do
   end
 
   def send_flow(name, permits, opts) when is_binary(name) or is_atom(name) do
-    case workers(name, opts) do
+    case resolve(name, opts) do
+      {:ok, consumer} -> send_flow(consumer, permits, opts)
       {:error, :not_found} -> {:error, :consumer_not_found}
-      {:error, :not_ready} = error -> error
-      workers -> grant_all(workers, permits)
     end
   end
 
@@ -243,9 +201,8 @@ defmodule Pulsar.Consumer do
   @doc """
   Returns the topic a consumer is subscribed to.
 
-  Takes the stable root returned by `start/1` or one of the worker pids returned by
-  `workers/2`. A worker reports the partition it is subscribed to; the root reports the
-  logical topic across all partitions.
+  Takes the stable root returned by `start/1` and reports the logical topic across all
+  partitions.
   """
   @spec topic(pid()) :: String.t() | {:error, :not_found | :not_ready}
   def topic(consumer) do
@@ -277,6 +234,12 @@ defmodule Pulsar.Consumer do
       [worker | _rest] -> Worker.topic(worker)
       [] -> {:error, :not_found}
     end
+  end
+
+  defp resolve(name, opts) do
+    client = Keyword.get(opts, :client, @default_client)
+
+    Pulsar.Client.lookup(Pulsar.Client.consumer_registry(client), name)
   end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows

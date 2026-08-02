@@ -47,7 +47,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
                name: producer_group_name
              )
 
-    [producer] = Pulsar.Producer.workers(group_pid)
+    [producer] = Utils.wait_for_workers(group_pid)
 
     :ok =
       Utils.wait_for(fn ->

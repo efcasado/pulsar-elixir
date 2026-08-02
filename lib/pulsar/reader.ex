@@ -67,6 +67,7 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
+  alias Pulsar.Topology
 
   require Logger
 
@@ -318,15 +319,12 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_topology(consumer, deadline) do
-    case Consumer.partitions(consumer) do
-      partitions when is_integer(partitions) ->
-        {:ok, max(partitions, 1)}
+    case expected_consumer_count(consumer) do
+      {:ok, expected_count} ->
+        {:ok, expected_count}
 
-      {:error, :not_ready} ->
+      :initializing ->
         retry_topology(consumer, deadline)
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
@@ -352,39 +350,34 @@ defmodule Pulsar.Reader do
 
       {:waiting, expected_count} ->
         receive_ready(consumer, reader_ref, expected_count, ready, deadline)
-
-      {:error, _reason} = error ->
-        error
     end
   end
 
   defp ready_consumers(consumer, expected_count, ready) do
-    case Consumer.partitions(consumer) do
-      partitions when is_integer(partitions) ->
-        current_ready_consumers(consumer, max(partitions, 1), ready)
+    case expected_consumer_count(consumer) do
+      {:ok, current_expected_count} ->
+        current_ready_consumers(consumer, current_expected_count, ready)
 
-      {:error, :not_ready} ->
+      :initializing ->
         {:waiting, expected_count}
+    end
+  end
 
-      {:error, reason} ->
-        {:error, reason}
+  defp expected_consumer_count(consumer) do
+    case Topology.status(consumer) do
+      {:ready, :non_partitioned} -> {:ok, 1}
+      {:ready, {:partitioned, partitions}} -> {:ok, partitions}
+      :initializing -> :initializing
     end
   end
 
   defp current_ready_consumers(consumer, expected_count, ready) do
-    case Consumer.workers(consumer) do
-      consumers when is_list(consumers) ->
-        if length(consumers) == expected_count and Enum.all?(consumers, &Map.has_key?(ready, &1)) do
-          {:ok, consumers}
-        else
-          {:waiting, expected_count}
-        end
+    consumers = Topology.workers(consumer)
 
-      {:error, :not_ready} ->
-        {:waiting, expected_count}
-
-      {:error, reason} ->
-        {:error, reason}
+    if length(consumers) == expected_count and Enum.all?(consumers, &Map.has_key?(ready, &1)) do
+      {:ok, consumers}
+    else
+      {:waiting, expected_count}
     end
   end
 
