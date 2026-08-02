@@ -102,9 +102,9 @@ defmodule Pulsar.Producer do
           {:ok, MessageIdData.t()} | {:error, term()}
   def send(producer, message, opts \\ [])
 
-  def send(producer, message, opts) when is_pid(producer), do: publish(producer, message, opts)
+  def send(producer, message, opts) when is_pid(producer) and is_binary(message), do: publish(producer, message, opts)
 
-  def send(name, message, opts) when is_binary(message) do
+  def send(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
     case resolve(name, opts) do
       {:ok, pid} -> publish(pid, message, opts)
       {:error, :not_found} -> {:error, :producer_not_found}
