@@ -129,9 +129,8 @@ defmodule Pulsar.TopologyTest do
 
       send(resolver_pid, :resolve)
 
-      assert Topology.await_initialized(root) == {:ok, 2}
+      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end)
       assert Topology.status(root) == {:ready, {:partitioned, 2}}
-      assert Topology.expected_workers(root) == {:ok, 2}
       assert Topology.partitions(root) == 2
     end
 
@@ -145,7 +144,7 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver, count_key: 2)
 
-      assert Topology.await_initialized(root, 1_000) == {:ok, 6}
+      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 3}} end)
       assert Agent.get(attempts, & &1) >= 2
       assert Topology.partitions(root) == 3
     end
@@ -160,7 +159,7 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver)
 
-      assert Topology.await_initialized(root) == {:ok, 1}
+      assert eventually(fn -> Topology.status(root) == {:ready, :non_partitioned} end)
       assert_receive :resolved
       refute_receive :resolved, 150
       assert Topology.status(root) == {:ready, :non_partitioned}
@@ -185,27 +184,12 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
 
       assert_receive {:resolved, 2}
-      assert Topology.await_initialized(root) == {:ok, 2}
+      assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end)
       assert_receive {:resolved, 4}
       assert eventually(fn -> Topology.partitions(root) == 4 end)
       assert_receive {:resolved, 2}
       assert eventually(fn -> Topology.status(root) == {:ready, {:partitioned, 4}} end)
       assert Topology.status(root) == {:ready, {:partitioned, 4}}
-      assert Topology.expected_workers(root) == {:ok, 4}
-    end
-  end
-
-  describe "readiness accounting" do
-    test "uses configured topology slots even while a group is down" do
-      {root, _registry} = start_topology(3)
-
-      assert Topology.status(root) == {:ready, {:partitioned, 3}}
-      assert Topology.expected_workers(root) == {:ok, 3}
-      assert Topology.await_initialized(root) == {:ok, 3}
-
-      :ok = Supervisor.terminate_child(root, {:partition, 1})
-
-      assert Topology.expected_workers(root) == {:ok, 3}
     end
   end
 
@@ -220,6 +204,7 @@ defmodule Pulsar.TopologyTest do
       :ok = Supervisor.terminate_child(root, {:partition, 1})
 
       assert Topology.partitions(root) == 3
+      assert Topology.status(root) == {:ready, {:partitioned, 3}}
     end
 
     test "is zero for a non-partitioned topic" do
@@ -227,7 +212,6 @@ defmodule Pulsar.TopologyTest do
 
       assert Topology.partitions(root) == 0
       assert Topology.status(root) == {:ready, :non_partitioned}
-      assert Topology.expected_workers(root) == {:ok, 1}
 
       assert Enum.any?(Supervisor.which_children(root), fn
                {Discovery, pid, :worker, [Discovery]} when is_pid(pid) -> true
@@ -236,7 +220,7 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
-  # workers/2 answers only for the modules a topology is actually made of, so these declare
+  # workers/1 answers only for the modules a topology is actually made of, so these declare
   # those rather than going through start_topology/1 and its stub worker.
   defp worker_spec(id, module \\ Pulsar.Consumer.Worker) do
     %{id: id, start: {Agent, :start_link, [fn -> id end]}, type: :worker, modules: [module]}
@@ -272,16 +256,12 @@ defmodule Pulsar.TopologyTest do
       assert length(Topology.workers(root)) == 1
     end
 
-    # Dropping a worker between lives is right for a caller wanting pids to talk to, but
-    # Pulsar.Reader counts these to know how many will report in as ready. Counting only the
-    # live ones has it stop waiting early — and with all of them restarting, not wait at all.
-    test "reports a worker that is not currently running only when asked to" do
+    test "leaves out a worker that is not currently running" do
       root = start_supervisor([worker_spec("w-1")])
 
       :ok = Supervisor.terminate_child(root, "w-1")
 
       assert Topology.workers(root) == []
-      assert Topology.workers(root, include_all: true) == [:undefined]
     end
   end
 

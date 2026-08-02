@@ -35,6 +35,8 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: "partitioned-producer-test-1"
       )
 
+    assert Pulsar.Client.producers(@client) == [producer_pid]
+
     :ok = wait_for_producers_ready(producer_pid)
 
     partition_count = Pulsar.Producer.partitions(producer_pid)

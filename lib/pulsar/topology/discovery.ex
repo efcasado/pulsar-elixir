@@ -26,12 +26,9 @@ defmodule Pulsar.Topology.Discovery do
       config: config,
       topic: Keyword.fetch!(opts, :topic),
       client: Keyword.fetch!(opts, :client),
-      count: Keyword.fetch!(opts, config.count_key),
       interval: Keyword.fetch!(opts, :partition_discovery_interval_ms),
       resolver: Keyword.get(controller_opts, :resolver, &ServiceDiscovery.partition_count/2),
       status: status(initial_partitions),
-      expected_workers: expected_workers(initial_partitions, Keyword.fetch!(opts, config.count_key)),
-      waiters: [],
       backoff: 0
     }
 
@@ -48,22 +45,6 @@ defmodule Pulsar.Topology.Discovery do
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
-
-  def handle_call(:expected_workers, _from, %{expected_workers: nil} = state) do
-    {:reply, {:error, :not_ready}, state}
-  end
-
-  def handle_call(:expected_workers, _from, state) do
-    {:reply, {:ok, state.expected_workers}, state}
-  end
-
-  def handle_call(:await_initialized, from, %{expected_workers: nil} = state) do
-    {:noreply, %{state | waiters: [from | state.waiters]}}
-  end
-
-  def handle_call(:await_initialized, _from, state) do
-    {:reply, {:ok, state.expected_workers}, state}
-  end
 
   @impl true
   def handle_info(:discover, state), do: discover(state)
@@ -99,11 +80,8 @@ defmodule Pulsar.Topology.Discovery do
   end
 
   defp ready(state, desired) do
-    expected_workers = expected_workers(desired, state.count)
-    Enum.each(state.waiters, &GenServer.reply(&1, {:ok, expected_workers}))
-
     status = status(desired)
-    state = %{state | status: status, expected_workers: expected_workers, waiters: [], backoff: 0}
+    state = %{state | status: status, backoff: 0}
     {:noreply, schedule_poll(state)}
   end
 
@@ -117,8 +95,4 @@ defmodule Pulsar.Topology.Discovery do
   defp status(nil), do: :initializing
   defp status(0), do: {:ready, :non_partitioned}
   defp status(partitions), do: {:ready, {:partitioned, partitions}}
-
-  defp expected_workers(nil, _count), do: nil
-  defp expected_workers(0, count), do: count
-  defp expected_workers(partitions, count), do: partitions * count
 end

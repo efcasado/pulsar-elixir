@@ -47,6 +47,8 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         subscription_options(2)
       )
 
+    assert Pulsar.Client.consumers(@client) == [partitioned_consumer_pid]
+
     consumers = Pulsar.Consumer.workers(partitioned_consumer_pid)
 
     Utils.wait_for(fn ->
@@ -72,6 +74,8 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     assert partition_count == 3
     assert Enum.count(consumers) == 6
     assert consumed_messages == expected_count
+
+    :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
 
   test "discovers partitions added to the topic" do

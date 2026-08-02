@@ -64,27 +64,6 @@ defmodule Pulsar.Topology do
     end
   end
 
-  @doc false
-  @spec expected_workers(pid()) :: {:ok, pos_integer()} | {:error, :not_ready}
-  def expected_workers(root) do
-    case controller(root) do
-      {:ok, controller} -> call_controller(controller, :expected_workers, {:error, :not_ready})
-      _not_running -> {:error, :not_ready}
-    end
-  end
-
-  @doc false
-  @spec await_initialized(pid(), timeout()) :: {:ok, pos_integer()} | {:error, :not_ready | :timeout}
-  def await_initialized(root, timeout \\ 5_000) do
-    case controller(root) do
-      {:ok, controller} -> GenServer.call(controller, :await_initialized, timeout)
-      _not_running -> {:error, :not_ready}
-    end
-  catch
-    :exit, {:timeout, _call} -> {:error, :timeout}
-    :exit, _reason -> {:error, :not_ready}
-  end
-
   defp controller(root) do
     root
     |> Supervisor.which_children()
@@ -110,23 +89,18 @@ defmodule Pulsar.Topology do
   @doc """
   Returns the worker processes under `root`, across every partition it has.
 
-  Only the ones that are up, unless `:include_all` is set — a worker between lives is
-  then reported as `:restarting` or `:undefined`, the way `groups/1` reports a partition.
-  A caller wanting to talk to a worker wants the default; a caller counting how many will
-  report in wants all of them, since one restarting now is still one that will report.
+  Only workers that are currently running are returned.
   """
-  @spec workers(pid(), keyword()) :: [pid() | :restarting | :undefined]
-  def workers(root, opts \\ []) do
-    include_all? = Keyword.get(opts, :include_all, false)
-
+  @spec workers(pid()) :: [pid()]
+  def workers(root) do
     root
     |> Supervisor.which_children()
     |> Enum.flat_map(fn
       {_id, pid, :worker, [module]} when module in @worker_modules ->
-        if is_pid(pid) or include_all?, do: [pid], else: []
+        if is_pid(pid), do: [pid], else: []
 
       {_id, pid, :supervisor, _modules} when is_pid(pid) ->
-        workers(pid, opts)
+        workers(pid)
 
       _child ->
         []

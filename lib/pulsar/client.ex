@@ -217,6 +217,30 @@ defmodule Pulsar.Client do
     :exit, {:noproc, _call} -> {:error, :client_not_found}
   end
 
+  @doc """
+  Returns the consumer resources currently running under a client.
+
+  Each pid is the stable topology root returned by `Pulsar.Consumer.start/1`, regardless
+  of how many partitions or workers that consumer has. Returns an empty list while the
+  client or its consumer branch is unavailable. The order is unspecified.
+  """
+  @spec consumers(atom()) :: [pid()]
+  def consumers(client_name \\ :default) do
+    client_name |> consumer_supervisor() |> resource_roots()
+  end
+
+  @doc """
+  Returns the producer resources currently running under a client.
+
+  Each pid is the stable topology root returned by `Pulsar.Producer.start/1`, regardless
+  of how many partitions or workers that producer has. Returns an empty list while the
+  client or its producer branch is unavailable. The order is unspecified.
+  """
+  @spec producers(atom()) :: [pid()]
+  def producers(client_name \\ :default) do
+    client_name |> producer_supervisor() |> resource_roots()
+  end
+
   ## Registry and Supervisor Name Helpers
 
   @doc false
@@ -279,6 +303,10 @@ defmodule Pulsar.Client do
     Supervisor.which_children(supervisor)
   catch
     :exit, _reason -> []
+  end
+
+  defp resource_roots(supervisor) do
+    for {_id, pid, :supervisor, _modules} <- children_of(supervisor), is_pid(pid), do: pid
   end
 
   @doc """

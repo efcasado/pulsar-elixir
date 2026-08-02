@@ -1,6 +1,7 @@
 defmodule Pulsar.Integration.Client.SupervisionTreeTest do
   use ExUnit.Case, async: false
 
+  alias Pulsar.Client
   alias Pulsar.Test.Support.System
 
   @moduletag :integration
@@ -24,7 +25,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
   defp host_tree(client, opts) do
     broker = System.broker()
 
-    children = [{Pulsar.Client, [name: client, host: broker.service_url] ++ opts}]
+    children = [{Client, [name: client, host: broker.service_url] ++ opts}]
 
     start_supervised!(%{
       id: :host_tree,
@@ -53,8 +54,8 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     assert [_client] = Supervisor.which_children(supervisor)
 
     # Declared resources are started off the client's boot, so the client is up before they are.
-    assert eventually(fn -> match?([_producer], producer_children(client)) end)
-    assert eventually(fn -> match?([_consumer], consumer_children(client)) end)
+    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
+    assert eventually(fn -> match?([_consumer], Client.consumers(client)) end)
 
     {:ok, _message_id} = Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: client)
 
@@ -77,8 +78,8 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         ]
       )
 
-    assert eventually(fn -> match?([_consumer], consumer_children(client)) end)
-    [{_, before, _, _}] = consumer_children(client)
+    assert eventually(fn -> match?([_consumer], Client.consumers(client)) end)
+    [before] = Client.consumers(client)
 
     # Not Process.exit/2: a supervisor traps exits, so an abnormal signal is ignored and
     # :kill skips the shutdown that releases its children's registered names.
@@ -88,7 +89,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     assert_receive {:DOWN, ^ref, :process, _, :shutdown}, 5_000
 
     assert eventually(fn ->
-             match?([{_, pid, _, _}] when is_pid(pid) and pid != before, consumer_children(client))
+             match?([pid] when is_pid(pid) and pid != before, Client.consumers(client))
            end)
 
     assert [_client] = Supervisor.which_children(supervisor)
@@ -103,7 +104,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     # this kind shows whether the branches are genuinely independent.
     {:ok, _producer} = Pulsar.Producer.start(topic: @topic, name: :isolation_producer, client: client)
 
-    assert eventually(fn -> match?([_producer], producer_children(client)) end)
+    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
     assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "before", client: client)
 
     # The whole consumer branch, as when its children exhaust their restart intensity —
@@ -113,7 +114,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     Supervisor.stop(branch, :shutdown)
     assert_receive {:DOWN, ^ref, :process, _pid, :shutdown}, 5_000
 
-    assert eventually(fn -> match?([_producer], producer_children(client)) end)
+    assert eventually(fn -> match?([_producer], Client.producers(client)) end)
     assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "after", client: client)
 
     assert [_client] = Supervisor.which_children(supervisor)
@@ -128,18 +129,6 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     supervisor
     |> Supervisor.which_children()
     |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
-  end
-
-  defp consumer_children(client) do
-    DynamicSupervisor.which_children(Pulsar.Client.consumer_supervisor(client))
-  catch
-    :exit, _ -> []
-  end
-
-  defp producer_children(client) do
-    DynamicSupervisor.which_children(Pulsar.Client.producer_supervisor(client))
-  catch
-    :exit, _ -> []
   end
 
   defp eventually(fun, attempts \\ 100) do

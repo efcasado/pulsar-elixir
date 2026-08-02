@@ -15,6 +15,7 @@ defmodule Pulsar.ReaderOptionsTest do
 
   test "rejects an option of the wrong type" do
     assert_raise NimbleOptions.ValidationError, ~r/:timeout/, fn -> start(timeout: :soon) end
+    assert_raise NimbleOptions.ValidationError, ~r/:startup_timeout/, fn -> start(startup_timeout: :soon) end
     assert_raise NimbleOptions.ValidationError, ~r/:flow_permits/, fn -> start(flow_permits: 0) end
     assert_raise NimbleOptions.ValidationError, ~r/:start_message_id/, fn -> start(start_message_id: 1) end
   end
@@ -26,5 +27,6 @@ defmodule Pulsar.ReaderOptionsTest do
 
     for gone <- ["`:host`", "`:auth`", "`:socket_opts`"], do: refute(docs =~ gone)
     assert docs =~ "`:client`"
+    assert docs =~ "`:startup_timeout`"
   end
 end

@@ -67,11 +67,11 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
-  alias Pulsar.Topology
 
   require Logger
 
   @default_flow_permits 100
+  @default_startup_timeout 5_000
 
   @schema [
     client: [
@@ -106,6 +106,11 @@ defmodule Pulsar.Reader do
       type: :timeout,
       default: 60_000,
       doc: "Milliseconds without a message after which the stream halts."
+    ],
+    startup_timeout: [
+      type: :timeout,
+      default: @default_startup_timeout,
+      doc: "Milliseconds to wait for topology discovery and consumer initialization."
     ],
     startup_delay_ms: [
       type: :non_neg_integer,
@@ -161,8 +166,9 @@ defmodule Pulsar.Reader do
   defp start_reader(topic, opts) do
     opts = validate_options!(opts)
 
-    with {:ok, state} <- start_consumer(topic, Keyword.fetch!(opts, :client), opts) do
-      state
+    case start_consumer(topic, Keyword.fetch!(opts, :client), opts) do
+      {:ok, state} -> state
+      {:error, _reason} = error -> error
     end
   end
 
@@ -173,6 +179,7 @@ defmodule Pulsar.Reader do
     start_timestamp = Keyword.get(opts, :start_timestamp)
     read_compacted = Keyword.get(opts, :read_compacted, false)
     timeout = Keyword.get(opts, :timeout, 60_000)
+    startup_timeout = Keyword.fetch!(opts, :startup_timeout)
     startup_delay_ms = Keyword.get(opts, :startup_delay_ms, 0)
     startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, 0)
 
@@ -183,6 +190,7 @@ defmodule Pulsar.Reader do
       client: client_name,
       subscription_type: :Exclusive,
       durable: false,
+      consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
       flow_initial: 0,
@@ -198,33 +206,40 @@ defmodule Pulsar.Reader do
       |> maybe_put(:start_timestamp, start_timestamp)
 
     case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
-      {:ok, consumer_group_pid} ->
-        {:ok, build_reader_state(consumer_group_pid, reader_ref, client_name, flow_permits, timeout)}
+      {:ok, consumer} ->
+        case build_reader_state(consumer, reader_ref, flow_permits, timeout, startup_timeout) do
+          {:ok, state} ->
+            {:ok, state}
+
+          {:error, _reason} = error ->
+            stop_consumer(consumer)
+            error
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp build_reader_state(consumer_group_pid, reader_ref, client_name, flow_permits, timeout) do
-    consumer_pids = wait_for_consumers_ready(consumer_group_pid, reader_ref)
+  defp build_reader_state(consumer, reader_ref, flow_permits, timeout, startup_timeout) do
+    deadline = deadline(startup_timeout)
 
-    Enum.each(consumer_pids, fn pid ->
-      :ok = Consumer.send_flow(pid, flow_permits)
-    end)
+    with {:ok, expected_count} <- wait_for_topology(consumer, deadline),
+         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, expected_count, deadline),
+         :ok <- Consumer.send_flow(consumer, flow_permits) do
+      permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
-    permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
-
-    %{
-      consumer_pids: consumer_pids,
-      consumer_group_pid: consumer_group_pid,
-      client_name: client_name,
-      flow_permits: flow_permits,
-      permits_by_consumer: permits_by_consumer,
-      timeout: timeout,
-      reader_ref: reader_ref,
-      buffer: :queue.new()
-    }
+      {:ok,
+       %{
+         consumer_pids: consumer_pids,
+         consumer_group_pid: consumer,
+         flow_permits: flow_permits,
+         permits_by_consumer: permits_by_consumer,
+         timeout: timeout,
+         reader_ref: reader_ref,
+         buffer: :queue.new()
+       }}
+    end
   end
 
   defp next_message({:error, reason}) do
@@ -302,20 +317,108 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_consumers_ready(consumer_group_pid, reader_ref) do
-    expected_count = length(Topology.workers(consumer_group_pid, include_all: true))
-    collect_ready_messages(expected_count, [], 5_000, reader_ref)
+  defp wait_for_topology(consumer, deadline) do
+    case Consumer.partitions(consumer) do
+      partitions when is_integer(partitions) ->
+        {:ok, max(partitions, 1)}
+
+      {:error, :not_ready} ->
+        retry_topology(consumer, deadline)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp collect_ready_messages(0, pids, _timeout, _reader_ref), do: pids
+  defp retry_topology(consumer, deadline) do
+    case remaining(deadline) do
+      0 ->
+        {:error, :reader_start_timeout}
 
-  defp collect_ready_messages(remaining, pids, timeout, reader_ref) do
-    receive do
-      {:reader_ready, ^reader_ref, pid} ->
-        collect_ready_messages(remaining - 1, [pid | pids], timeout, reader_ref)
-    after
-      timeout ->
-        raise "Reader failed to start: expected #{remaining + length(pids)} consumers, got #{length(pids)} within #{timeout}ms"
+      remaining ->
+        Process.sleep(min_timeout(remaining, 25))
+        wait_for_topology(consumer, deadline)
     end
+  end
+
+  defp wait_for_consumers_ready(consumer, reader_ref, expected_count, deadline) do
+    collect_ready_messages(consumer, reader_ref, expected_count, %{}, deadline)
+  end
+
+  defp collect_ready_messages(consumer, reader_ref, expected_count, ready, deadline) do
+    case ready_consumers(consumer, expected_count, ready) do
+      {:ok, consumers} ->
+        {:ok, consumers}
+
+      {:waiting, expected_count} ->
+        receive_ready(consumer, reader_ref, expected_count, ready, deadline)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp ready_consumers(consumer, expected_count, ready) do
+    case Consumer.partitions(consumer) do
+      partitions when is_integer(partitions) ->
+        current_ready_consumers(consumer, max(partitions, 1), ready)
+
+      {:error, :not_ready} ->
+        {:waiting, expected_count}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp current_ready_consumers(consumer, expected_count, ready) do
+    case Consumer.workers(consumer) do
+      consumers when is_list(consumers) ->
+        if length(consumers) == expected_count and Enum.all?(consumers, &Map.has_key?(ready, &1)) do
+          {:ok, consumers}
+        else
+          {:waiting, expected_count}
+        end
+
+      {:error, :not_ready} ->
+        {:waiting, expected_count}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp receive_ready(consumer, reader_ref, expected_count, ready, deadline) do
+    case remaining(deadline) do
+      0 ->
+        {:error, :reader_start_timeout}
+
+      timeout ->
+        receive do
+          {:reader_ready, ^reader_ref, pid} ->
+            ready = Map.put(ready, pid, true)
+            collect_ready_messages(consumer, reader_ref, expected_count, ready, deadline)
+        after
+          timeout -> {:error, :reader_start_timeout}
+        end
+    end
+  end
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp remaining(:infinity), do: :infinity
+
+  defp remaining(deadline) do
+    max(deadline - System.monotonic_time(:millisecond), 0)
+  end
+
+  defp min_timeout(:infinity, timeout), do: timeout
+  defp min_timeout(remaining, timeout), do: min(remaining, timeout)
+
+  defp stop_consumer(consumer) do
+    Consumer.stop(consumer)
+  catch
+    :exit, _reason -> :ok
   end
 end

@@ -51,8 +51,8 @@ defmodule Pulsar.ClientTest do
     test "defaults to none" do
       start_supervised!({Client, name: :no_resources, host: "pulsar://127.0.0.1:1"})
 
-      assert DynamicSupervisor.which_children(Client.consumer_supervisor(:no_resources)) == []
-      assert DynamicSupervisor.which_children(Client.producer_supervisor(:no_resources)) == []
+      assert Client.consumers(:no_resources) == []
+      assert Client.producers(:no_resources) == []
     end
 
     test "rejects a consumer option the consumer schema does not accept" do
@@ -144,6 +144,8 @@ defmodule Pulsar.ClientTest do
       assert Pulsar.Producer.lookup(:absent, client: :never_started) == {:error, :not_found}
       assert Pulsar.Consumer.lookup("absent", client: :never_started) == {:error, :not_found}
       assert Client.lookup_broker("pulsar://127.0.0.1:6650", client: :never_started) == {:error, :not_found}
+      assert Client.consumers(:never_started) == []
+      assert Client.producers(:never_started) == []
     end
 
     test "send and stop keep their contracts" do
@@ -187,6 +189,8 @@ defmodule Pulsar.ClientTest do
 
       assert Pulsar.Producer.lookup(:async_producer, client: client) == {:ok, producer}
       assert Pulsar.Consumer.lookup(:async_consumer, client: client) == {:ok, consumer}
+      assert Client.producers(client) == [producer]
+      assert Client.consumers(client) == [consumer]
 
       assert Pulsar.Producer.workers(producer) == {:error, :not_ready}
       assert Pulsar.Producer.partitions(producer) == {:error, :not_ready}
@@ -196,6 +200,18 @@ defmodule Pulsar.ClientTest do
       assert Pulsar.Consumer.partitions(consumer) == {:error, :not_ready}
       assert Pulsar.Consumer.topic(consumer) == {:error, :not_ready}
       assert Pulsar.Consumer.send_flow(consumer, 1) == {:error, :not_ready}
+    end
+
+    test "a reader reports a startup timeout and removes its consumer" do
+      client = :reader_unavailable
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1"})
+
+      assert [{:error, :reader_start_timeout}] =
+               "persistent://public/default/reader"
+               |> Pulsar.Reader.stream(client: client, startup_timeout: 50)
+               |> Enum.take(1)
+
+      assert Client.consumers(client) == []
     end
   end
 
