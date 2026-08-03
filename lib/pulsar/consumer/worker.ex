@@ -478,7 +478,7 @@ defmodule Pulsar.Consumer.Worker do
   defp divert(%__MODULE__{max_redelivery: nil}, _messages), do: :deliver
   defp divert(%__MODULE__{dead_letter_root: nil}, _messages), do: :deliver
 
-  defp divert(state, messages) do
+  defp divert(%__MODULE__{} = state, messages) do
     redelivery_count = batch_redelivery_count(messages)
 
     if redelivery_count >= state.max_redelivery, do: {:divert, redelivery_count}, else: :deliver
@@ -502,13 +502,12 @@ defmodule Pulsar.Consumer.Worker do
     # Resolved once for the delivery: this is a call into the topology root, which is also the
     # supervisor discovery adds partitions to.
     producer = DeadLetter.producer(state.dead_letter_root)
-    origin = [client: state.client, topic: state.topic]
 
     {diverted, nacked_ids, reason} =
       Enum.reduce(messages, {0, [], nil}, fn %Pulsar.Message{} = message, {diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
-        case publish_to_dead_letter(producer, message, origin) do
+        case publish_to_dead_letter(producer, message, state.topic) do
           :ok ->
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
@@ -543,8 +542,11 @@ defmodule Pulsar.Consumer.Worker do
     track_nacked(state, nacked_ids)
   end
 
-  defp publish_to_dead_letter({:ok, producer}, message, origin), do: DeadLetter.divert(producer, message, origin)
-  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin), do: error
+  defp publish_to_dead_letter({:ok, producer}, message, origin_topic) do
+    DeadLetter.divert(producer, message, origin_topic)
+  end
+
+  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin_topic), do: error
 
   defp dead_letter_metadata(state, redelivery_count) do
     state
@@ -586,7 +588,7 @@ defmodule Pulsar.Consumer.Worker do
     state
   end
 
-  defp track_nacked(state, nacked_ids) do
+  defp track_nacked(%__MODULE__{} = state, nacked_ids) do
     %{state | nacked_messages: MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))}
   end
 

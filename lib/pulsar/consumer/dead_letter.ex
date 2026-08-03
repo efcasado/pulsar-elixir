@@ -72,18 +72,15 @@ defmodule Pulsar.Consumer.DeadLetter do
   @doc """
   Publishes one message to the dead letter topic, carrying what identifies it.
 
-  `origin` is the consumer this message failed on: its `:client` and the `:topic` it was consumed
-  from, which is the partition for a partitioned consumer.
-
-  The key is preserved, so a `:key_shared` dead letter consumer partitions as the origin did.
+  `origin_topic` is where the message was consumed from, which is the partition for a partitioned
+  consumer. The key is preserved, so a `:key_shared` dead letter consumer partitions as it did.
   """
-  @spec divert(pid(), Message.t(), keyword()) :: :ok | {:error, term()}
-  def divert(producer, %Message{} = message, origin) do
+  @spec divert(pid(), Message.t(), String.t()) :: :ok | {:error, term()}
+  def divert(producer, %Message{} = message, origin_topic) do
     opts = [
-      client: Keyword.fetch!(origin, :client),
       partition_key: Message.key(message),
       ordering_key: Message.ordering_key(message),
-      properties: origin_properties(Keyword.fetch!(origin, :topic), message),
+      properties: origin_properties(origin_topic, message),
       event_time: Message.event_time(message)
     ]
 
