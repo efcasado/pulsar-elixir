@@ -172,7 +172,7 @@ defmodule Pulsar.Consumer.Worker do
         dead_letter_topic: dead_letter_topic
     }
 
-    Logger.info("Starting consumer for topic #{state.topic}")
+    Logger.debug("Starting consumer for topic #{state.topic}")
 
     init_args = Keyword.fetch!(opts, :init_args)
 

@@ -137,9 +137,9 @@ defmodule Pulsar.Producer.Worker do
     }
 
     if is_nil(topic_epoch) do
-      Logger.info("Starting producer #{producer_id} for topic #{topic}")
+      Logger.debug("Starting producer #{producer_id} for topic #{topic}")
     else
-      Logger.info("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
+      Logger.debug("Starting producer #{producer_id} for topic #{topic} (restoring topic_epoch: #{topic_epoch})")
     end
 
     startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)

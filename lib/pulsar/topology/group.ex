@@ -15,7 +15,7 @@ defmodule Pulsar.Topology.Group do
     name = Keyword.fetch!(opts, :name)
     count = Keyword.fetch!(opts, count_key)
 
-    Logger.info(
+    Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
     )
 

@@ -289,7 +289,7 @@ defmodule Pulsar.Topology do
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
 
-    Logger.info("Starting #{inspect(worker)} topology for topic #{topic}")
+    Logger.debug("Starting #{inspect(worker)} topology for topic #{topic}")
 
     discovery = Discovery.child_spec({self(), config, controller_opts})
 

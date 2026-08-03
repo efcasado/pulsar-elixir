@@ -137,10 +137,15 @@ defmodule Pulsar.Topology.Discovery do
 
         changed? = outcome.added_groups != [] or outcome.revived_groups != []
 
-        if state.status != :initializing and changed? do
-          Logger.info("Topology reconciliation for #{state.topic} changed topology: #{summary}")
-        else
-          Logger.debug("Topology reconciliation for #{state.topic} completed: #{summary}")
+        cond do
+          state.status == :initializing ->
+            Logger.info("Topology for #{state.topic} is ready: #{summary}")
+
+          changed? ->
+            Logger.info("Topology reconciliation for #{state.topic} changed topology: #{summary}")
+
+          true ->
+            Logger.debug("Topology reconciliation for #{state.topic} completed: #{summary}")
         end
 
         result
