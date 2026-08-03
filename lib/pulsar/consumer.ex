@@ -24,7 +24,6 @@ defmodule Pulsar.Consumer do
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
-  alias Pulsar.Topic
   alias Pulsar.Topology
 
   @doc false
@@ -56,7 +55,7 @@ defmodule Pulsar.Consumer do
   ones known up front: a consumer added here is not recreated if the client restarts.
 
   Returns once the stable consumer supervisor has been registered. Topic discovery and
-  worker initialization continue asynchronously; inspection and flow operations return
+  worker initialization continue asynchronously; worker-dependent operations return
   `{:error, :not_ready}` until discovery completes.
   """
   @spec start(keyword()) :: DynamicSupervisor.on_start_child()
@@ -165,13 +164,17 @@ defmodule Pulsar.Consumer do
 
   Only needed when `:flow_initial` is `0`, which turns off automatic flow control.
 
-  Takes the stable consumer root, one of its worker pids, or its name. Every worker behind a
-  root is granted the permits, and the first refusal is returned — retrying by name is safe,
+  Takes the stable consumer root, one of its worker pids, or its name. Every live worker behind
+  a root is granted the permits, and the first refusal is returned — retrying by name is safe,
   since a worker that already holds permits is only over-credited, and a worker that refused
-  has usually been replaced by one with a different pid.
+  has usually been replaced by one with a different pid. If a configured group has no live
+  worker, the other groups are granted permits before `{:error, :no_consumers_available}` is
+  returned.
 
   A consumer with no workers is an error rather than a silent success: nothing was granted,
-  so nothing will be delivered.
+  so nothing will be delivered. Permits belong to individual worker instances; a replacement
+  starts with the configured `:flow_initial` and therefore needs another grant when that value
+  is `0`.
   """
   @spec send_flow(pid() | String.t() | atom(), pos_integer(), keyword()) :: :ok | {:error, term()}
   def send_flow(consumer, permits, opts \\ [])
@@ -187,7 +190,7 @@ defmodule Pulsar.Consumer do
       :topology ->
         case topology_workers(consumer) do
           :initializing -> {:error, :not_ready}
-          {:ready, workers} -> grant_all(workers, permits)
+          {:ready, workers, unavailable?} -> grant_all(workers, permits, unavailable?)
         end
     end
   catch
@@ -211,6 +214,13 @@ defmodule Pulsar.Consumer do
     |> Enum.find(:ok, &(&1 != :ok))
   end
 
+  defp grant_all(workers, permits, unavailable?) do
+    case grant_all(workers, permits) do
+      :ok when unavailable? -> {:error, :no_consumers_available}
+      result -> result
+    end
+  end
+
   # A worker listed a moment ago can be gone by the time it is called, which exits rather than
   # answering; that is a failure to report, not one to propagate.
   defp grant(worker, permits) do
@@ -222,10 +232,14 @@ defmodule Pulsar.Consumer do
   @doc """
   Returns the topic a consumer is subscribed to.
 
-  Takes the stable root returned by `start/1` and reports the logical topic across all
-  partitions.
+  A stable root returns the topic it was configured with. This remains the exact topic for a
+  consumer started on a concrete partition such as `topic-partition-3`; a root that discovered
+  a partitioned base topic returns that base topic.
+
+  A worker returns its resolved topic, which is the concrete partition for a partitioned
+  consumer.
   """
-  @spec topic(pid()) :: String.t() | {:error, :not_found | :not_ready}
+  @spec topic(pid()) :: String.t() | {:error, :not_found}
   def topic(consumer) do
     case Topology.kind(consumer) do
       :worker ->
@@ -235,25 +249,10 @@ defmodule Pulsar.Consumer do
         worker_topic(consumer)
 
       :topology ->
-        topology_topic(consumer)
+        Topology.topic(consumer)
     end
   catch
     :exit, _reason -> {:error, :not_found}
-  end
-
-  defp topology_topic(consumer) do
-    case topology_workers(consumer) do
-      :initializing ->
-        {:error, :not_ready}
-
-      {:ready, [worker | _rest]} ->
-        worker
-        |> Worker.topic()
-        |> Topic.base()
-
-      {:ready, []} ->
-        {:error, :not_found}
-    end
   end
 
   # Initial discovery has no groups. Once constructed, their child ids remain present while
@@ -264,13 +263,13 @@ defmodule Pulsar.Consumer do
         :initializing
 
       groups ->
-        workers =
-          Enum.flat_map(groups, fn
+        workers_by_group =
+          Enum.map(groups, fn
             {_index, group} when is_pid(group) -> Topology.workers(group)
             {_index, _not_running} -> []
           end)
 
-        {:ready, workers}
+        {:ready, List.flatten(workers_by_group), Enum.any?(workers_by_group, &(&1 == []))}
     end
   end
 

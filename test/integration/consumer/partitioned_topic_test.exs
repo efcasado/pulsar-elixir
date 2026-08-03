@@ -130,6 +130,67 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(partitioned)
   end
 
+  test "topic/1 preserves a concrete partition supplied by the caller" do
+    partition_topic = Pulsar.Topic.partition(@topic, 0)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(
+        partition_topic,
+        "explicit-partition-topic",
+        @consumer_callback,
+        subscription_options(1)
+      )
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+    assert Pulsar.Consumer.topic(consumer) == partition_topic
+
+    assert [worker] =
+             Utils.wait_for(fn -> Topology.workers(consumer) end,
+               until: &match?([_worker], &1),
+               description: "explicit partition consumer to start"
+             )
+
+    assert Pulsar.Consumer.topic(worker) == partition_topic
+
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
+  test "send_flow/2 reports an unavailable partition after granting the live ones" do
+    test_id = :erlang.unique_integer([:positive])
+    topic = "persistent://public/default/partial-flow-#{test_id}"
+    System.create_topic(topic, 3)
+
+    opts =
+      1
+      |> subscription_options()
+      |> Keyword.put(:flow_initial, 0)
+      |> Keyword.put(:partition_discovery_interval_ms, false)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(topic, "partial-flow-#{test_id}", @consumer_callback, opts)
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+
+    workers =
+      Utils.wait_for(fn -> Topology.workers(consumer) end,
+        until: fn workers ->
+          length(workers) == 3 and Enum.all?(workers, &(not is_nil(:sys.get_state(&1).consumer_id)))
+        end,
+        description: "partition consumers to subscribe"
+      )
+
+    [{partition, _group} | _rest] = Topology.groups(consumer)
+    :ok = Supervisor.terminate_child(consumer, {:partition, partition})
+
+    live_workers = Topology.workers(consumer)
+    assert length(live_workers) == 2
+    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer, 1)
+    assert Enum.all?(live_workers, &(:sys.get_state(&1).flow_outstanding_permits == 1))
+
+    refute length(workers) == length(live_workers)
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
   defp subscription_options(count) do
     [
       client: @client,

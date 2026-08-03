@@ -231,7 +231,7 @@ defmodule Pulsar.ClientTest do
 
       assert Pulsar.Producer.send(producer, "payload") == {:error, :not_ready}
 
-      assert Pulsar.Consumer.topic(consumer) == {:error, :not_ready}
+      assert Pulsar.Consumer.topic(consumer) == "persistent://public/default/consumer"
       assert Pulsar.Consumer.send_flow(consumer, 1) == {:error, :not_ready}
     end
 

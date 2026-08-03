@@ -225,8 +225,8 @@ defmodule Pulsar.Reader do
     startup_deadline = deadline(startup_timeout)
 
     with :ok <- wait_for_topology(consumer, startup_deadline),
-         {:ok, consumer_pids} <- wait_for_consumers_ready(consumer, reader_ref, startup_deadline),
-         :ok <- Consumer.send_flow(consumer, flow_permits) do
+         {:ok, consumer_pids} <-
+           wait_for_consumers_ready(consumer, reader_ref, flow_permits, startup_deadline) do
       permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
       {:ok,
@@ -317,8 +317,32 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_consumers_ready(consumer, reader_ref, startup_deadline) do
-    collect_ready_messages(consumer, reader_ref, %{}, startup_deadline)
+  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, startup_deadline) do
+    wait_for_consumers_ready(consumer, reader_ref, flow_permits, %{}, startup_deadline)
+  end
+
+  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, ready, startup_deadline) do
+    case collect_ready_messages(consumer, reader_ref, ready, startup_deadline) do
+      {:ok, consumer_pids} ->
+        grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, startup_deadline)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, startup_deadline) do
+    case Consumer.send_flow(consumer, flow_permits) do
+      :ok ->
+        {:ok, consumer_pids}
+
+      {:error, :no_consumers_available} ->
+        ready = Map.new(consumer_pids, &{&1, true})
+        wait_for_consumers_ready(consumer, reader_ref, flow_permits, ready, startup_deadline)
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   defp collect_ready_messages(consumer, reader_ref, ready, startup_deadline) do

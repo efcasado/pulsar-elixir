@@ -358,7 +358,7 @@ defmodule Pulsar.TopologyTest do
                   {
                     {:error, :no_producers_available},
                     {:error, :no_consumers_available},
-                    {:error, :not_found}
+                    @topic
                   }}
       after
         send(discovery, :resolve)

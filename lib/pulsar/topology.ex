@@ -149,7 +149,20 @@ defmodule Pulsar.Topology do
     root
     |> Supervisor.which_children()
     |> Enum.find_value({:error, :not_found}, fn
-      {Discovery, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
+      {{Discovery, _topic}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
+      _child -> false
+    end)
+  catch
+    :exit, _reason -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec topic(pid()) :: String.t() | {:error, :not_found}
+  def topic(root) do
+    root
+    |> Supervisor.which_children()
+    |> Enum.find_value({:error, :not_found}, fn
+      {{Discovery, topic}, _pid, :worker, [Discovery]} -> topic
       _child -> false
     end)
   catch
@@ -295,7 +308,10 @@ defmodule Pulsar.Topology do
 
     Logger.debug("Starting #{inspect(worker)} topology for topic #{topic}")
 
-    discovery = Discovery.child_spec({self(), config, controller_opts})
+    discovery =
+      {self(), config, controller_opts}
+      |> Discovery.child_spec()
+      |> Map.put(:id, {Discovery, topic})
 
     Supervisor.init([discovery], [strategy: :one_for_one] ++ restart_intensity())
   end

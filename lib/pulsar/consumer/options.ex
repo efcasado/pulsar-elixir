@@ -50,7 +50,8 @@ defmodule Pulsar.Consumer.Options do
       default: 100,
       doc: """
       Permits granted to the broker on subscribe. `0` disables automatic flow control,
-      leaving it to `Pulsar.Consumer.send_flow/2`.
+      leaving it to `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
+      replacement workers also start with `0` and must be granted permits again.
       """
     ],
     flow_threshold: [
