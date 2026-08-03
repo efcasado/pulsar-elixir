@@ -205,6 +205,7 @@ defmodule Pulsar.Topology.Discovery do
     {:noreply, state}
   end
 
+  defp schedule_discovery(%{desired: 0} = state), do: state
   defp schedule_discovery(%{discovery_interval: false} = state), do: state
 
   defp schedule_discovery(state) do

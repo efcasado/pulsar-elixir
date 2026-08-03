@@ -196,7 +196,7 @@ defmodule Pulsar.TopologyTest do
            [:pulsar, :topology, :discovery, :stop],
            [:pulsar, :topology, :reconciliation, :stop]
          ]
-    test "locally revives a non-partitioned group when metadata polling is disabled" do
+    test "stops metadata polling for a non-partitioned topic while local reconciliation continues" do
       test_pid = self()
       topic = "#{@topic}-local-reconciliation"
 
@@ -208,7 +208,7 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} =
         start_async_topology(
           resolver,
-          [topic: topic, name: "#{topic}-producer", partition_discovery_interval_ms: false],
+          [topic: topic, name: "#{topic}-producer", partition_discovery_interval_ms: 10],
           reconciliation_interval_ms: 250
         )
 
@@ -296,20 +296,20 @@ defmodule Pulsar.TopologyTest do
       resolver = fn _topic, _opts ->
         case Agent.get_and_update(resolutions, &{&1, &1 + 1}) do
           0 ->
-            {:ok, 0}
+            {:ok, 1}
 
           _later ->
             send(test_pid, {:resolution_started, self()})
 
             receive do
-              :resolve -> {:ok, 0}
+              :resolve -> {:ok, 1}
             end
         end
       end
 
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
+      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 1}} end, 100, 10)
       assert_receive {:resolution_started, discovery}, 1_000
 
       operations =
