@@ -238,6 +238,17 @@ defmodule Pulsar.Client do
   ## Process Name Helpers
 
   @doc false
+  @spec name(atom() | pid()) :: {:ok, atom()} | {:error, :not_found}
+  def name(name) when is_atom(name), do: {:ok, name}
+
+  def name(pid) when is_pid(pid) do
+    case Process.info(pid, :registered_name) do
+      {:registered_name, name} when is_atom(name) -> {:ok, name}
+      _not_registered -> {:error, :not_found}
+    end
+  end
+
+  @doc false
   def broker_registry(client_name) do
     Module.concat([__MODULE__, client_name, BrokerRegistry])
   end

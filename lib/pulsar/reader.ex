@@ -68,7 +68,6 @@ defmodule Pulsar.Reader do
   - The stream is halted by downstream processing
   """
 
-  alias Pulsar.Backoff
   alias Pulsar.Consumer
   alias Pulsar.Topology
 
@@ -312,16 +311,9 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_topology(consumer, startup_deadline) do
-    case Backoff.run(
-           fn -> expected_consumer_count(consumer) end,
-           &(&1 == :initializing),
-           remaining(startup_deadline)
-         ) do
-      {:error, :initializing} ->
-        {:error, :reader_start_timeout}
-
-      {:ok, _expected_count} ->
-        :ok
+    case Topology.await_ready(consumer, remaining(startup_deadline)) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :reader_start_timeout}
     end
   end
 
@@ -350,10 +342,9 @@ defmodule Pulsar.Reader do
   end
 
   defp expected_consumer_count(consumer) do
-    case Topology.status(consumer) do
-      {:ready, :non_partitioned} -> {:ok, 1}
-      {:ready, {:partitioned, partitions}} -> {:ok, partitions}
-      :initializing -> {:error, :initializing}
+    case Topology.groups(consumer) do
+      [] -> {:error, :initializing}
+      groups -> {:ok, length(groups)}
     end
   end
 

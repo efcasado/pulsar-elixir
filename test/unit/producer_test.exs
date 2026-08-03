@@ -3,6 +3,21 @@ defmodule Pulsar.ProducerTest do
 
   alias Pulsar.Producer
 
+  describe "await_ready/2" do
+    test "reports a missing named producer after the wait" do
+      assert Producer.await_ready(:missing, client: :producer_missing_client, timeout: 0) ==
+               {:error, :producer_not_found}
+    end
+
+    test "reports a stale producer pid" do
+      producer = spawn(fn -> :ok end)
+      ref = Process.monitor(producer)
+      assert_receive {:DOWN, ^ref, :process, ^producer, _reason}
+
+      assert Producer.await_ready(producer, timeout: 25) == {:error, :producer_not_found}
+    end
+  end
+
   describe "send/3" do
     test "accepts atom and string names" do
       opts = [client: :producer_send_missing_client]

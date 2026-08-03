@@ -76,7 +76,12 @@ Supervisor.start_link(children, strategy: :one_for_one)
 The client is the only thing your tree holds; consumers and producers run under it. Sets
 only known at runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
 Resource initialization is asynchronous, so operations may temporarily return
-`{:error, :not_ready}`.
+`{:error, :not_ready}`. Call `Pulsar.Consumer.await_ready/2` or
+`Pulsar.Producer.await_ready/2` when work must wait for initial topic discovery:
+
+```elixir
+:ok = Pulsar.Producer.await_ready(:my_producer, timeout: 10_000)
+```
 
 Sending a message using the configured producer can be done as follows:
 

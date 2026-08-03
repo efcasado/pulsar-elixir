@@ -4,6 +4,23 @@ defmodule Pulsar.ConsumerTest do
   alias Pulsar.Consumer
   alias Pulsar.Topology.Group
 
+  describe "await_ready/2" do
+    test "reports a missing named consumer after the wait" do
+      assert Consumer.await_ready(:missing, client: :consumer_missing_client, timeout: 0) ==
+               {:error, :consumer_not_found}
+    end
+
+    test "reports a stale consumer pid" do
+      assert Consumer.await_ready(dead_pid(), timeout: 25) == {:error, :consumer_not_found}
+    end
+
+    test "validates its options" do
+      assert_raise NimbleOptions.ValidationError, fn ->
+        Consumer.await_ready(:consumer, timeout: :soon)
+      end
+    end
+  end
+
   describe "topic/1" do
     test "returns not found for a stale worker pid" do
       consumer = dead_pid()

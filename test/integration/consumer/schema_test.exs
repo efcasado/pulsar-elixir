@@ -63,7 +63,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         schema: [type: :Int32]
       )
 
-    :ok = Utils.wait_for(fn -> Topology.status(consumer_group) == {:ready, :non_partitioned} end)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
     :ok = Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
 
     assert Process.alive?(consumer_group)

@@ -44,6 +44,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         consumers: [
           [
             topic: @topic,
+            name: :supervision_tree_consumer,
             subscription_name: "supervision-tree-sub",
             callback_module: Handler,
             initial_position: :earliest,
@@ -52,11 +53,14 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         ]
       )
 
-    assert [_client] = Supervisor.which_children(supervisor)
+    assert [{_id, client_pid, :supervisor, _modules}] = Supervisor.which_children(supervisor)
 
-    # Declared resources are started off the client's boot, so the client is up before they are.
-    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
-    :ok = Utils.wait_for(fn -> match?([_consumer], Client.consumers(client)) end)
+    # Declared resources are started off the client's boot, so these waits also cover the
+    # interval before Bootstrap has registered their names.
+    assert :ok = Pulsar.Producer.await_ready(:supervision_tree_producer, client: client_pid)
+    assert :ok = Pulsar.Consumer.await_ready(:supervision_tree_consumer, client: client)
+    assert [_producer] = Client.producers(client)
+    assert [_consumer] = Client.consumers(client)
 
     {:ok, _message_id} =
       Utils.wait_for(
@@ -75,6 +79,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         consumers: [
           [
             topic: @topic,
+            name: :supervision_tree_restart_consumer,
             subscription_name: "supervision-tree-restart-sub",
             callback_module: Handler,
             initial_position: :earliest,
@@ -83,7 +88,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
         ]
       )
 
-    :ok = Utils.wait_for(fn -> match?([_consumer], Client.consumers(client)) end)
+    :ok = Pulsar.Consumer.await_ready(:supervision_tree_restart_consumer, client: client)
     [before] = Client.consumers(client)
 
     # Not Process.exit/2: a supervisor traps exits, so an abnormal signal is ignored and
@@ -93,10 +98,9 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     Supervisor.stop(client, :shutdown)
     assert_receive {:DOWN, ^ref, :process, _, :shutdown}, 5_000
 
-    :ok =
-      Utils.wait_for(fn ->
-        match?([pid] when is_pid(pid) and pid != before, Client.consumers(client))
-      end)
+    :ok = Pulsar.Consumer.await_ready(:supervision_tree_restart_consumer, client: client)
+    [after_restart] = Client.consumers(client)
+    refute after_restart == before
 
     assert [_client] = Supervisor.which_children(supervisor)
   end
@@ -110,7 +114,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     # this kind shows whether the branches are genuinely independent.
     {:ok, _producer} = Pulsar.Producer.start(topic: @topic, name: :isolation_producer, client: client)
 
-    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
+    :ok = Pulsar.Producer.await_ready(:isolation_producer, client: client)
 
     assert {:ok, _message_id} =
              Utils.wait_for(
@@ -125,7 +129,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     Supervisor.stop(branch, :shutdown)
     assert_receive {:DOWN, ^ref, :process, _pid, :shutdown}, 5_000
 
-    :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
+    :ok = Pulsar.Producer.await_ready(:isolation_producer, client: client)
     assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "after", client: client)
 
     assert [_client] = Supervisor.which_children(supervisor)

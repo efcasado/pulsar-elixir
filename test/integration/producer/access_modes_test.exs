@@ -82,7 +82,7 @@ defmodule Pulsar.Integration.AccessModesTest do
              )
 
     # Second producer should fail to register (fenced by the existing exclusive producer)
-    :ok = Utils.wait_for(fn -> Topology.status(group_pid_2) == {:ready, :non_partitioned} end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
     :ok = Utils.wait_for(fn -> Topology.workers(group_pid_2) == [] end)
 
     assert Process.alive?(group_pid_2)

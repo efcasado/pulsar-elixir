@@ -134,6 +134,37 @@ defmodule Pulsar.TopologyTest do
   end
 
   describe "asynchronous initialization" do
+    test "await_ready/2 waits for discovery and respects its timeout" do
+      test_pid = self()
+
+      resolver = fn _topic, _opts ->
+        send(test_pid, {:resolution_started, self()})
+
+        receive do
+          :resolve -> {:ok, 2}
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver)
+
+      assert_receive {:resolution_started, discovery}
+      assert Topology.await_ready(root, 25) == {:error, :timeout}
+
+      waiter = Task.async(fn -> Topology.await_ready(root, 1_000) end)
+      send(discovery, :resolve)
+
+      assert Task.await(waiter) == :ok
+      assert Topology.status(root) == {:ready, {:partitioned, 2}}
+    end
+
+    test "await_ready/2 rejects a stale pid" do
+      root = spawn(fn -> :ok end)
+      ref = Process.monitor(root)
+      assert_receive {:DOWN, ^ref, :process, ^root, _reason}
+
+      assert Topology.await_ready(root, 25) == {:error, :not_found}
+    end
+
     test "starts and registers the stable root before metadata resolves" do
       test_pid = self()
 

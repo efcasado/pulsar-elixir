@@ -8,7 +8,8 @@ defmodule Pulsar.Consumer do
 
   `start/1` adds a consumer to a running client and `stop/2` removes it. Operations target
   the logical consumer by its stable root or registered name without exposing its partition
-  workers.
+  workers. `await_ready/2` waits for its initial topic topology when an operation must not
+  observe asynchronous startup.
 
   `ack/2` and `nack/2` acknowledge manually, from a process other than the worker that
   delivered the message. `send_flow/3` grants permits to a worker or every worker behind
@@ -86,6 +87,28 @@ defmodule Pulsar.Consumer do
         callback_module: callback_module
       )
     )
+  end
+
+  @doc """
+  Waits for a consumer's initial topic topology to be ready.
+
+  Takes the stable root returned by `start/1` or its registered name. A named consumer is
+  resolved repeatedly, so this can be called immediately after starting a client whose
+  resources are declared asynchronously.
+
+  Readiness means initial topic discovery and topology construction have completed — the
+  point after which operations no longer return `{:error, :not_ready}`. It does not guarantee
+  continued broker availability or prevent a worker from restarting immediately afterward.
+
+  Options:
+
+  - `:timeout` - maximum time to wait in milliseconds, or `:infinity`; defaults to 5 seconds
+  - `:client` - client name or pid used to resolve a consumer name; defaults to `:default`
+  """
+  @spec await_ready(pid() | String.t() | atom(), keyword()) ::
+          :ok | {:error, :consumer_not_found | :timeout}
+  def await_ready(consumer, opts \\ []) do
+    consumer |> Topology.await_ready(:consumers, opts) |> await_result()
   end
 
   @doc """
@@ -265,6 +288,9 @@ defmodule Pulsar.Consumer do
       [] -> {:error, :not_found}
     end
   end
+
+  defp await_result({:error, :not_found}), do: {:error, :consumer_not_found}
+  defp await_result(result), do: result
 
   defp resolve(name, opts) do
     client = Keyword.get(opts, :client, @default_client)

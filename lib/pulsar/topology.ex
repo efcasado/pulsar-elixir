@@ -5,6 +5,7 @@ defmodule Pulsar.Topology do
 
   use Supervisor
 
+  alias Pulsar.Backoff
   alias Pulsar.Topic
   alias Pulsar.Topology.Discovery
   alias Pulsar.Topology.Group
@@ -20,6 +21,12 @@ defmodule Pulsar.Topology do
   # default as the final escalation boundary.
   @max_restarts 100
   @max_seconds 60
+  @status_timeout 5_000
+
+  @await_options_schema [
+    client: [type: {:or, [:atom, :pid]}, default: :default],
+    timeout: [type: :timeout, default: 5_000]
+  ]
 
   @doc false
   @spec restart_intensity() :: keyword()
@@ -46,11 +53,92 @@ defmodule Pulsar.Topology do
 
   @doc false
   @spec status(pid()) :: status()
-  def status(root) do
+  def status(root), do: status(root, @status_timeout)
+
+  @doc false
+  @spec await_options!(keyword()) :: keyword()
+  def await_options!(opts), do: NimbleOptions.validate!(opts, @await_options_schema)
+
+  @doc false
+  @spec await_ready(pid() | (-> {:ok, pid()} | {:error, :not_found}), timeout()) ::
+          :ok | {:error, :not_found | :timeout}
+  def await_ready(root, timeout) when is_pid(root) do
+    if topology_root?(root) do
+      await(fn -> {:ok, root} end, timeout, &(&1 == :not_ready))
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def await_ready(resolve, timeout) when is_function(resolve, 0) do
+    await(resolve, timeout, &(&1 in [:not_found, :not_ready]))
+  end
+
+  @doc false
+  @spec await_ready(pid() | String.t() | atom(), :consumers | :producers, keyword()) ::
+          :ok | {:error, :not_found | :timeout}
+  def await_ready(resource, kind, opts) when kind in [:consumers, :producers] do
+    opts = await_options!(opts)
+    timeout = Keyword.fetch!(opts, :timeout)
+
+    case resource do
+      root when is_pid(root) ->
+        await_ready(root, timeout)
+
+      name when is_binary(name) or is_atom(name) ->
+        resolve = fn -> resolve_resource(kind, name, Keyword.fetch!(opts, :client)) end
+        await_ready(resolve, timeout)
+    end
+  end
+
+  defp await(resolve, timeout, retryable?) do
+    deadline = deadline(timeout)
+
+    case Backoff.run(fn -> readiness(resolve, remaining(deadline)) end, retryable?, timeout) do
+      {:error, :not_ready} -> {:error, :timeout}
+      result -> result
+    end
+  end
+
+  defp readiness(resolve, timeout) do
+    case resolve.() do
+      {:ok, root} -> root_readiness(root, timeout)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp root_readiness(root, timeout) do
+    if topology_root?(root) do
+      case status(root, timeout) do
+        :initializing -> {:error, :not_ready}
+        {:ready, _shape} -> :ok
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp resolve_resource(kind, name, client) do
+    with {:ok, client_name} <- Pulsar.Client.name(client) do
+      Pulsar.Client.lookup(Pulsar.Client.registry(kind, client_name), name)
+    end
+  end
+
+  defp topology_root?(root), do: Process.alive?(root) and kind(root) == :topology
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp remaining(:infinity), do: :infinity
+  defp remaining(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  defp status(root, timeout) do
     case controller(root) do
-      {:ok, controller} -> call_controller(controller, :status, :initializing)
+      {:ok, controller} -> GenServer.call(controller, :status, timeout)
       _not_running -> :initializing
     end
+  catch
+    :exit, _reason -> :initializing
   end
 
   defp controller(root) do
@@ -62,12 +150,6 @@ defmodule Pulsar.Topology do
     end)
   catch
     :exit, _reason -> {:error, :not_found}
-  end
-
-  defp call_controller(controller, request, fallback) do
-    GenServer.call(controller, request)
-  catch
-    :exit, _reason -> fallback
   end
 
   # Discovery is also an OTP :worker child, so traversal explicitly allows only resource workers.

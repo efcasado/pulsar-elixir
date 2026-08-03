@@ -111,7 +111,8 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     {:ok, partitioned} =
       Pulsar.Consumer.start(@topic, "topic-at-every-level", @consumer_callback, subscription_options(1))
 
-    assert :ok = Utils.wait_for(fn -> Pulsar.Consumer.topic(partitioned) == @topic end)
+    assert :ok = Pulsar.Consumer.await_ready(partitioned)
+    assert Pulsar.Consumer.topic(partitioned) == @topic
 
     workers =
       Utils.wait_for(fn -> Topology.workers(partitioned) end,

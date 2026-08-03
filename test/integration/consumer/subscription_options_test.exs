@@ -281,7 +281,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, force_create_topic: false)
       )
 
-    :ok = Utils.wait_for(fn -> Topology.status(no_force_create_group) == {:ready, :non_partitioned} end)
+    :ok = Pulsar.Consumer.await_ready(no_force_create_group)
     :ok = Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
 
     assert Process.alive?(no_force_create_group)

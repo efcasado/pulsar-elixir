@@ -14,7 +14,8 @@ defmodule Pulsar.Producer do
 
   `start/1` adds a producer to a running client and `stop/2` removes it. Operations target
   the logical producer by its stable root or registered name without exposing its partition
-  workers.
+  workers. `await_ready/2` waits for its initial topic topology when an operation must not
+  observe asynchronous startup.
 
   ## Options
 
@@ -78,6 +79,28 @@ defmodule Pulsar.Producer do
   """
   @spec start(String.t(), keyword()) :: DynamicSupervisor.on_start_child()
   def start(topic, opts) when is_binary(topic), do: start(Keyword.put(opts, :topic, topic))
+
+  @doc """
+  Waits for a producer's initial topic topology to be ready.
+
+  Takes the stable root returned by `start/1` or its registered name. A named producer is
+  resolved repeatedly, so this can be called immediately after starting a client whose
+  resources are declared asynchronously.
+
+  Readiness means initial topic discovery and topology construction have completed — the
+  point after which publishing no longer returns `{:error, :not_ready}`. It does not guarantee
+  continued broker availability or prevent a worker from restarting immediately afterward.
+
+  Options:
+
+  - `:timeout` - maximum time to wait in milliseconds, or `:infinity`; defaults to 5 seconds
+  - `:client` - client name or pid used to resolve a producer name; defaults to `:default`
+  """
+  @spec await_ready(pid() | String.t() | atom(), keyword()) ::
+          :ok | {:error, :producer_not_found | :timeout}
+  def await_ready(producer, opts \\ []) do
+    producer |> Topology.await_ready(:producers, opts) |> await_result()
+  end
 
   @doc """
   Publishes a message, given a producer's pid or name.
@@ -181,6 +204,9 @@ defmodule Pulsar.Producer do
 
     Pulsar.Client.lookup(Pulsar.Client.registry(:producers, client), name)
   end
+
+  defp await_result({:error, :not_found}), do: {:error, :producer_not_found}
+  defp await_result(result), do: result
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.
