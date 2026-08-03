@@ -62,19 +62,8 @@ defmodule Pulsar.Topology do
   @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}
 
   @doc false
-  @spec await_ready(pid() | (-> {:ok, pid()} | {:error, :not_found}), timeout()) ::
-          :ok | {:error, :not_found | :timeout}
-  def await_ready(root, timeout) when is_pid(root) do
-    if topology_root?(root) do
-      await(fn -> {:ok, root} end, timeout, &(&1 == :not_ready))
-    else
-      {:error, :not_found}
-    end
-  end
-
-  def await_ready(resolve, timeout) when is_function(resolve, 0) do
-    await(resolve, timeout, &(&1 in [:not_found, :not_ready]))
-  end
+  @spec await_ready(pid(), timeout()) :: :ok | {:error, :not_found | :timeout}
+  def await_ready(root, timeout) when is_pid(root), do: await_resource(root, timeout, &topology_readiness/2)
 
   @doc false
   @spec await_ready(pid() | String.t() | atom(), :consumers | :producers, keyword()) ::
@@ -104,7 +93,7 @@ defmodule Pulsar.Topology do
 
   defp await_options!(opts), do: NimbleOptions.validate!(opts, @await_options_schema)
 
-  defp await(resolve, timeout, retryable?, readiness \\ &topology_readiness/2) do
+  defp await(resolve, timeout, retryable?, readiness) do
     deadline = deadline(timeout)
 
     case Backoff.run(fn -> readiness.(resolve, deadline) end, retryable?, timeout) do

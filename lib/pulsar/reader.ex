@@ -318,47 +318,59 @@ defmodule Pulsar.Reader do
   end
 
   defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, startup_deadline) do
-    wait_for_consumers_ready(consumer, reader_ref, flow_permits, %{}, startup_deadline)
+    tracker = %{ready: %{}, granted: MapSet.new()}
+    wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline)
   end
 
-  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, ready, startup_deadline) do
-    case collect_ready_messages(consumer, reader_ref, ready, startup_deadline) do
-      {:ok, consumer_pids} ->
-        grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, startup_deadline)
+  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline) do
+    case collect_ready_messages(consumer, reader_ref, tracker, startup_deadline) do
+      {:ok, consumer_pids, tracker} ->
+        grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, tracker, startup_deadline)
 
       {:error, _reason} = error ->
         error
     end
   end
 
-  defp grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, startup_deadline) do
-    case Consumer.send_flow(consumer, flow_permits) do
-      :ok ->
-        {:ok, consumer_pids}
+  defp grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, tracker, startup_deadline) do
+    {granted, failed} = grant_workers(consumer_pids, flow_permits, tracker.granted)
+    tracker = %{tracker | ready: Map.drop(tracker.ready, failed), granted: granted}
 
-      {:error, :no_consumers_available} ->
-        ready = Map.new(consumer_pids, &{&1, true})
-
-        case receive_ready(consumer, reader_ref, ready, startup_deadline) do
-          {:ok, replacement_pids} ->
-            grant_initial_flow(consumer, reader_ref, replacement_pids, flow_permits, startup_deadline)
-
-          {:error, _reason} = error ->
-            error
+    case ready_consumers(consumer, tracker.ready) do
+      {:ok, current_pids} ->
+        if Enum.all?(current_pids, &MapSet.member?(granted, &1)) do
+          {:ok, current_pids}
+        else
+          grant_initial_flow(consumer, reader_ref, current_pids, flow_permits, tracker, startup_deadline)
         end
 
-      {:error, _reason} = error ->
-        error
+      :waiting ->
+        wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline)
     end
   end
 
-  defp collect_ready_messages(consumer, reader_ref, ready, startup_deadline) do
-    case ready_consumers(consumer, ready) do
+  defp grant_workers(consumer_pids, flow_permits, granted) do
+    Enum.reduce(consumer_pids, {granted, []}, &grant_worker(&1, flow_permits, &2))
+  end
+
+  defp grant_worker(consumer_pid, flow_permits, {granted, failed}) do
+    if MapSet.member?(granted, consumer_pid) do
+      {granted, failed}
+    else
+      case Consumer.send_flow(consumer_pid, flow_permits) do
+        :ok -> {MapSet.put(granted, consumer_pid), failed}
+        {:error, _reason} -> {granted, [consumer_pid | failed]}
+      end
+    end
+  end
+
+  defp collect_ready_messages(consumer, reader_ref, tracker, startup_deadline) do
+    case ready_consumers(consumer, tracker.ready) do
       {:ok, consumers} ->
-        {:ok, consumers}
+        {:ok, consumers, tracker}
 
       :waiting ->
-        receive_ready(consumer, reader_ref, ready, startup_deadline)
+        receive_ready(consumer, reader_ref, tracker, startup_deadline)
     end
   end
 
@@ -389,7 +401,7 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp receive_ready(consumer, reader_ref, ready, startup_deadline) do
+  defp receive_ready(consumer, reader_ref, tracker, startup_deadline) do
     case remaining(startup_deadline) do
       0 ->
         {:error, :reader_start_timeout}
@@ -397,8 +409,8 @@ defmodule Pulsar.Reader do
       timeout ->
         receive do
           {:reader_ready, ^reader_ref, pid} ->
-            ready = Map.put(ready, pid, true)
-            collect_ready_messages(consumer, reader_ref, ready, startup_deadline)
+            tracker = %{tracker | ready: Map.put(tracker.ready, pid, true)}
+            collect_ready_messages(consumer, reader_ref, tracker, startup_deadline)
         after
           timeout -> {:error, :reader_start_timeout}
         end
