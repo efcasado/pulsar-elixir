@@ -28,8 +28,8 @@ defmodule Pulsar.ConsumerTest do
       assert Consumer.topic(consumer) == {:error, :not_found}
     end
 
-    test "returns not found when a group disappears during traversal" do
-      assert Consumer.topic(dying_group()) == {:error, :not_found}
+    test "rejects an internal group pid" do
+      assert Consumer.topic(group_pid()) == {:error, :not_found}
     end
   end
 
@@ -50,8 +50,8 @@ defmodule Pulsar.ConsumerTest do
       assert {:error, _reason} = Consumer.send_flow(dead_pid(), 1)
     end
 
-    test "returns an error when a group disappears during traversal" do
-      assert {:error, _reason} = Consumer.send_flow(dying_group(), 1)
+    test "rejects an internal group pid" do
+      assert Consumer.send_flow(group_pid(), 1) == {:error, :not_found}
     end
   end
 
@@ -75,18 +75,17 @@ defmodule Pulsar.ConsumerTest do
     pid
   end
 
-  # Topology.kind/1 identifies a group from its proc_lib initial call. This process exits
-  # when Supervisor.which_children/1 traverses it, making the otherwise narrow race deterministic.
-  defp dying_group do
+  defp group_pid do
     caller = self()
 
     pid =
       spawn(fn ->
+        caller_ref = Process.monitor(caller)
         Process.put(:"$initial_call", {:supervisor, Group, 1})
         send(caller, {:ready, self()})
 
         receive do
-          _message -> exit(:gone)
+          {:DOWN, ^caller_ref, :process, ^caller, _reason} -> :ok
         end
       end)
 

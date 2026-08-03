@@ -162,7 +162,10 @@ defmodule Pulsar.Producer do
       :worker ->
         Worker.send_message(producer, message, opts)
 
-      kind when kind in [:group, :topology] ->
+      :group ->
+        {:error, :not_found}
+
+      :topology ->
         route(Topology.groups(producer), message, opts)
     end
   catch

@@ -30,7 +30,7 @@ defmodule Pulsar.Backoff do
 
   `fun` returns `{:error, reason}` to fail and anything else to succeed. `budget` is how long
   retrying may take in total, in milliseconds, or `:infinity`; the error is returned unchanged
-  once `retryable?` rejects its reason or the next wait would outlast what is left of the budget.
+  once `retryable?` rejects its reason or the budget is exhausted.
 
   Blocks the calling process, so this is for a process with nothing else to do meanwhile —
   a worker resolving its own startup, not one that owes replies.
@@ -54,11 +54,8 @@ defmodule Pulsar.Backoff do
   defp run(fun, retryable?, deadline, backoff) do
     case fun.() do
       {:error, reason} = error ->
-        wait = next(backoff)
-
-        if retryable?.(reason) and within_budget?(deadline, wait) do
-          Process.sleep(wait)
-          run(fun, retryable?, deadline, wait)
+        if retryable?.(reason) do
+          retry(error, fun, retryable?, deadline, backoff)
         else
           error
         end
@@ -68,8 +65,27 @@ defmodule Pulsar.Backoff do
     end
   end
 
-  defp within_budget?(:infinity, _wait), do: true
-  defp within_budget?(deadline, wait), do: System.monotonic_time(:millisecond) + wait <= deadline
+  defp retry(error, fun, retryable?, deadline, backoff) do
+    wait = next(backoff)
+
+    case retry_wait(deadline, wait) do
+      :exhausted ->
+        error
+
+      retry_wait ->
+        Process.sleep(retry_wait)
+        run(fun, retryable?, deadline, wait)
+    end
+  end
+
+  defp retry_wait(:infinity, wait), do: wait
+
+  defp retry_wait(deadline, wait) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 -> min(wait, remaining)
+      _elapsed -> :exhausted
+    end
+  end
 
   defp retryable?({code, _message}), do: code in @retryable_errors
   defp retryable?(reason), do: reason in @retryable_errors

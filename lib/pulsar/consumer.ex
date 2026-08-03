@@ -194,7 +194,7 @@ defmodule Pulsar.Consumer do
         grant(consumer, permits)
 
       :group ->
-        grant_all(Topology.workers(consumer), permits)
+        {:error, :not_found}
 
       :topology ->
         case topology_workers(consumer) do
@@ -255,7 +255,7 @@ defmodule Pulsar.Consumer do
         Worker.topic(consumer)
 
       :group ->
-        worker_topic(consumer)
+        {:error, :not_found}
 
       :topology ->
         Topology.topic(consumer)
@@ -279,13 +279,6 @@ defmodule Pulsar.Consumer do
           end)
 
         {:ready, List.flatten(workers_by_group), Enum.any?(workers_by_group, &(&1 == []))}
-    end
-  end
-
-  defp worker_topic(supervisor) do
-    case Topology.workers(supervisor) do
-      [worker | _rest] -> Worker.topic(worker)
-      [] -> {:error, :not_found}
     end
   end
 

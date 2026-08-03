@@ -119,15 +119,16 @@ defmodule Pulsar.BackoffTest do
       assert Backoff.run(fn -> {:error, :transient} end, &retryable?/1, 200) == {:error, :transient}
     end
 
-    # The budget is what keeps a retrying worker from outliving the 5s a supervisor allows it
-    # for shutdown, so it bounds elapsed time rather than a count of attempts.
-    test "spends no longer than the budget it was given" do
+    # The final wait is capped rather than abandoned, so callers get the whole window they
+    # requested without an exponential step taking the retry past it.
+    test "uses the full budget without waiting a complete oversized backoff" do
       budget = 300
 
       {elapsed, {:error, :transient}} =
         :timer.tc(fn -> Backoff.run(fn -> {:error, :transient} end, &retryable?/1, budget) end, :millisecond)
 
-      assert elapsed <= budget
+      assert elapsed >= budget - 25
+      assert elapsed <= budget + 50
     end
 
     # The calls being retried carry their own multi-second timeouts, so a budget that charged

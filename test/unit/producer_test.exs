@@ -3,6 +3,7 @@ defmodule Pulsar.ProducerTest do
 
   alias Pulsar.Producer
   alias Pulsar.Topology
+  alias Pulsar.Topology.Group
 
   defmodule RoutingWorker do
     @moduledoc false
@@ -52,6 +53,10 @@ defmodule Pulsar.ProducerTest do
         assert_raise FunctionClauseError, fn -> send_message(Producer, producer, %{value: 1}) end
       end
     end
+
+    test "rejects an internal group pid" do
+      assert Producer.send(group_pid(), "payload") == {:error, :not_found}
+    end
   end
 
   describe "stop/2" do
@@ -84,6 +89,24 @@ defmodule Pulsar.ProducerTest do
   end
 
   defp send_message(module, producer, message), do: module.send(producer, message, [])
+
+  defp group_pid do
+    caller = self()
+
+    pid =
+      spawn(fn ->
+        caller_ref = Process.monitor(caller)
+        Process.put(:"$initial_call", {:supervisor, Group, 1})
+        send(caller, {:ready, self()})
+
+        receive do
+          {:DOWN, ^caller_ref, :process, ^caller, _reason} -> :ok
+        end
+      end)
+
+    assert_receive {:ready, ^pid}
+    pid
+  end
 
   defp start_routing_topology do
     test_pid = self()
