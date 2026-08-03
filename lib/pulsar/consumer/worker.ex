@@ -55,6 +55,7 @@ defmodule Pulsar.Consumer.Worker do
     :redelivery_interval,
     :max_redelivery,
     :dead_letter_root,
+    :dead_letter_topic,
     {:chunked_message_contexts, %{}},
     :max_pending_chunked_messages,
     :expire_incomplete_chunked_message_after,
@@ -88,6 +89,7 @@ defmodule Pulsar.Consumer.Worker do
           redelivery_interval: non_neg_integer() | nil,
           max_redelivery: non_neg_integer() | nil,
           dead_letter_root: pid() | nil,
+          dead_letter_topic: String.t() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
           expire_incomplete_chunked_message_after: non_neg_integer(),
@@ -390,13 +392,10 @@ defmodule Pulsar.Consumer.Worker do
     new_state = decrement_permits(new_state, permits_consumed)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
-    redelivery_count = batch_redelivery_count(messages)
-
     new_state =
-      if divert?(new_state, redelivery_count) do
-        send_batch_to_dead_letter(new_state, messages, redelivery_count)
-      else
-        process_messages_normally(new_state, messages)
+      case divert(new_state, messages) do
+        {:divert, redelivery_count} -> send_batch_to_dead_letter(new_state, messages, redelivery_count)
+        :deliver -> process_messages_normally(new_state, messages)
       end
 
     {:noreply, check_and_refill_permits(new_state)}
@@ -475,9 +474,15 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp divert?(%__MODULE__{max_redelivery: nil}, _redelivery_count), do: false
-  defp divert?(%__MODULE__{dead_letter_root: nil}, _redelivery_count), do: false
-  defp divert?(state, redelivery_count), do: redelivery_count >= state.max_redelivery
+  # Answered before counting, so a consumer with no dead letter policy never walks a delivery.
+  defp divert(%__MODULE__{max_redelivery: nil}, _messages), do: :deliver
+  defp divert(%__MODULE__{dead_letter_root: nil}, _messages), do: :deliver
+
+  defp divert(state, messages) do
+    redelivery_count = batch_redelivery_count(messages)
+
+    if redelivery_count >= state.max_redelivery, do: {:divert, redelivery_count}, else: :deliver
+  end
 
   # One delivery diverts as a whole: a batch arrives as a single broker command and a chunked
   # message answers the maximum across its chunks, so every message built from it carries the
@@ -503,7 +508,7 @@ defmodule Pulsar.Consumer.Worker do
       Enum.reduce(messages, {0, [], nil}, fn %Pulsar.Message{} = message, {diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
-        case divert(producer, message, origin) do
+        case publish_to_dead_letter(producer, message, origin) do
           :ok ->
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
@@ -521,7 +526,7 @@ defmodule Pulsar.Consumer.Worker do
         end
       end)
 
-    metadata = dead_letter_metadata(state, dead_letter_topic(producer), redelivery_count)
+    metadata = dead_letter_metadata(state, redelivery_count)
 
     if diverted > 0 do
       :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
@@ -538,16 +543,13 @@ defmodule Pulsar.Consumer.Worker do
     track_nacked(state, nacked_ids)
   end
 
-  defp divert({:ok, producer, _topic}, message, origin), do: DeadLetter.divert(producer, message, origin)
-  defp divert({:error, _reason} = error, _message, _origin), do: error
+  defp publish_to_dead_letter({:ok, producer}, message, origin), do: DeadLetter.divert(producer, message, origin)
+  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin), do: error
 
-  defp dead_letter_topic({:ok, _producer, topic}), do: topic
-  defp dead_letter_topic({:error, _reason}), do: nil
-
-  defp dead_letter_metadata(state, dead_letter_topic, redelivery_count) do
+  defp dead_letter_metadata(state, redelivery_count) do
     state
     |> consumer_metadata()
-    |> Map.merge(%{dead_letter_topic: dead_letter_topic, redelivery_count: redelivery_count})
+    |> Map.merge(%{dead_letter_topic: state.dead_letter_topic, redelivery_count: redelivery_count})
   end
 
   defp consumer_metadata(state) do

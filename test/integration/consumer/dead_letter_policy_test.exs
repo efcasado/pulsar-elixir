@@ -312,6 +312,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   test "reports a dead letter topic it cannot publish to" do
     topic = "#{@topic}-telemetry-failed"
     subscription = "telemetry-failed"
+    dead_letter_topic = "#{topic}-#{subscription}-DLQ"
 
     {:ok, group} =
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
@@ -342,7 +343,13 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
                     %{
                       event: [:pulsar, :consumer, :dead_letter, :failed],
                       measurements: %{count: 1},
-                      metadata: %{topic: ^topic, reason: :no_dead_letter_producer}
+                      # Named even though the producer could not be resolved, which is when
+                      # an alert on this event most needs to say which topic is affected.
+                      metadata: %{
+                        topic: ^topic,
+                        dead_letter_topic: ^dead_letter_topic,
+                        reason: :no_dead_letter_producer
+                      }
                     }},
                    5_000
   end
