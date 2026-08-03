@@ -64,7 +64,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
       @moduledoc false
       use Pulsar.Consumer.Callback
 
-      def init(notify_pid), do: {:ok, notify_pid}
+      def init(notify_pid, _context), do: {:ok, notify_pid}
 
       def handle_message(message, notify_pid) do
         send(notify_pid, {:handled, message})

@@ -88,6 +88,13 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
+  defmodule OptsWorker do
+    @moduledoc false
+    use Agent
+
+    def start_link(opts), do: Agent.start_link(fn -> opts end)
+  end
+
   defmodule DisappearingSupervisor do
     @moduledoc false
 
@@ -116,6 +123,7 @@ defmodule Pulsar.TopologyTest do
   end
 
   defp start_async_topology(resolver, opts \\ [], controller_opts \\ []) do
+    {worker, controller_opts} = Keyword.pop(controller_opts, :worker, StubWorker)
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
@@ -136,7 +144,7 @@ defmodule Pulsar.TopologyTest do
         id: {:root, System.unique_integer([:positive])},
         start:
           {Topology, :start_link,
-           [StubWorker, registry, :count_key, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
+           [worker, registry, :count_key, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
         type: :supervisor
       })
 
@@ -464,6 +472,36 @@ defmodule Pulsar.TopologyTest do
         assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)
         assert Agent.get(new_worker, & &1) == Pulsar.Topic.partition(@topic, index)
       end
+    end
+  end
+
+  describe "worker options" do
+    test "gives a partition worker its own topic alongside the configured one" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 3} end, [], worker: OptsWorker)
+      :ok = Topology.await_ready(root, 1_000)
+
+      for {index, opts} <- worker_opts(root) do
+        assert Keyword.fetch!(opts, :topic) == Pulsar.Topic.partition(@topic, index)
+        assert Keyword.fetch!(opts, :base_topic) == @topic
+        assert Keyword.fetch!(opts, :partition) == index
+      end
+    end
+
+    test "leaves a non-partitioned worker on the configured topic, with no partition" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], worker: OptsWorker)
+      :ok = Topology.await_ready(root, 1_000)
+
+      assert [{0, opts}] = worker_opts(root)
+      assert Keyword.fetch!(opts, :topic) == @topic
+      assert Keyword.fetch!(opts, :base_topic) == @topic
+      assert Keyword.fetch!(opts, :partition) == nil
+    end
+  end
+
+  defp worker_opts(root) do
+    for {index, group} <- Topology.groups(root) do
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      {index, Agent.get(worker, & &1)}
     end
   end
 

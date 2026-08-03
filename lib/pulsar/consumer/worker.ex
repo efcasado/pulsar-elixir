@@ -30,6 +30,8 @@ defmodule Pulsar.Consumer.Worker do
   defstruct [
     :client,
     :topic,
+    :base_topic,
+    :partition,
     :subscription_name,
     :subscription_type,
     :consumer_id,
@@ -64,8 +66,10 @@ defmodule Pulsar.Consumer.Worker do
 
   @type t :: %__MODULE__{
           topic: String.t(),
+          base_topic: String.t(),
+          partition: non_neg_integer() | nil,
           subscription_name: String.t(),
-          subscription_type: String.t(),
+          subscription_type: atom(),
           consumer_id: integer(),
           consumer_name: String.t() | nil,
           callback_module: module(),
@@ -312,13 +316,24 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_continue({:init_callback, init_args}, state) do
-    case state.callback_module.init(init_args) do
+    case state.callback_module.init(init_args, context(state)) do
       {:ok, callback_state} ->
         {:noreply, %{state | callback_state: callback_state, ready: true}}
 
       {:error, reason} ->
         {:stop, reason, nil}
     end
+  end
+
+  defp context(state) do
+    %{
+      topic: state.topic,
+      base_topic: state.base_topic,
+      partition: state.partition,
+      subscription_name: state.subscription_name,
+      subscription_type: state.subscription_type,
+      consumer_name: state.consumer_name
+    }
   end
 
   defp subscribe(state) do

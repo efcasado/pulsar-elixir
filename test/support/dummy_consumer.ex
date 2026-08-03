@@ -2,14 +2,14 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   @moduledoc false
   use Pulsar.Consumer.Callback
 
-  def init(opts) do
+  def init(opts, context) do
     fail_all = Keyword.get(opts, :fail_all, false)
 
     if notify_pid = Keyword.get(opts, :notify_pid) do
       send(notify_pid, {:consumer_ready, self()})
     end
 
-    {:ok, %{messages: [], count: 0, fail_all: fail_all, is_active: false}}
+    {:ok, %{messages: [], count: 0, fail_all: fail_all, is_active: false, context: context}}
   end
 
   def handle_message(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}, state) do
@@ -51,6 +51,10 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     GenServer.call(consumer_pid, :get_state)
   end
 
+  def context(consumer_pid) do
+    GenServer.call(consumer_pid, :context)
+  end
+
   def active?(consumer_pid) do
     GenServer.call(consumer_pid, :active?)
   end
@@ -77,6 +81,10 @@ defmodule Pulsar.Test.Support.DummyConsumer do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_call(:context, _from, state) do
+    {:reply, state.context, state}
   end
 
   def handle_cast(:clear_messages, state) do

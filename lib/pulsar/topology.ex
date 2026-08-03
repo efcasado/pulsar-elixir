@@ -520,17 +520,25 @@ defmodule Pulsar.Topology do
     end
   end
 
+  # :topic is the topic a worker subscribes to and :base_topic the one the resource was
+  # configured with; they differ only for a partition. Workers carry both so a callback can
+  # tell which partition it handles without inspecting the tree it lives in.
   defp topic_child_spec(%{worker: worker, count_key: count_key, opts: opts}) do
-    group_child_spec({:topic, :non_partitioned}, worker, count_key, opts)
+    topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
+
+    group_child_spec({:topic, :non_partitioned}, worker, count_key, topic_opts)
   end
 
   defp partition_child_spec(partition_index, %{worker: worker, count_key: count_key, opts: opts}) do
-    partition_topic = Topic.partition(Keyword.fetch!(opts, :topic), partition_index)
+    base_topic = Keyword.fetch!(opts, :topic)
 
     partition_opts =
-      opts
-      |> Keyword.put(:topic, partition_topic)
-      |> Keyword.put(:name, Topic.partition(Keyword.fetch!(opts, :name), partition_index))
+      Keyword.merge(opts,
+        topic: Topic.partition(base_topic, partition_index),
+        base_topic: base_topic,
+        partition: partition_index,
+        name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
+      )
 
     group_child_spec({:partition, partition_index}, worker, count_key, partition_opts)
   end
