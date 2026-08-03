@@ -2,6 +2,22 @@ defmodule Pulsar.ProducerTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Producer
+  alias Pulsar.Topology
+
+  defmodule RoutingWorker do
+    @moduledoc false
+    use GenServer
+
+    def start_link(partition), do: GenServer.start_link(__MODULE__, partition)
+
+    @impl true
+    def init(partition), do: {:ok, partition}
+
+    @impl true
+    def handle_call({:send_message, _message, _opts}, _from, partition) do
+      {:reply, {:ok, partition}, partition}
+    end
+  end
 
   describe "await_ready/2" do
     test "reports a missing named producer after the wait" do
@@ -38,5 +54,82 @@ defmodule Pulsar.ProducerTest do
     end
   end
 
+  describe "partition routing" do
+    test "keeps the old modulus until a growing topology is contiguous" do
+      root = start_routing_topology()
+
+      for index <- [0, 1, 2, 3, 5] do
+        assert {:ok, _group} = Supervisor.start_child(root, routing_group_spec(index))
+      end
+
+      partition_key = key_for_partition(4, 5)
+
+      assert Producer.send(root, "payload", partition_key: partition_key) ==
+               {:ok, :erlang.phash2(partition_key, 4)}
+
+      assert {:ok, _group} = Supervisor.start_child(root, routing_group_spec(4))
+
+      assert Producer.send(root, "payload", partition_key: partition_key) ==
+               {:ok, :erlang.phash2(partition_key, 6)}
+    end
+  end
+
   defp send_message(module, producer, message), do: module.send(producer, message, [])
+
+  defp start_routing_topology do
+    test_pid = self()
+    registry = :"producer-routing-registry-#{System.unique_integer([:positive])}"
+    start_supervised!({Registry, keys: :unique, name: registry})
+
+    resolver = fn _topic, _opts ->
+      send(test_pid, :routing_resolution_started)
+
+      receive do
+        :finish_routing_resolution -> {:ok, 0}
+      end
+    end
+
+    opts = [
+      topic: "persistent://public/default/routing",
+      name: "routing-producer",
+      client: :test,
+      producer_count: 1,
+      partition_discovery_interval_ms: false
+    ]
+
+    root =
+      start_supervised!(%{
+        id: {:routing_topology, System.unique_integer([:positive])},
+        start: {Topology, :start_link, [RoutingWorker, registry, :producer_count, opts, [resolver: resolver]]},
+        type: :supervisor
+      })
+
+    assert_receive :routing_resolution_started
+    root
+  end
+
+  defp routing_group_spec(index) do
+    worker = %{
+      id: {:routing_worker, index},
+      start: {RoutingWorker, :start_link, [index]},
+      type: :worker,
+      modules: [Pulsar.Producer.Worker]
+    }
+
+    %{
+      id: {:partition, index},
+      start: {Supervisor, :start_link, [[worker], [strategy: :one_for_one]]},
+      restart: :transient,
+      type: :supervisor
+    }
+  end
+
+  defp key_for_partition(partition, partitions) do
+    0
+    |> Stream.iterate(&(&1 + 1))
+    |> Enum.find_value(fn candidate ->
+      key = "key-#{candidate}"
+      if :erlang.phash2(key, partitions) == partition, do: key
+    end)
+  end
 end

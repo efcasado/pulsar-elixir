@@ -406,6 +406,7 @@ defmodule Pulsar.Topology do
   defp add_missing_partitions(root, desired, existing, config) do
     0..(desired - 1)
     |> Enum.reject(&(&1 in existing))
+    |> Enum.sort(:desc)
     |> Enum.reduce_while(:ok, fn index, :ok ->
       case start_group(root, partition_child_spec(index, config)) do
         :ok -> {:cont, :ok}

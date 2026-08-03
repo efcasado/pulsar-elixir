@@ -73,6 +73,21 @@ defmodule Pulsar.TopologyTest do
     def start_link(opts), do: Agent.start_link(fn -> Keyword.fetch!(opts, :topic) end)
   end
 
+  defmodule PartitionFourFails do
+    @moduledoc false
+    use Agent
+
+    def start_link(opts) do
+      topic = Keyword.fetch!(opts, :topic)
+
+      if String.ends_with?(topic, "-partition-4") do
+        {:error, :partition_four_failed}
+      else
+        Agent.start_link(fn -> topic end)
+      end
+    end
+  end
+
   defmodule DisappearingSupervisor do
     @moduledoc false
 
@@ -320,6 +335,28 @@ defmodule Pulsar.TopologyTest do
                       }}
 
       assert length(Topology.groups(root)) == 4
+    end
+
+    test "adds missing partitions from highest to lowest" do
+      {root, _registry} = start_topology(4)
+
+      opts = [
+        topic: @topic,
+        name: @name,
+        client: :test,
+        count_key: 1,
+        partition_discovery_interval_ms: false
+      ]
+
+      config = %{worker: PartitionFourFails, count_key: :count_key, opts: opts}
+
+      assert {:error, {:partition_start_failed, 4, _reason}} =
+               Topology.reconcile(root, 6, config)
+
+      assert root
+             |> Topology.groups()
+             |> Enum.map(&elem(&1, 0))
+             |> Enum.sort() == [0, 1, 2, 3, 5]
     end
 
     test "facade operations do not wait for an in-flight metadata poll" do

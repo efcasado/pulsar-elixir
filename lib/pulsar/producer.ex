@@ -164,16 +164,31 @@ defmodule Pulsar.Producer do
   defp route([], _message, _opts), do: {:error, :not_ready}
 
   defp route(groups, message, opts) do
-    # The modulus is every configured partition, including any whose group is currently
-    # restarting: hashing over only the live ones would move a key to another partition
-    # for the duration of a restart, breaking per-key ordering.
-    index = select_partition(opts, length(groups))
+    # Missing partitions are added highest-first, so the contiguous width stays at the old
+    # modulus until every new slot exists. Restarting groups remain present and retain their
+    # slot, avoiding a temporary key remap during either growth or recovery.
+    case routing_width(groups) do
+      0 ->
+        {:error, :not_ready}
 
-    case List.keyfind(groups, index, 0) do
-      {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
-      {_index, _restarting} -> {:error, :no_producers_available}
-      nil -> {:error, {:partition_not_found, index}}
+      partitions ->
+        index = select_partition(opts, partitions)
+
+        case List.keyfind(groups, index, 0) do
+          {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
+          {_index, _restarting} -> {:error, :no_producers_available}
+          nil -> {:error, {:partition_not_found, index}}
+        end
     end
+  end
+
+  defp routing_width(groups) do
+    groups
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.sort()
+    |> Enum.reduce_while(0, fn index, width ->
+      if index == width, do: {:cont, width + 1}, else: {:halt, width}
+    end)
   end
 
   defp select_partition(opts, partitions) do
