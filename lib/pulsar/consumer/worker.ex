@@ -8,8 +8,7 @@ defmodule Pulsar.Consumer.Worker do
 
   alias Pulsar.Backoff
   alias Pulsar.Consumer.ChunkedMessageContext
-  alias Pulsar.Producer.Options, as: ProducerOptions
-  alias Pulsar.Producer.Worker, as: ProducerWorker
+  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
@@ -55,8 +54,8 @@ defmodule Pulsar.Consumer.Worker do
     {:nacked_messages, MapSet.new()},
     :redelivery_interval,
     :max_redelivery,
+    :dead_letter_root,
     :dead_letter_topic,
-    :dead_letter_producer_pid,
     {:chunked_message_contexts, %{}},
     :max_pending_chunked_messages,
     :expire_incomplete_chunked_message_after,
@@ -89,8 +88,8 @@ defmodule Pulsar.Consumer.Worker do
           nacked_messages: MapSet.t(),
           redelivery_interval: non_neg_integer() | nil,
           max_redelivery: non_neg_integer() | nil,
+          dead_letter_root: pid() | nil,
           dead_letter_topic: String.t() | nil,
-          dead_letter_producer_pid: pid() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
           expire_incomplete_chunked_message_after: non_neg_integer(),
@@ -170,17 +169,15 @@ defmodule Pulsar.Consumer.Worker do
 
   @impl true
   def init(opts) do
-    {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(Keyword.get(opts, :dead_letter_policy))
-
     # Option names and struct field names are the same, so struct/2 carries them across
-    # and ignores the group-level options that are not part of a consumer's state.
+    # and ignores the group-level options that are not part of a consumer's state. That
+    # includes :dead_letter_root, resolved once for the whole consumer by Pulsar.Topology.
     state = %{
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
         schema: build_schema(Keyword.get(opts, :schema)),
-        max_redelivery: max_redelivery,
-        dead_letter_topic: dead_letter_topic
+        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
 
     Logger.debug("Starting consumer for topic #{state.topic}")
@@ -293,26 +290,10 @@ defmodule Pulsar.Consumer.Worker do
            state
            | broker_monitor: broker_monitor,
              flow_outstanding_permits: state.flow_initial
-         }, {:continue, {:init_dead_letter_producer, init_args}}}
+         }, {:continue, {:init_callback, init_args}}}
 
       {:error, reason} ->
         {:stop, reason, state}
-    end
-  end
-
-  def handle_continue({:init_dead_letter_producer, init_args}, state) do
-    if should_init_dead_letter_producer?(state) do
-      case start_dead_letter_producer(state) do
-        {:ok, producer_pid} ->
-          Logger.info("Started dead letter producer for consumer on topic #{state.topic}")
-          {:noreply, %{state | dead_letter_producer_pid: producer_pid}, {:continue, {:init_callback, init_args}}}
-
-        {:error, reason} ->
-          Logger.error("Failed to start dead letter producer: #{inspect(reason)}")
-          {:stop, reason, state}
-      end
-    else
-      {:noreply, state, {:continue, {:init_callback, init_args}}}
     end
   end
 
@@ -410,10 +391,14 @@ defmodule Pulsar.Consumer.Worker do
     permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
     new_state = decrement_permits(new_state, permits_consumed)
 
-    new_state = process_messages_normally(new_state, messages)
-    new_state = maybe_send_batch_to_dead_letter(new_state, messages)
+    # A delivery the policy is done with is diverted instead of delivered, not as well as.
+    new_state =
+      case divert(new_state, messages) do
+        {:divert, redelivery_count} -> send_batch_to_dead_letter(new_state, messages, redelivery_count)
+        :deliver -> process_messages_normally(new_state, messages)
+      end
 
-    {:noreply, new_state}
+    {:noreply, check_and_refill_permits(new_state)}
   end
 
   @impl true
@@ -429,6 +414,13 @@ defmodule Pulsar.Consumer.Worker do
 
         :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
         Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
+
+        :telemetry.execute(
+          [:pulsar, :consumer, :redelivery, :requested],
+          %{count: length(nacked_list)},
+          consumer_metadata(state)
+        )
+
         %{state | nacked_messages: MapSet.new()}
       else
         state
@@ -482,30 +474,40 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp maybe_send_batch_to_dead_letter(state, messages) do
-    max_redelivery_count =
-      messages
-      |> Enum.map(&Pulsar.Message.redelivery_count/1)
-      |> Enum.max(fn -> 0 end)
+  # Answered before counting, so a consumer with no dead letter policy never walks a delivery.
+  defp divert(%__MODULE__{max_redelivery: nil}, _messages), do: :deliver
+  defp divert(%__MODULE__{dead_letter_root: nil}, _messages), do: :deliver
 
-    if is_nil(state.max_redelivery) or state.max_redelivery < 1 or
-         max_redelivery_count < state.max_redelivery or is_nil(state.dead_letter_producer_pid) do
-      state
-    else
-      do_send_batch_to_dead_letter(state, messages, max_redelivery_count)
-    end
+  defp divert(%__MODULE__{} = state, messages) do
+    redelivery_count = batch_redelivery_count(messages)
+
+    if redelivery_count >= state.max_redelivery, do: {:divert, redelivery_count}, else: :deliver
   end
 
-  defp do_send_batch_to_dead_letter(state, messages, redelivery_count) do
+  # One delivery diverts as a whole: a batch arrives as a single broker command and a chunked
+  # message answers the maximum across its chunks, so every message built from it carries the
+  # same redelivery count.
+  defp batch_redelivery_count(messages) do
+    messages
+    |> Enum.map(&Pulsar.Message.redelivery_count/1)
+    |> Enum.max(fn -> 0 end)
+  end
+
+  defp send_batch_to_dead_letter(state, messages, redelivery_count) do
     Logger.warning(
-      "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ "
+      "Redelivery count of #{redelivery_count} reached max redelivery of " <>
+        "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
-    nacked_ids =
-      Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
+    # Resolved once for the delivery: this is a call into the topology root, which is also the
+    # supervisor discovery adds partitions to.
+    producer = DeadLetter.producer(state.dead_letter_root)
+
+    {diverted, nacked_ids, reason} =
+      Enum.reduce(messages, {0, [], nil}, fn %Pulsar.Message{} = message, {diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
-        case send_to_dead_letter(state, message.payload, List.first(message_ids_list)) do
+        case publish_to_dead_letter(producer, message, state.topic) do
           :ok ->
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
@@ -515,22 +517,49 @@ defmodule Pulsar.Consumer.Worker do
             }
 
             :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-            nacked_acc
+            {diverted + 1, nacked_acc, reason}
 
           {:error, dlq_reason} ->
             Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            message_ids_list ++ nacked_acc
+            {diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
         end
       end)
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-      else
-        state.nacked_messages
-      end
+    metadata = dead_letter_metadata(state, redelivery_count)
 
-    %{state | nacked_messages: new_nacked_messages}
+    if diverted > 0 do
+      :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
+    end
+
+    if nacked_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :dead_letter, :failed],
+        %{count: length(nacked_ids)},
+        Map.put(metadata, :reason, reason)
+      )
+    end
+
+    track_nacked(state, nacked_ids)
+  end
+
+  defp publish_to_dead_letter({:ok, producer}, message, origin_topic) do
+    DeadLetter.divert(producer, message, origin_topic)
+  end
+
+  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin_topic), do: error
+
+  defp dead_letter_metadata(state, redelivery_count) do
+    state
+    |> consumer_metadata()
+    |> Map.merge(%{dead_letter_topic: state.dead_letter_topic, redelivery_count: redelivery_count})
+  end
+
+  defp consumer_metadata(state) do
+    %{
+      topic: state.topic,
+      subscription_name: state.subscription_name,
+      consumer_id: state.consumer_id
+    }
   end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
@@ -539,20 +568,28 @@ defmodule Pulsar.Consumer.Worker do
         process_single_message(state, message, callback_state, nacked_acc)
       end)
 
-    state = check_and_refill_permits(state)
+    if nacked_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :message, :nacked],
+        %{count: length(nacked_ids)},
+        consumer_metadata(state)
+      )
+    end
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-      else
-        state.nacked_messages
-      end
+    %{track_nacked(state, nacked_ids) | callback_state: final_callback_state}
+  end
 
-    %{
-      state
-      | callback_state: final_callback_state,
-        nacked_messages: new_nacked_messages
-    }
+  # :trigger_redelivery drains this set and only fires when a redelivery interval is configured,
+  # so without one an id is deliberately not tracked rather than left in a set nothing empties.
+  defp track_nacked(state, []), do: state
+
+  defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
+    Logger.debug("NACKed #{length(nacked_ids)} message(s), but no redelivery_interval configured")
+    state
+  end
+
+  defp track_nacked(%__MODULE__{} = state, nacked_ids) do
+    %{state | nacked_messages: MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))}
   end
 
   defp process_single_message(state, %Pulsar.Message{} = message, callback_state, nacked_acc) do
@@ -649,17 +686,15 @@ defmodule Pulsar.Consumer.Worker do
     #   from the broker. The DLQ will only trigger on subsequent redeliveries when the message
     #   comes back through handle_message with an updated redelivery_count.
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        Enum.reduce(message_ids, state.nacked_messages, fn message_id, acc ->
-          MapSet.put(acc, message_id)
-        end)
-      else
-        Logger.debug("NACKed #{length(message_ids)} message(s), but no redelivery_interval configured")
-        state.nacked_messages
-      end
+    if message_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :message, :nacked],
+        %{count: length(message_ids)},
+        consumer_metadata(state)
+      )
+    end
 
-    {:reply, :ok, %{state | nacked_messages: new_nacked_messages}}
+    {:reply, :ok, track_nacked(state, message_ids)}
   end
 
   def handle_call(request, from, state) do
@@ -827,49 +862,9 @@ defmodule Pulsar.Consumer.Worker do
     :ok
   end
 
-  defp parse_dead_letter_policy(nil), do: {nil, nil}
-
-  defp parse_dead_letter_policy(policy) when is_list(policy) do
-    max_redelivery = Keyword.get(policy, :max_redelivery)
-    topic = Keyword.get(policy, :topic)
-
-    validated_max_redelivery =
-      case max_redelivery do
-        n when is_integer(n) and n >= 1 -> n
-        _ -> nil
-      end
-
-    {validated_max_redelivery, topic}
-  end
-
-  defp should_init_dead_letter_producer?(state) do
-    state.max_redelivery != nil and state.max_redelivery >= 1
-  end
-
-  defp start_dead_letter_producer(state) do
-    dead_letter_topic =
-      state.dead_letter_topic ||
-        "#{state.topic}-#{state.subscription_name}-DLQ"
-
-    # Through the schema, so the dead letter producer gets the same defaults as any other.
-    [topic: dead_letter_topic, client: state.client]
-    |> ProducerOptions.validate!()
-    |> ProducerWorker.start_link()
-  end
-
-  defp send_to_dead_letter(state, payload, _message_id) do
-    if state.dead_letter_producer_pid == nil do
-      {:error, :no_dead_letter_producer}
-    else
-      case ProducerWorker.send_message(state.dead_letter_producer_pid, payload) do
-        {:ok, _dlq_message_id} ->
-          :ok
-
-        {:error, _reason} = error ->
-          error
-      end
-    end
-  end
+  # Pulsar.Consumer.Options requires a positive integer here, so a policy always carries one.
+  defp max_redelivery(nil), do: nil
+  defp max_redelivery(policy) when is_list(policy), do: Keyword.fetch!(policy, :max_redelivery)
 
   defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload) do
     payload

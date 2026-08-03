@@ -25,6 +25,7 @@ defmodule Pulsar.MixProject do
           "README.md",
           "docs/architecture.md",
           "docs/chunking.md",
+          "docs/dead_letter_policies.md",
           "docs/schemas.md",
           "docs/reader.md"
         ],

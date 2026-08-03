@@ -39,12 +39,22 @@ defmodule Pulsar.Producer do
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
     opts = Options.validate!(opts)
-    topic = Keyword.fetch!(opts, :topic)
     client = Keyword.fetch!(opts, :client)
 
+    start_topology(opts, Client.registry(:producers, client))
+  end
+
+  @doc false
+  # For a producer owned by another resource: nothing outside that owner should resolve or stop it,
+  # and it must not depend on a registry belonging to a branch that restarts separately from it.
+  @spec start_link_unregistered(keyword()) :: Supervisor.on_start()
+  def start_link_unregistered(opts), do: opts |> Options.validate!() |> start_topology(nil)
+
+  defp start_topology(opts, registry) do
+    topic = Keyword.fetch!(opts, :topic)
     opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
 
-    Topology.start_link(Worker, Client.registry(:producers, client), :producer_count, opts)
+    Topology.start_link(Worker, registry, :producer_count, opts)
   end
 
   @doc """

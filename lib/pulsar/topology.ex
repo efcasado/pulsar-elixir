@@ -42,21 +42,24 @@ defmodule Pulsar.Topology do
     }
   end
 
-  @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
+  @spec start_link(module(), atom() | nil, atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
     start_link(worker, registry, count_key, opts, [])
   end
 
   # The fifth argument is an internal seam for exercising asynchronous discovery without a
-  # broker. Consumer and Producer deliberately expose only start_link/1.
+  # broker. Consumer and Producer deliberately keep it out of the API they document.
   @doc false
-  @spec start_link(module(), atom(), atom(), keyword(), keyword()) :: Supervisor.on_start()
+  @spec start_link(module(), atom() | nil, atom(), keyword(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts, controller_opts) do
     name = Keyword.fetch!(opts, :name)
     config = %{worker: worker, count_key: count_key, opts: opts}
 
-    Supervisor.start_link(__MODULE__, {config, controller_opts}, name: {:via, Registry, {registry, name}})
+    Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
+
+  defp start_options(nil, _name), do: []
+  defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
 
   @typedoc false
   @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}
@@ -244,8 +247,10 @@ defmodule Pulsar.Topology do
       {_id, pid, :worker, [module]} when module in @worker_modules ->
         if is_pid(pid), do: [pid], else: []
 
+      # A nested topology root owns its own workers, which are not this resource's. A consumer's
+      # dead letter producer is one, and its producer workers must not read as consumer workers.
       {_id, pid, :supervisor, _modules} when is_pid(pid) ->
-        workers(pid)
+        if kind(pid) == :topology, do: [], else: workers(pid)
 
       _child ->
         []
@@ -370,6 +375,7 @@ defmodule Pulsar.Topology do
 
   @impl true
   def init({config, controller_opts}) do
+    {config, companions} = attach_companions(config, self())
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
 
@@ -380,7 +386,24 @@ defmodule Pulsar.Topology do
       |> Discovery.child_spec()
       |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic})
 
-    Supervisor.init([discovery], [strategy: :one_for_one] ++ restart_intensity())
+    # Companions start before discovery so a worker never observes the tree without them. They
+    # resolve their own brokers asynchronously, so none of them delays this root coming up.
+    children = companions ++ [discovery]
+
+    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
+  end
+
+  # Popped rather than read: `:companions` configures this root and is not part of what a worker
+  # is started with.
+  defp attach_companions(config, root) do
+    case Keyword.pop(config.opts, :companions) do
+      {nil, opts} ->
+        {%{config | opts: opts}, []}
+
+      {attach, opts} ->
+        {opts, specs} = attach.(opts, root)
+        {%{config | opts: opts}, specs}
+    end
   end
 
   defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers

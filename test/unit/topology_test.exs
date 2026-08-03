@@ -498,6 +498,49 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
+  describe "companions" do
+    test "runs what a resource attaches and tells its workers what it answered" do
+      test_pid = self()
+
+      attach = fn opts, root ->
+        send(test_pid, {:attached, root})
+
+        {Keyword.put(opts, :companion_root, root),
+         [%{id: :companion, start: {Agent, :start_link, [fn -> :companion end]}}]}
+      end
+
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 0} end, [companions: attach], worker: OptsWorker)
+
+      :ok = Topology.await_ready(root, 1_000)
+
+      assert_receive {:attached, ^root}
+
+      assert {:companion, companion, :worker, _modules} =
+               root |> Supervisor.which_children() |> List.keyfind(:companion, 0)
+
+      assert is_pid(companion)
+
+      assert [{0, opts}] = worker_opts(root)
+      assert Keyword.fetch!(opts, :companion_root) == root
+    end
+
+    # It configures the root, so a worker is started without it either way.
+    test "keeps the declaration out of the options its workers are started with" do
+      attach = fn opts, _root -> {opts, []} end
+
+      for declared <- [[companions: attach], []] do
+        {root, _registry} =
+          start_async_topology(fn _topic, _opts -> {:ok, 0} end, declared, worker: OptsWorker)
+
+        :ok = Topology.await_ready(root, 1_000)
+
+        assert [{0, opts}] = worker_opts(root)
+        refute Keyword.has_key?(opts, :companions)
+      end
+    end
+  end
+
   defp worker_opts(root) do
     for {index, group} <- Topology.groups(root) do
       [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
