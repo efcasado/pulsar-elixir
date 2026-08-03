@@ -67,8 +67,9 @@ defmodule Pulsar.Client.Bootstrap do
         outcomes
 
       _pids ->
-        # A current child is already supervised; any other registered pid belongs to a
-        # predecessor still exiting and must stay pending until it releases the name.
+        # Only a child of the current resource supervisor satisfies the declaration.
+        # A registered pid owned elsewhere is a name collision, so keep retrying until
+        # the name becomes available.
         owned =
           for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
               is_pid(pid),
