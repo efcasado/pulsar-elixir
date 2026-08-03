@@ -1,96 +1,108 @@
 defmodule Pulsar.Client do
   @moduledoc """
-  A client represents an isolated Pulsar connection context.
-
-  Each client maintains:
-  - Separate broker connections
-  - Independent consumer/producer registries
-  - Isolated broker configuration
+  A client represents an isolated Pulsar connection context and owns the consumers and
+  producers that use it.
 
   ## Usage
 
-  ### Single Client (Implicit)
-
-  When using `Pulsar.start/1`, a default client is automatically created:
-
-      # config.exs
-      config :pulsar,
-        host: "pulsar://localhost:6650",
-        consumers: [...]
-
-      # Uses implicit :default client
-      {:ok, consumer} = Pulsar.start_consumer(topic, subscription, MyCallback)
-
-  ### Multiple Clients (Explicit)
-
-  You can start multiple clients in your supervision tree:
+  The client is the only thing that belongs in the host application's supervision tree.
+  Consumers and producers are declared on it and run underneath it:
 
       children = [
-        {Pulsar.Client, name: :analytics_client, host: "pulsar://analytics:6650"},
-        {Pulsar.Client, name: :events_client, host: "pulsar://events:6650"}
+        {Pulsar.Client,
+         host: "pulsar://localhost:6650",
+         consumers: [
+           [topic: topic, subscription_name: "sub", callback_module: MyCallback]
+         ]}
       ]
 
-      # Explicit client usage
-      {:ok, consumer} = Pulsar.start_consumer(
-        topic, subscription, MyCallback,
-        client: :analytics_client
+      Supervisor.start_link(children, strategy: :one_for_one)
+
+  Several named clients can coexist. Consumers and producers select one with `:client`,
+  defaulting to `:default`.
+
+  ## Declared and runtime resources
+
+  For sets only known at runtime — a consumer per tenant, say — `Pulsar.Consumer.start/1`
+  and `Pulsar.Producer.start/1` add to a running client:
+
+      Pulsar.Consumer.start(
+        topic: topic,
+        subscription_name: "sub",
+        callback_module: MyCallback,
+        client: :analytics
       )
+
+  Declared resources are recreated after their client or resource branch restarts. Runtime
+  resources are not; their caller must restore them.
+
+  Both forms initialize asynchronously. `Pulsar.Consumer.await_ready/2` and
+  `Pulsar.Producer.await_ready/2` provide a bounded topology-and-worker readiness barrier when
+  one is needed.
+
+  `consumers/1` and `producers/1` list the logical resources currently running under a
+  client. Partitioned resources still appear once: the returned pid is their stable root,
+  not one entry per partition or worker.
+
+  See the [architecture guide](architecture.html) for the complete ownership and recovery
+  model.
   """
 
   use Supervisor
 
-  require Logger
+  alias Pulsar.Broker.Options, as: BrokerOptions
+  alias Pulsar.Client.Bootstrap
+  alias Pulsar.Producer.EpochStore
 
-  @broker_opts [
-    auth: [
-      type: :keyword_list,
-      doc: "Authentication configuration, as `[type: module, opts: keyword]`."
-    ],
-    conn_timeout: [
-      type: :timeout,
-      doc: """
-      Milliseconds to wait for a connection to a broker. Defaults to 1000. `:infinity`
-      waits indefinitely, which leaves the broker process blocked in `connect` with no
-      reconnect timer and no way to answer calls until the network gives up.
-      """
-    ],
-    max_frame_size: [
-      type: :pos_integer,
-      doc: """
-      Largest frame accepted from this cluster, in bytes. Defaults to
-      `Pulsar.Config.max_frame_size/0`. Raise it to match a broker configured with a
-      larger `maxMessageSize`.
-      """
-    ],
-    socket_opts: [
-      type: {:list, :any},
-      doc: """
-      Options passed to `:gen_tcp.connect/4` or `:ssl.connect/4`. Not a keyword list:
-      bare atoms such as `:inet6` and tuples such as `{:raw, level, opt, value}` are
-      valid entries.
-      """
-    ]
-  ]
+  @resource_modules %{consumers: Pulsar.Consumer, producers: Pulsar.Producer}
 
-  # No defaults here on purpose: an option the caller omitted has to stay absent so
-  # that build_broker_opts/1 can fall back to the application environment before the
-  # broker applies its own default.
   @schema [
             name: [
               type: :atom,
-              required: true,
-              doc: "Name the client is registered under."
+              default: :default,
+              doc: """
+              Name the client is registered under, and the name consumers and producers
+              select it by. Defaults to `:default`, which is also their default `:client`.
+              """
             ],
             host: [
-              type: :string,
+              type: {:custom, __MODULE__, :validate_broker_url, []},
               required: true,
               doc: "Bootstrap broker URL, e.g. `pulsar://localhost:6650`."
-            ]
-          ] ++ @broker_opts
+            ],
+            consumers: [
+              type: {:list, :keyword_list},
+              default: [],
+              doc: """
+              Consumers declared under this client, each a keyword list of `Pulsar.Consumer`
+              options. Their `:client` is set to this one. See the module documentation for
+              the lifecycle of declared resources.
+              """
+            ],
+            producers: [
+              type: {:list, :keyword_list},
+              default: [],
+              doc: """
+              Producers declared under this client, each a keyword list of `Pulsar.Producer`
+              options. Their `:client` is set to this one.
 
-  @supported_broker_opts Keyword.keys(@broker_opts)
+              Consumers and producers initialize independently, so callbacks that publish
+              during startup must handle `{:error, :not_found}` and
+              `{:error, :not_ready}`.
+              """
+            ]
+          ] ++ BrokerOptions.schema()
 
   ## Public API
+
+  @doc false
+  def child_spec(opts) do
+    %{
+      id: Keyword.get(opts, :name, :default),
+      start: {__MODULE__, :start_link, [opts]},
+      type: :supervisor
+    }
+  end
 
   @doc """
   Starts a client with the given options.
@@ -102,48 +114,177 @@ defmodule Pulsar.Client do
   def start_link(opts) do
     opts = validate_options!(opts)
     name = Keyword.fetch!(opts, :name)
-    bootstrap_host = Keyword.fetch!(opts, :host)
 
     case Supervisor.start_link(__MODULE__, opts, name: name) do
-      {:ok, pid} = result ->
-        # Start the bootstrap broker after supervisor is running
-        case start_broker(bootstrap_host, client: name) do
-          {:ok, _broker_pid} ->
-            result
-
-          {:error, reason} ->
-            Supervisor.stop(pid)
-            {:error, {:broker_startup_failed, reason}}
-        end
-
-      error ->
-        error
+      {:error, reason} -> {:error, unwrap_start_error(reason)}
+      result -> result
     end
   end
+
+  # The failure a caller cares about is nested once per branch supervisor it happened under.
+  defp unwrap_start_error({:shutdown, {:failed_to_start_child, _id, reason}}), do: unwrap_start_error(reason)
+  defp unwrap_start_error(reason), do: reason
 
   @impl true
   def init(opts) do
     client_name = Keyword.fetch!(opts, :name)
     broker_opts = build_broker_opts(opts)
 
-    # Store broker opts in client state (passed to children via registry metadata)
-    :persistent_term.put({__MODULE__, client_name, :broker_opts}, broker_opts)
+    :persistent_term.put(broker_opts_key(client_name), broker_opts)
 
-    Pulsar.ProducerEpochStore.init(client_name)
+    EpochStore.init(client_name)
 
     children = [
       {Registry, keys: :unique, name: broker_registry(client_name)},
-      {Registry, keys: :unique, name: consumer_registry(client_name)},
-      {Registry, keys: :unique, name: producer_registry(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: consumer_supervisor(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: producer_supervisor(client_name)}
+      brokers_spec(opts),
+      resources_spec(opts)
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # Brokers first: everything below resolves topics through them, so losing them means
+    # starting the resources over.
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  ## Registry and Supervisor Name Helpers
+  # The initial broker is static because it belongs to the client configuration. Brokers
+  # learned through lookup remain dynamic, but both kinds register in the same registry.
+  defp brokers_spec(opts) do
+    client = Keyword.fetch!(opts, :name)
+    url = Keyword.fetch!(opts, :host)
+
+    children = [
+      {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client)},
+      broker_spec(url, client)
+    ]
+
+    %{
+      id: :brokers,
+      start: {Supervisor, :start_link, [children, [strategy: :one_for_one]]},
+      type: :supervisor
+    }
+  end
+
+  defp broker_spec(url, client) do
+    name = {:via, Registry, {broker_registry(client), url}}
+    opts = [{:name, name} | get_broker_opts(client)]
+
+    %{
+      id: {:broker, url},
+      start: {Pulsar.Broker, :start_link, [url, opts]},
+      restart: :permanent
+    }
+  end
+
+  # Separate branches isolate consumer and producer failures. OTP's default intensity at this
+  # boundary remains the final escalation path above the wider resource-level budget.
+  defp resources_spec(opts) do
+    branches = Enum.map([:consumers, :producers], &branch_spec(&1, opts))
+
+    %{
+      id: :resources,
+      start: {Supervisor, :start_link, [branches, [strategy: :one_for_one]]},
+      type: :supervisor
+    }
+  end
+
+  # The registry precedes its resources so :rest_for_one rebuilds the branch if it is replaced.
+  defp branch_spec(kind, opts) do
+    client = Keyword.fetch!(opts, :name)
+    registry = registry(kind, client)
+    supervisor = resource_supervisor(kind, client)
+
+    children = [
+      {Registry, keys: :unique, name: registry},
+      {DynamicSupervisor, [strategy: :one_for_one, name: supervisor] ++ Pulsar.Topology.restart_intensity()},
+      {Bootstrap, {kind, opts}}
+    ]
+
+    %{
+      id: kind,
+      start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
+      type: :supervisor
+    }
+  end
+
+  @doc false
+  @spec lookup(:consumers | :producers, term(), atom() | pid()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup(kind, key, client \\ :default) when kind in [:consumers, :producers] do
+    with {:ok, client_name} <- client_name(client) do
+      lookup_registry(registry(kind, client_name), key)
+    end
+  end
+
+  defp lookup_registry(registry, key) do
+    case Registry.lookup(registry, key) do
+      [{pid, _value}] -> {:ok, pid}
+      [] -> {:error, :not_found}
+    end
+  rescue
+    # Registry.lookup/2 raises when the client's registry is not running.
+    ArgumentError -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec start_resource(atom(), {module(), term()}) ::
+          DynamicSupervisor.on_start_child() | {:error, :client_not_found}
+  def start_resource(supervisor, child_spec) do
+    DynamicSupervisor.start_child(supervisor, child_spec)
+  catch
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, :client_not_found}
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      {:error, :client_not_found}
+  end
+
+  @doc """
+  Returns the consumer resources currently running under a client.
+
+  Each pid is the stable topology root returned by `Pulsar.Consumer.start/1`, regardless
+  of how many partitions or workers that consumer has. Returns an empty list while the
+  client or its consumer branch is unavailable. The order is unspecified.
+  """
+  @spec consumers(atom()) :: [pid()]
+  def consumers(client_name \\ :default) do
+    :consumers |> resource_supervisor(client_name) |> resource_roots()
+  end
+
+  @doc """
+  Returns the producer resources currently running under a client.
+
+  Each pid is the stable topology root returned by `Pulsar.Producer.start/1`, regardless
+  of how many partitions or workers that producer has. Returns an empty list while the
+  client or its producer branch is unavailable. The order is unspecified.
+  """
+  @spec producers(atom()) :: [pid()]
+  def producers(client_name \\ :default) do
+    :producers |> resource_supervisor(client_name) |> resource_roots()
+  end
+
+  ## Process Name Helpers
+
+  defp client_name(name) when is_atom(name), do: {:ok, name}
+
+  defp client_name(pid) when is_pid(pid) do
+    case Process.info(pid, :registered_name) do
+      {:registered_name, name} when is_atom(name) -> {:ok, name}
+      _not_registered -> {:error, :not_found}
+    end
+  end
+
+  @doc false
+  @spec validate_broker_url(term()) :: {:ok, String.t()} | {:error, String.t()}
+  def validate_broker_url(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host}}
+      when scheme in ["pulsar", "pulsar+ssl"] and is_binary(host) and host != "" ->
+        {:ok, url}
+
+      _invalid ->
+        {:error, "must be a valid pulsar:// or pulsar+ssl:// broker URL"}
+    end
+  end
+
+  def validate_broker_url(_url), do: {:error, "must be a valid pulsar:// or pulsar+ssl:// broker URL"}
 
   @doc false
   def broker_registry(client_name) do
@@ -151,14 +292,13 @@ defmodule Pulsar.Client do
   end
 
   @doc false
-  def consumer_registry(client_name) do
-    Module.concat([__MODULE__, client_name, ConsumerRegistry])
-  end
+  @spec resource_module(:consumers | :producers) :: module()
+  def resource_module(kind), do: Map.fetch!(@resource_modules, kind)
 
   @doc false
-  def producer_registry(client_name) do
-    Module.concat([__MODULE__, client_name, ProducerRegistry])
-  end
+  @spec registry(:consumers | :producers, atom()) :: atom()
+  def registry(:consumers, client_name), do: Module.concat([__MODULE__, client_name, "ConsumerRegistry"])
+  def registry(:producers, client_name), do: Module.concat([__MODULE__, client_name, "ProducerRegistry"])
 
   @doc false
   def broker_supervisor(client_name) do
@@ -166,22 +306,18 @@ defmodule Pulsar.Client do
   end
 
   @doc false
-  def consumer_supervisor(client_name) do
-    Module.concat([__MODULE__, client_name, ConsumerSupervisor])
-  end
+  @spec resource_supervisor(:consumers | :producers, atom()) :: atom()
+  def resource_supervisor(:consumers, client_name), do: Module.concat([__MODULE__, client_name, "ConsumerSupervisor"])
 
-  @doc false
-  def producer_supervisor(client_name) do
-    Module.concat([__MODULE__, client_name, ProducerSupervisor])
-  end
+  def resource_supervisor(:producers, client_name), do: Module.concat([__MODULE__, client_name, "ProducerSupervisor"])
 
   @doc false
   def get_broker_opts(client_name) do
-    :persistent_term.get({__MODULE__, client_name, :broker_opts}, [])
+    :persistent_term.get(broker_opts_key(client_name), [])
   end
 
   @doc """
-  Returns a random broker process from the specified client's broker supervisor.
+  Returns a random broker process registered to the specified client.
 
   Defaults to the `:default` client if no client is specified.
 
@@ -189,16 +325,34 @@ defmodule Pulsar.Client do
   """
   @spec random_broker(atom()) :: pid() | nil
   def random_broker(client_name \\ :default) do
-    broker_supervisor = broker_supervisor(client_name)
-
-    case Supervisor.which_children(broker_supervisor) do
+    case registered_brokers(client_name) do
       [] ->
         nil
 
-      children ->
-        {_id, pid, _, _} = Enum.random(children)
-        pid
+      brokers ->
+        Enum.random(brokers)
     end
+  end
+
+  defp registered_brokers(client_name) do
+    Registry.select(broker_registry(client_name), [{{:"$1", :"$2", :"$3"}, [], [:"$2"]}])
+  rescue
+    ArgumentError -> []
+  end
+
+  # An unavailable supervisor contributes no children during startup or restart.
+  defp children_of(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      []
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      []
+  end
+
+  defp resource_roots(supervisor) do
+    for {_id, pid, :supervisor, _modules} <- children_of(supervisor), is_pid(pid), do: pid
   end
 
   @doc """
@@ -253,10 +407,7 @@ defmodule Pulsar.Client do
     client = Keyword.get(opts, :client, :default)
     broker_registry = broker_registry(client)
 
-    case Registry.lookup(broker_registry, broker_url) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> {:error, :not_found}
-    end
+    lookup_registry(broker_registry, broker_url)
   end
 
   @doc """
@@ -275,9 +426,11 @@ defmodule Pulsar.Client do
   end
 
   @doc """
-  Stops a client and all its resources gracefully.
+  Stops a client, and with it every consumer, producer and broker connection it owns.
 
-  This stops all producers, consumers, brokers, and the client supervisor.
+  For a client you started yourself, from a script or IEx. A client in a supervision tree is
+  restarted by its supervisor whatever its exit reason, so this only cycles it; stop those by
+  removing them from the tree.
 
   ## Options
 
@@ -292,41 +445,60 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
+    :persistent_term.erase(broker_opts_key(client_name))
+
     try do
       Supervisor.stop(client_name, :normal, timeout)
     catch
-      :exit, _ -> :ok
+      :exit, _reason -> :ok
     end
 
-    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
     :ok
   end
 
   ## Private Functions
 
-  # Unknown options are only warned about for now, and will be rejected in the next
-  # major version.
   defp validate_options!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
+    opts
+    |> NimbleOptions.validate!(@schema)
+    |> validate_resources!()
+  end
 
-    if unknown != [] do
-      Logger.warning("Pulsar.Client ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
+  defp validate_resources!(opts) do
+    client = Keyword.fetch!(opts, :name)
+
+    opts
+    |> Keyword.update!(:consumers, &validate_each!(&1, Pulsar.Consumer, Pulsar.Consumer.Options, client))
+    |> Keyword.update!(:producers, &validate_each!(&1, Pulsar.Producer, Pulsar.Producer.Options, client))
+  end
+
+  defp validate_each!(entries, module, options, client) do
+    entries
+    |> Enum.map(&options.validate!(Keyword.put(&1, :client, client)))
+    |> reject_duplicate_names!(module, client)
+  end
+
+  # Two declarations resolving to one registry name would leave the second silently
+  # discarded, since starting it reports the first as already started.
+  defp reject_duplicate_names!(entries, module, client) do
+    duplicates =
+      entries
+      |> Enum.frequencies_by(&module.id/1)
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(fn {name, _count} -> name end)
+
+    if duplicates != [] do
+      raise ArgumentError,
+            "Pulsar client #{inspect(client)} declares more than one #{inspect(module)} named " <>
+              "#{Enum.map_join(duplicates, ", ", &inspect/1)}. Give each declaration a distinct :name."
     end
 
-    NimbleOptions.validate!(known, @schema)
+    entries
   end
 
   defp build_broker_opts(opts) do
-    app_opts =
-      @supported_broker_opts
-      |> Enum.map(fn key -> {key, Application.get_env(:pulsar, key)} end)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    passed_opts =
-      opts
-      |> Keyword.take(@supported_broker_opts)
-      |> Enum.reject(fn {_, v} -> is_nil(v) end)
-
-    Keyword.merge(app_opts, passed_opts)
+    Keyword.take(opts, BrokerOptions.keys())
   end
+
+  defp broker_opts_key(client_name), do: {__MODULE__, client_name, :broker_opts}
 end

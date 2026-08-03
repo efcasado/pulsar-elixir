@@ -1,12 +1,12 @@
 defmodule Pulsar.Producer.Options do
   @moduledoc false
 
-  require Logger
-
-  # Options whose current default is read from the application environment carry no
-  # default here: they have to stay absent so the process that reads them can still
-  # consult Pulsar.Config.
   @schema [
+    topic: [
+      type: :string,
+      required: true,
+      doc: "Topic to publish to."
+    ],
     client: [
       type: :atom,
       default: :default,
@@ -69,23 +69,23 @@ defmodule Pulsar.Producer.Options do
     ],
     partition_discovery_interval_ms: [
       type: {:or, [:pos_integer, {:in, [false]}]},
+      default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables it. Defaults to `Pulsar.Config.partition_discovery_interval/0`.
+      `false` disables later metadata checks, but not initial topic discovery or local
+      recovery of groups that have stopped.
       """
-    ],
-    max_restarts: [
-      type: :non_neg_integer,
-      default: 100,
-      doc: "Restarts the producer group tolerates in a minute."
     ],
     startup_delay_ms: [
       type: :non_neg_integer,
-      doc: "Delay before a producer connects. Defaults to `Pulsar.Config.startup_delay/0`."
+      default: 0,
+      doc:
+        "Delay before a producer connects. A broker that is not connected yet is retried, so this is only needed to stagger a large number of restarts."
     ],
     startup_jitter_ms: [
       type: :non_neg_integer,
-      doc: "Random delay added to `:startup_delay_ms`. Defaults to `Pulsar.Config.startup_jitter/0`."
+      default: 0,
+      doc: "Random extra delay on top of `:startup_delay_ms`, to spread out restarts."
     ]
   ]
 
@@ -96,18 +96,8 @@ defmodule Pulsar.Producer.Options do
   def docs, do: NimbleOptions.docs(@schema)
 
   @doc """
-  Validates producer options, warning about any the schema does not know.
-
-  Unknown options will be rejected in the next major version.
+  Validates producer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar producer ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    NimbleOptions.validate!(known, @schema)
-  end
+  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
 end

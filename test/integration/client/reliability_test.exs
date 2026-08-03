@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :reliability_test_client
@@ -27,34 +28,17 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   end
 
   test "producer recovers from broker crash" do
-    {:ok, group_pid} = Pulsar.start_producer(@topic, producer_options())
+    {:ok, group_pid} = Pulsar.Producer.start(@topic, producer_options())
 
-    [producer_pid_before_crash] = Pulsar.get_producers(group_pid)
+    assert_worker_restarts(group_pid, fn producer ->
+      broker =
+        Utils.wait_for(fn -> broker(producer) end,
+          until: &is_pid/1,
+          description: "producer to connect to a broker"
+        )
 
-    :ok =
-      Utils.wait_for(fn ->
-        System.broker_for_producer(producer_pid_before_crash, @client) != nil
-      end)
-
-    broker = System.broker_for_producer(producer_pid_before_crash, @client)
-
-    {:ok, broker_pid} = Pulsar.lookup_broker(broker.service_url, client: @client)
-    Process.exit(broker_pid, :kill)
-
-    Utils.wait_for(fn -> not Process.alive?(producer_pid_before_crash) end)
-
-    [producer_pid_after_crash] = Pulsar.get_producers(group_pid, client: @client)
-
-    Utils.wait_for(fn -> Process.alive?(producer_pid_before_crash) end)
-
-    # producer crashed due to broker link
-    refute Process.alive?(producer_pid_before_crash)
-    # producer group supervisor is still alive
-    assert Process.alive?(group_pid)
-    # a new producer started
-    assert Process.alive?(producer_pid_after_crash)
-    # the old and new producers are not the same
-    assert producer_pid_before_crash != producer_pid_after_crash
+      Process.exit(broker, :kill)
+    end)
   end
 
   test "producer recovers from broker-initiated topic unload" do
@@ -63,84 +47,79 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     # See: https://github.com/apache/pulsar/blob/master/pip/pip-307.md
     topic = "persistent://public/default/producer-unload-test"
 
-    {:ok, group_pid} = Pulsar.start_producer(topic, producer_options())
-    [producer_pid_before_unload] = Pulsar.get_producers(group_pid)
+    {:ok, group_pid} = Pulsar.Producer.start(topic, producer_options())
 
-    Utils.wait_for(fn -> :sys.get_state(producer_pid_before_unload).producer_name != nil end)
+    assert_worker_restarts(group_pid, fn producer ->
+      Utils.wait_for(fn -> :sys.get_state(producer).ready end)
+      :ok = System.unload_topic(topic)
+    end)
 
-    :ok = System.unload_topic(topic)
-
-    Utils.wait_for(fn -> not Process.alive?(producer_pid_before_unload) end)
-
-    [producer_pid_after_unload] = Pulsar.get_producers(group_pid)
-
-    refute Process.alive?(producer_pid_before_unload)
-    assert Process.alive?(group_pid)
-    assert Process.alive?(producer_pid_after_unload)
-    assert producer_pid_before_unload != producer_pid_after_unload
-
-    Pulsar.stop_producer(group_pid)
+    Pulsar.Producer.stop(group_pid)
   end
 
   test "consumer recovers from broker crash" do
     {:ok, group_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "broker-crash",
         @consumer_callback,
         subscription_options()
       )
 
-    [consumer_pid_before_crash] = Pulsar.get_consumers(group_pid, client: @client)
+    assert_worker_restarts(group_pid, fn consumer ->
+      broker =
+        Utils.wait_for(fn -> broker(consumer) end,
+          until: &is_pid/1,
+          description: "consumer to connect to a broker"
+        )
 
-    Utils.wait_for(fn ->
-      System.broker_for_consumer(consumer_pid_before_crash, @client) != nil
+      Process.exit(broker, :kill)
     end)
-
-    broker = System.broker_for_consumer(consumer_pid_before_crash, @client)
-
-    {:ok, broker_pid} = Pulsar.lookup_broker(broker.service_url, client: @client)
-    Process.exit(broker_pid, :kill)
-
-    Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_crash) end)
-
-    [consumer_pid_after_crash] = Pulsar.get_consumers(group_pid, client: @client)
-
-    # consumer crashed due to broker link
-    refute Process.alive?(consumer_pid_before_crash)
-    # consumer group supervisor is still alive
-    assert Process.alive?(group_pid)
-    # a new consumer started
-    assert Process.alive?(consumer_pid_after_crash)
-    # the old and new consumers are not the same
-    assert consumer_pid_before_crash != consumer_pid_after_crash
   end
 
   test "consumer recovers from broker-initiated topic unload" do
     {:ok, group_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "topic-unload",
         DummyConsumer,
         subscription_options()
       )
 
-    [consumer_pid_before_unload] = Pulsar.get_consumers(group_pid, client: @client)
+    assert_worker_restarts(group_pid, fn _consumer ->
+      :ok = System.unload_topic(@topic)
+    end)
+  end
 
-    :ok = System.unload_topic(@topic)
+  defp assert_worker_restarts(group, restart) do
+    [before] =
+      Utils.wait_for(fn -> Topology.workers(group) end,
+        until: &match?([_worker], &1),
+        description: "topology worker to start"
+      )
 
-    Utils.wait_for(fn -> not Process.alive?(consumer_pid_before_unload) end)
+    restart.(before)
+    Utils.wait_for(fn -> not Process.alive?(before) end)
 
-    [consumer_pid_after_unload] = Pulsar.get_consumers(group_pid, client: @client)
+    [after_restart] =
+      Utils.wait_for(fn -> Topology.workers(group) end,
+        until: &match?([worker] when worker != before, &1),
+        description: "replacement topology worker to start"
+      )
 
-    # original consumer crashed due to topic unload
-    refute Process.alive?(consumer_pid_before_unload)
-    # consumer group supervisor is still alive
-    assert Process.alive?(group_pid)
-    # a new consumer started
-    assert Process.alive?(consumer_pid_after_unload)
-    # the old and new consumers are not the same
-    assert consumer_pid_before_unload != consumer_pid_after_unload
+    refute Process.alive?(before)
+    assert Process.alive?(group)
+    assert Process.alive?(after_restart)
+    assert before != after_restart
+  end
+
+  defp broker(worker) do
+    case :sys.get_state(worker) do
+      %{broker_pid: broker} when is_pid(broker) -> broker
+      _state -> nil
+    end
+  catch
+    :exit, _reason -> nil
   end
 
   defp subscription_options do

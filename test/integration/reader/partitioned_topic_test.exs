@@ -2,6 +2,7 @@ defmodule Pulsar.Integration.Reader.PartitionedTopicTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @client :reader_partitioned_test_client
@@ -21,14 +22,17 @@ defmodule Pulsar.Integration.Reader.PartitionedTopicTest do
     :ok = System.create_topic(@topic, @partitions)
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_partitioned_test_producer
       )
 
     for i <- 1..@num_messages do
-      Pulsar.send(:reader_partitioned_test_producer, "Message #{i}", client: @client)
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:reader_partitioned_test_producer, "Message #{i}", client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->

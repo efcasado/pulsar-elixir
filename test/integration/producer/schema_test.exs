@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :producer_schema_test_client
@@ -94,7 +95,9 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     consumer_pid = start_consumer(topic, "batch-schema-sub")
     messages = ["msg-1", "msg-2", "msg-3"]
 
-    results = messages |> Enum.map(&Task.async(fn -> Pulsar.send(producer_pid, &1) end)) |> Task.await_many(10_000)
+    results =
+      messages |> Enum.map(&Task.async(fn -> Pulsar.Producer.send(producer_pid, &1) end)) |> Task.await_many(10_000)
+
     assert Enum.all?(results, &match?({:ok, _}, &1))
 
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 3 end)
@@ -121,7 +124,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     producer_pid = start_producer(topic, schema: [type: :String])
     consumer_pid = start_consumer(topic, "schema-version-sub")
 
-    {:ok, _} = Pulsar.send(producer_pid, "test message")
+    {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
@@ -135,16 +138,25 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     _producer1 = start_producer(topic, schema: [type: :String], name: "compat-test-producer-1")
 
     {:ok, producer_group} =
-      Pulsar.start_producer(topic,
+      Pulsar.Producer.start(topic,
         client: @client,
         schema: [type: :Int32],
         name: "compat-test-producer-2"
       )
 
-    [producer_pid] = Pulsar.get_producers(producer_group)
-    ref = Process.monitor(producer_pid)
-    assert_receive {:DOWN, ^ref, :process, ^producer_pid, _reason}, 5_000
-    assert Pulsar.get_producers(producer_group) == []
+    :ok = Topology.await_ready(producer_group, 1_000)
+    Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
+
+    assert Pulsar.Producer.await_ready(producer_group, timeout: 0) ==
+             {:error, :timeout}
+
+    assert Process.alive?(producer_group)
+    assert producer_group in Pulsar.Client.producers(@client)
+    assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
+
+    assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
+    Utils.wait_for(fn -> not Process.alive?(producer_group) end)
+    refute producer_group in Pulsar.Client.producers(@client)
   end
 
   test "compatible schema changes produce different versions" do
@@ -167,7 +179,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     state1 = get_producer_state(producer1)
     version1 = state1.schema_version
 
-    Pulsar.stop_producer(producer1)
+    Pulsar.Producer.stop(producer1)
 
     # Evolved schema with additional optional field
     producer2 =
@@ -193,14 +205,21 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   end
 
   defp start_producer(topic, opts) do
-    {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))
-    Utils.wait_for_producer_ready(pid)
+    {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
+
+    Utils.wait_for(fn -> Topology.workers(pid) end,
+      until: fn
+        [producer] -> :sys.get_state(producer).ready
+        _workers -> false
+      end
+    )
+
     pid
   end
 
   defp start_consumer(topic, sub_name) do
     {:ok, _} =
-      Pulsar.start_consumer(topic, sub_name, DummyConsumer,
+      Pulsar.Consumer.start(topic, sub_name, DummyConsumer,
         client: @client,
         initial_position: :earliest,
         init_args: [notify_pid: self()]
@@ -211,12 +230,12 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   end
 
   defp get_producer_state(producer_pid) do
-    [producer] = Pulsar.get_producers(producer_pid)
+    [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
     :sys.get_state(producer)
   end
 
   defp assert_send(producer_pid, consumer_pid, payload) do
-    {:ok, _} = Pulsar.send(producer_pid, payload)
+    {:ok, _} = Pulsar.Producer.send(producer_pid, payload)
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
     assert [%{payload: ^payload}] = DummyConsumer.get_messages(consumer_pid)
   end

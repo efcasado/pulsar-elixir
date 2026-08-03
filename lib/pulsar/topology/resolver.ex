@@ -1,13 +1,9 @@
-defmodule Pulsar.ServiceDiscovery do
-  @moduledoc """
-  This module handles topic lookup operations that discover which broker owns a particular topic.
-  The lookup process may involve following redirects across multiple brokers in a cluster before
-  finding the authoritative broker for a topic.
+defmodule Pulsar.Topology.Resolver do
+  @moduledoc false
 
-  ## Example
-
-      {:ok, broker_pid} = Pulsar.ServiceDiscovery.lookup_topic("persistent://public/default/my-topic")
-  """
+  # Resolves broker-owned topology metadata: which broker owns a topic and how many
+  # partitions it has. A topic lookup may be redirected across several brokers before
+  # reaching the authoritative one.
 
   require Logger
 
@@ -23,16 +19,26 @@ defmodule Pulsar.ServiceDiscovery do
     client = Keyword.get(opts, :client, :default)
 
     :telemetry.span(
-      [:pulsar, :service_discovery, :partition_count],
-      %{},
+      [:pulsar, :topology, :resolver, :partition_count],
+      %{topic: topic, client: client},
       fn ->
         result = do_partition_count(Pulsar.Client.random_broker(client), topic)
 
-        metadata = %{success: match?({:ok, _}, result), client: client}
+        metadata =
+          case result do
+            {:ok, partitions} ->
+              %{success: true, topic: topic, client: client, partition_count: partitions}
+
+            {:error, reason} ->
+              %{success: false, topic: topic, client: client, error: reason}
+          end
+
         {result, metadata}
       end
     )
   end
+
+  defp do_partition_count(nil, _topic), do: {:error, :no_broker_available}
 
   defp do_partition_count(broker, topic) do
     case Pulsar.Broker.partitioned_topic_metadata(broker, topic) do
@@ -52,16 +58,18 @@ defmodule Pulsar.ServiceDiscovery do
     client = Keyword.get(opts, :client, :default)
 
     :telemetry.span(
-      [:pulsar, :service_discovery, :lookup_topic],
-      %{},
+      [:pulsar, :topology, :resolver, :lookup_topic],
+      %{topic: topic, client: client},
       fn ->
         result = lookup_topic(Pulsar.Client.random_broker(client), topic, false, client)
 
-        metadata = %{success: match?({:ok, _}, result), client: client}
+        metadata = %{success: match?({:ok, _}, result), topic: topic, client: client}
         {result, metadata}
       end
     )
   end
+
+  defp lookup_topic(nil, _topic, _authoritative, _client), do: {:error, :no_broker_available}
 
   defp lookup_topic(broker, topic, authoritative, client) do
     case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do

@@ -10,7 +10,7 @@ alias Pulsar.Bench.Frames
 # segment at a time: sending 4MB over loopback with this client's socket options
 # arrives in ~460 deliveries with a 9KB median. 1400 bytes is near the smallest
 # delivery worth expecting, so the two sizes bracket the realistic range.
-max_frame_size = Pulsar.Config.max_frame_size()
+max_frame_size = Pulsar.Protocol.default_max_frame_size()
 
 inputs =
   for kb <- [64, 512, 4096], delivery <- [1400, 9216], into: %{} do

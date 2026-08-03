@@ -107,7 +107,11 @@ defmodule Pulsar.Message do
 
   ## Examples
 
-      iex> Pulsar.Message.redelivery_count(message)
+      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{command: %{redelivery_count: 3}})
+      3
+
+      iex> chunks = [%{redelivery_count: 1}, %{redelivery_count: 3}]
+      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{command: chunks})
       3
   """
   @spec redelivery_count(t()) :: non_neg_integer()
@@ -131,14 +135,18 @@ defmodule Pulsar.Message do
 
   ## Examples
 
-      iex> Pulsar.Message.num_broker_messages(non_chunked_message)
+      iex> Pulsar.Message.num_broker_messages(%Pulsar.Message{payload: "one"})
       1
 
-      iex> Pulsar.Message.num_broker_messages(complete_chunked_message)
-      3  # if message had 3 chunks
+      iex> three_chunks = %{chunked: true, complete: true, message_ids: [1, 2, 3]}
+      iex> Pulsar.Message.num_broker_messages(%Pulsar.Message{chunk_metadata: three_chunks})
+      3
 
-      iex> Pulsar.Message.num_broker_messages(incomplete_chunked_message)
-      2  # if only 2 out of 3 chunks were received before timeout
+  Two chunks of three, given up on, still cost the two permits the broker charged:
+
+      iex> expired = %{chunked: true, complete: false, message_ids: [1, 2]}
+      iex> Pulsar.Message.num_broker_messages(%Pulsar.Message{chunk_metadata: expired})
+      2
   """
   @spec num_broker_messages(t()) :: pos_integer()
   def num_broker_messages(%__MODULE__{chunk_metadata: %{message_ids: ids}}) when is_list(ids) do
@@ -163,10 +171,10 @@ defmodule Pulsar.Message do
 
   ## Examples
 
-      iex> Pulsar.Message.chunked?(message)
+      iex> Pulsar.Message.chunked?(%Pulsar.Message{chunk_metadata: %{chunked: true}})
       true
 
-      iex> Pulsar.Message.chunked?(non_chunked_message)
+      iex> Pulsar.Message.chunked?(%Pulsar.Message{payload: "one"})
       false
   """
   @spec chunked?(t()) :: boolean()
@@ -181,13 +189,13 @@ defmodule Pulsar.Message do
 
   ## Examples
 
-      iex> Pulsar.Message.complete?(complete_chunked_message)
+      iex> Pulsar.Message.complete?(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: true}})
       true
 
-      iex> Pulsar.Message.complete?(incomplete_chunked_message)
+      iex> Pulsar.Message.complete?(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}})
       false
 
-      iex> Pulsar.Message.complete?(non_chunked_message)
+      iex> Pulsar.Message.complete?(%Pulsar.Message{payload: "one"})
       true
   """
   @spec complete?(t()) :: boolean()
@@ -207,6 +215,19 @@ defmodule Pulsar.Message do
   so `handle_message/2` never receives one and rarely needs this check.
 
   ## Examples
+
+      iex> Pulsar.Message.valid?(%Pulsar.Message{payload: "hello"})
+      true
+
+      iex> Pulsar.Message.valid?(%Pulsar.Message{validation_error: :checksum_mismatch})
+      false
+
+  Validity is independent of chunk completeness — an incomplete chunked message is
+  still made of bytes that arrived intact:
+
+      iex> expired = %Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}
+      iex> {Pulsar.Message.valid?(expired), Pulsar.Message.complete?(expired)}
+      {true, false}
 
       def handle_invalid_message(%Pulsar.Message{} = message, state) do
         Logger.error("dropping corrupt message: \#{message.validation_error}")

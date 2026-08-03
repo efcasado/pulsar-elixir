@@ -1,17 +1,45 @@
 defmodule Pulsar.Test.Support.Utils do
   @moduledoc false
-  def wait_for(_fun, attempts \\ 100, interval_ms \\ 100)
+  import ExUnit.Assertions, only: [flunk: 1]
 
-  def wait_for(_fun, 0, _interval_ms) do
-    :error
+  @default_timeout 10_000
+  @default_interval_ms 100
+
+  @doc """
+  Polls `fun` until its result satisfies `:until`, and returns that result.
+
+  Fails the test when `:timeout` expires. The budget is a monotonic deadline, so time spent
+  inside `fun` counts against it too. `:until` defaults to a truthiness check.
+  """
+  def wait_for(fun, opts \\ []) do
+    until = Keyword.get(opts, :until, &truthy?/1)
+    interval = Keyword.get(opts, :interval, @default_interval_ms)
+    description = Keyword.get(opts, :description, "condition")
+    deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout, @default_timeout)
+
+    poll(fun, until, deadline, interval, description)
   end
 
-  def wait_for(fun, attempts, interval_ms) do
-    if fun.() do
-      :ok
+  defp truthy?(result), do: result not in [false, nil]
+
+  defp poll(fun, until, deadline, interval, description) do
+    observation = fun.()
+
+    if until.(observation) do
+      observation
     else
-      Process.sleep(interval_ms)
-      wait_for(fun, attempts - 1, interval_ms)
+      retry(fun, until, deadline, interval, description, observation)
+    end
+  end
+
+  defp retry(fun, until, deadline, interval, description, observation) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 ->
+        Process.sleep(min(interval, remaining))
+        poll(fun, until, deadline, interval, description)
+
+      _expired ->
+        flunk("Timed out waiting for #{description}; last observation: #{inspect(observation)}")
     end
   end
 
@@ -33,7 +61,7 @@ defmodule Pulsar.Test.Support.Utils do
   def collect_lookup_stats(opts \\ []) do
     client = Keyword.get(opts, :client, :default)
 
-    [:pulsar, :service_discovery, :lookup_topic, :stop]
+    [:pulsar, :topology, :resolver, :lookup_topic, :stop]
     |> collect_events()
     |> filter_by_client(client)
     |> aggregate_success_stats()
@@ -117,10 +145,16 @@ defmodule Pulsar.Test.Support.Utils do
         events
 
       names when is_list(names) ->
-        Enum.filter(events, fn event ->
-          Map.get(event, :producer_name) in names
-        end)
+        Enum.filter(events, &(&1 |> Map.get(:producer_name) |> in_group?(names)))
     end
+  end
+
+  # A group's workers are named after it with an index suffix, so filtering by the group's
+  # name matches every producer in it.
+  defp in_group?(producer_name, names) do
+    Enum.any?(names, fn name ->
+      producer_name == name or String.starts_with?(to_string(producer_name), "#{name}-")
+    end)
   end
 
   defp aggregate_success_stats(events) do
@@ -144,18 +178,6 @@ defmodule Pulsar.Test.Support.Utils do
     after
       0 -> Enum.reverse(acc)
     end
-  end
-
-  @doc """
-  Waits for the producer to be ready.
-  """
-  def wait_for_producer_ready(group_pid) do
-    wait_for(fn ->
-      case Pulsar.get_producers(group_pid) do
-        [p | _] -> :sys.get_state(p).ready == true
-        _ -> false
-      end
-    end)
   end
 
   @doc """

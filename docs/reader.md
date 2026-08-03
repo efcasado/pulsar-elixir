@@ -13,20 +13,25 @@ Readers use **non-durable subscriptions**, meaning they don't persist their posi
 
 ## Basic Usage
 
-The simplest way to use a Reader is to stream messages from a topic using an internal client:
+A Reader reads through a client, so there has to be one running. In an application it
+belongs in your supervision tree; in a script, start it directly:
 
 ```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
 "persistent://public/default/my-topic"
-|> Pulsar.Reader.stream(host: "pulsar://localhost:6650")
+|> Pulsar.Reader.stream()
 |> Stream.map(fn msg -> msg.payload end)
 |> Enum.take(10)
+
+:ok = Pulsar.Client.stop(:default)
 ```
 
 This creates a stream that:
-1. Connects to the Pulsar broker
+1. Subscribes through the client
 2. Reads 10 messages from the topic (starting from `:earliest` by default)
 3. Extracts the payload
-4. Automatically closes the connection when done
+4. Unsubscribes when done; the example then stops the directly started client
 
 > #### Note {: .info}
 >
@@ -37,29 +42,23 @@ This creates a stream that:
 > 1. Create multiple streams in separate processes (e.g., inside `Task.async`)
 > 2. Use partitioned topics (the Reader handles them automatically, merging partitions into a single stream)
 
-## Connection Management
+## Choosing a client
 
-You can choose between two connection modes:
-
-### Internal Client (Host Mode)
-Provide a `:host` URL, and the stream will manage its own temporary Pulsar client. The client is started when the stream begins and stopped when it terminates.
+Streams read through the `:default` client unless told otherwise, so a single-client
+application needs to say nothing. Name a client to read through a different cluster:
 
 ```elixir
-Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650")
-```
-
-### External Client (Client Mode)
-Use an existing Pulsar client from your application's supervision tree. This is more efficient if you're running multiple streams or already have a client connection.
-
-```elixir
-# In application.ex
 children = [
-  {Pulsar, host: "pulsar://localhost:6650", name: :my_app_client}
+  {Pulsar.Client, name: :analytics, host: "pulsar://analytics:6650"},
+  {Pulsar.Client, name: :events, host: "pulsar://events:6650"}
 ]
 
-# In your code
-Pulsar.Reader.stream(topic, client: :my_app_client)
+Supervisor.start_link(children, strategy: :one_for_one)
+
+Pulsar.Reader.stream(topic, client: :analytics)
 ```
+
+The client outlives the stream, so several streams can share one connection.
 
 ## Start Positions
 
@@ -99,7 +98,7 @@ Read messages, filter for interesting ones, and transform them:
 
 ```elixir
 topic
-|> Pulsar.Reader.stream(client: :default)
+|> Pulsar.Reader.stream()
 |> Stream.map(fn msg -> Jason.decode!(msg.payload) end)
 |> Stream.filter(fn event -> event["type"] == "user_signup" end)
 |> Stream.map(fn event -> event["user_id"] end)
@@ -111,7 +110,7 @@ Process messages in chunks using `Stream.chunk_every/2`:
 
 ```elixir
 topic
-|> Pulsar.Reader.stream(client: :default)
+|> Pulsar.Reader.stream()
 |> Stream.chunk_every(100)
 |> Enum.each(fn batch ->
   # Insert batch of 100 messages into database
@@ -124,16 +123,26 @@ By default, the stream waits up to 60 seconds for new messages before terminatin
 
 ```elixir
 topic
-|> Pulsar.Reader.stream(client: :default, timeout: 5000) # 5s timeout
+|> Pulsar.Reader.stream(timeout: 5000) # 5s timeout
 |> Enum.to_list()
 ```
 
+Initialization has a separate five-second deadline. Set `:startup_timeout` when topic
+discovery or subscription setup may need longer:
+
+```elixir
+Pulsar.Reader.stream(topic, startup_timeout: 15_000)
+```
+
+If that deadline expires, the stream removes its temporary consumer and emits
+`{:error, :reader_start_timeout}`. `:timeout` remains the inactivity timeout after startup.
+
 ### Error Handling
-If initialization fails (e.g., invalid topic, connection error), the stream emits `{:error, reason}` as its first and only element:
+If initialization fails (e.g., invalid topic, connection error, or a client that is not running), the stream emits `{:error, reason}` as its first and only element:
 
 ```elixir
 topic
-|> Pulsar.Reader.stream(host: "pulsar://invalid:6650")
+|> Pulsar.Reader.stream(client: :not_running)
 |> Enum.take(1)
 |> case do
   [{:error, reason}] -> Logger.error("Failed: #{inspect(reason)}")

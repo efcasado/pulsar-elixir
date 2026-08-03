@@ -1,12 +1,22 @@
 defmodule Pulsar.Consumer.Options do
   @moduledoc false
 
-  require Logger
-
-  # Options whose current default is read from the application environment carry no
-  # default here: they have to stay absent so the process that reads them can still
-  # consult Pulsar.Config.
   @schema [
+    topic: [
+      type: :string,
+      required: true,
+      doc: "Topic to subscribe to."
+    ],
+    subscription_name: [
+      type: :string,
+      required: true,
+      doc: "Name of the subscription."
+    ],
+    callback_module: [
+      type: :atom,
+      required: true,
+      doc: "Module implementing `Pulsar.Consumer.Callback`."
+    ],
     client: [
       type: :atom,
       default: :default,
@@ -40,7 +50,8 @@ defmodule Pulsar.Consumer.Options do
       default: 100,
       doc: """
       Permits granted to the broker on subscribe. `0` disables automatic flow control,
-      leaving it to `Pulsar.Consumer.send_flow/2`.
+      leaving it to `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
+      replacement workers also start with `0` and must be granted permits again.
       """
     ],
     flow_threshold: [
@@ -134,23 +145,23 @@ defmodule Pulsar.Consumer.Options do
     ],
     partition_discovery_interval_ms: [
       type: {:or, [:pos_integer, {:in, [false]}]},
+      default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables it. Defaults to `Pulsar.Config.partition_discovery_interval/0`.
+      `false` disables later metadata checks, but not initial topic discovery or local
+      recovery of groups that have stopped.
       """
-    ],
-    max_restarts: [
-      type: :non_neg_integer,
-      default: 10,
-      doc: "Restarts the consumer group tolerates in a minute."
     ],
     startup_delay_ms: [
       type: :non_neg_integer,
-      doc: "Delay before a consumer subscribes. Defaults to `Pulsar.Config.startup_delay/0`."
+      default: 0,
+      doc:
+        "Delay before a consumer subscribes. A broker that is not connected yet is retried, so this is only needed to stagger a large number of restarts."
     ],
     startup_jitter_ms: [
       type: :non_neg_integer,
-      doc: "Random delay added to `:startup_delay_ms`. Defaults to `Pulsar.Config.startup_jitter/0`."
+      default: 0,
+      doc: "Random extra delay on top of `:startup_delay_ms`, to spread out restarts."
     ]
   ]
 
@@ -161,18 +172,8 @@ defmodule Pulsar.Consumer.Options do
   def docs, do: NimbleOptions.docs(@schema)
 
   @doc """
-  Validates consumer options, warning about any the schema does not know.
-
-  Unknown options will be rejected in the next major version.
+  Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar consumer ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    NimbleOptions.validate!(known, @schema)
-  end
+  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
 end

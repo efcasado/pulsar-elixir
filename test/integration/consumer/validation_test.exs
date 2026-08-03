@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :validation_test_client
@@ -25,7 +26,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     name = "validation-consumer-#{:erlang.unique_integer([:positive])}"
 
     {:ok, group_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         name,
         @consumer_callback,
@@ -33,9 +34,9 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
         name: name
       )
 
-    [consumer_pid] = Pulsar.get_consumers(group_pid)
+    [consumer_pid] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
 
-    on_exit(fn -> Pulsar.stop_consumer(group_pid) end)
+    on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     %{consumer: consumer_pid}
   end
@@ -74,10 +75,10 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     name = "validation-plain-#{:erlang.unique_integer([:positive])}"
 
     {:ok, group_pid} =
-      Pulsar.start_consumer(@topic, name, PlainConsumer, client: @client, name: name, init_args: self())
+      Pulsar.Consumer.start(@topic, name, PlainConsumer, client: @client, name: name, init_args: self())
 
-    [consumer] = Pulsar.get_consumers(group_pid)
-    on_exit(fn -> Pulsar.stop_consumer(group_pid) end)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
+    on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 9, entryId: 9}}
     send(consumer, {:broker_message, {:invalid, command, <<255>>, :checksum_mismatch}})

@@ -5,7 +5,7 @@ defmodule Pulsar.MixProject do
     [
       app: :pulsar,
       version: "2.11.1",
-      elixir: "~> 1.14",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -23,12 +23,26 @@ defmodule Pulsar.MixProject do
         main: "Pulsar",
         extras: [
           "README.md",
+          "docs/architecture.md",
           "docs/chunking.md",
           "docs/schemas.md",
           "docs/reader.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
+        ],
+        skip_code_autolink_to: [
+          "Pulsar.Backoff",
+          "Pulsar.Client.Bootstrap",
+          "Pulsar.Consumer.Worker",
+          "Pulsar.Producer.Worker",
+          "Pulsar.Topology",
+          "Pulsar.Topology.Discovery",
+          "Pulsar.Topology.Group",
+          "Pulsar.Topology.Resolver",
+          "Pulsar.Topology.groups/1",
+          "Pulsar.Topology.kind/1",
+          "Pulsar.Topology.workers/1"
         ]
       ]
     ]
@@ -52,8 +66,7 @@ defmodule Pulsar.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
-      mod: {Pulsar.Application, []}
+      extra_applications: [:logger]
     ]
   end
 

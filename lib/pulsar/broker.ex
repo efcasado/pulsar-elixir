@@ -1,26 +1,14 @@
 defmodule Pulsar.Broker do
-  @moduledoc """
-  Unified Pulsar broker connection process.
+  @moduledoc false
 
-  This module combines:
-  - TCP connection management with reconnection logic
-  - Protocol handshake and authentication
-  - Service discovery functionality
-  - Consumer and producer registration and message routing
-  - Request/response correlation
-
-  Uses gen_statem for robust state management with states:
-  - :disconnected - Not connected to broker
-  - :connected - Connected and authenticated, ready for operations
-
-  Consumer and producer processes are monitored by this broker process
-  for automatic cleanup when they exit.
-  """
+  # One connection to one broker, as a gen_statem with :disconnected and :connected states:
+  # framing, handshake and auth, request/response correlation, and reconnection with backoff.
+  # Consumers and producers registered here are monitored so they are cleaned up when they exit.
 
   @behaviour :gen_statem
 
-  alias Pulsar.Config
-  alias Pulsar.Producer
+  alias Pulsar.Backoff
+  alias Pulsar.Broker.Options
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   require Logger
@@ -32,17 +20,20 @@ defmodule Pulsar.Broker do
     :port,
     :socket_module,
     :socket,
-    :prev_backoff,
+    {:prev_backoff, 0},
     :socket_opts,
     :conn_timeout,
     :auth,
     :max_frame_size,
-    :buffer,
-    :requests,
-    :actions,
+    :ping_interval,
+    :cleanup_interval,
+    :request_timeout,
+    {:buffer, <<>>},
+    {:requests, %{}},
+    {:actions, []},
     # Broker-specific state
-    :consumers,
-    :producers
+    {:consumers, %{}},
+    {:producers, %{}}
   ]
 
   @type t :: %__MODULE__{
@@ -56,6 +47,9 @@ defmodule Pulsar.Broker do
           conn_timeout: timeout(),
           auth: list(),
           max_frame_size: pos_integer(),
+          ping_interval: timeout(),
+          cleanup_interval: timeout(),
+          request_timeout: timeout(),
           buffer: Pulsar.Protocol.buffer(),
           requests: %{integer() => {GenServer.from(), integer()}},
           actions: list(),
@@ -73,6 +67,8 @@ defmodule Pulsar.Broker do
     producers: %{}
   }
 
+  @client_version "Pulsar Elixir Client"
+
   @ssl_only_opts [:verify, :cacerts, :cacertfile, :certfile, :keyfile]
 
   ## Public API
@@ -83,20 +79,16 @@ defmodule Pulsar.Broker do
   The target Pulsar broker is expected to be specified in the form of: `<scheme>://<host>[:<port>]`,
   where `scheme` can be either `pulsar` or `pulsar+ssl` and `port` is an optional field that
   defaults to `6650` and `6651`, respectively.
+
+  ## Options
+
+  #{Options.docs()}
   """
   @spec start_link(String.t(), keyword()) :: {:ok, pid()} | :ignore | {:error, term()}
   def start_link(broker_url, opts \\ []) do
     name = Keyword.get(opts, :name, nil)
 
-    args = [
-      name,
-      broker_url,
-      Keyword.get(opts, :socket_opts, verify: :verify_peer, cacertfile: CAStore.file_path()),
-      Keyword.get(opts, :conn_timeout, 1_000),
-      Keyword.get(opts, :auth, type: Pulsar.Auth.None, opts: []),
-      Keyword.get(opts, :actions, []),
-      Keyword.get(opts, :max_frame_size, Config.max_frame_size())
-    ]
+    args = Keyword.put(opts, :url, broker_url)
 
     start_opts = Keyword.take(opts, [:name])
 
@@ -170,44 +162,16 @@ defmodule Pulsar.Broker do
   end
 
   @doc """
-  Gets the list of registered consumers.
-
-  Accepts either a broker PID or a broker URL string.
-  When passing a broker URL, you can optionally specify the client via the `:client` option.
+  Gets the consumers registered with this broker connection, keyed by consumer id.
   """
-  @spec get_consumers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
-  def get_consumers(broker, opts \\ [])
-
-  def get_consumers(broker, _opts) when is_pid(broker) do
-    :gen_statem.call(broker, :get_consumers)
-  end
-
-  def get_consumers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} -> get_consumers(broker_pid)
-      {:error, :not_found} -> %{}
-    end
-  end
+  @spec get_consumers(GenServer.server()) :: %{integer() => pid()}
+  def get_consumers(broker), do: :gen_statem.call(broker, :get_consumers)
 
   @doc """
-  Gets the list of registered producers.
-
-  Accepts either a broker PID or a broker URL string.
-  When passing a broker URL, you can optionally specify the client via the `:client` option.
+  Gets the producers registered with this broker connection, keyed by producer id.
   """
-  @spec get_producers(GenServer.server() | String.t(), keyword()) :: %{integer() => pid()}
-  def get_producers(broker, opts \\ [])
-
-  def get_producers(broker, _opts) when is_pid(broker) do
-    :gen_statem.call(broker, :get_producers)
-  end
-
-  def get_producers(broker_url, opts) when is_binary(broker_url) do
-    case Pulsar.lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} -> get_producers(broker_pid)
-      {:error, :not_found} -> %{}
-    end
-  end
+  @spec get_producers(GenServer.server()) :: %{integer() => pid()}
+  def get_producers(broker), do: :gen_statem.call(broker, :get_producers)
 
   @doc """
   Gracefully stops the broker by closing all consumers/producers first.
@@ -232,7 +196,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
       if Process.alive?(consumer_pid) do
         Logger.debug("Gracefully stopping consumer #{consumer_id}")
-        Pulsar.Consumer.stop(consumer_pid)
+        GenServer.stop(consumer_pid)
       end
     end)
 
@@ -240,7 +204,7 @@ defmodule Pulsar.Broker do
     Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
       if Process.alive?(producer_pid) do
         Logger.debug("Gracefully stopping producer #{producer_id}")
-        Producer.stop(producer_pid)
+        GenServer.stop(producer_pid)
       end
     end)
 
@@ -248,8 +212,10 @@ defmodule Pulsar.Broker do
   end
 
   @impl true
-  def init([name, uri, socket_opts, conn_timeout, auth, post_actions, max_frame_size]) do
-    uri = URI.parse(uri)
+  def init(opts) do
+    opts = Options.validate!(opts)
+    name = Keyword.get(opts, :name)
+    uri = URI.parse(Keyword.fetch!(opts, :url))
     host = Map.get(uri, :host, "localhost")
     port = Map.get(uri, :port, default_port(uri.scheme))
 
@@ -259,21 +225,14 @@ defmodule Pulsar.Broker do
         "pulsar" -> :gen_tcp
       end
 
-    broker = %__MODULE__{
-      name: name || broker_key(to_string(uri)),
-      host: host,
-      port: port,
-      socket_module: socket_module,
-      socket_opts: socket_opts,
-      conn_timeout: conn_timeout,
-      auth: auth,
-      actions: post_actions,
-      max_frame_size: max_frame_size,
-      buffer: <<>>,
-      requests: %{},
-      consumers: %{},
-      producers: %{},
-      prev_backoff: 0
+    # Option names and struct field names are the same, so struct/2 carries the client's
+    # settings across; only what is derived from the URL is set explicitly.
+    broker = %{
+      struct(__MODULE__, opts)
+      | name: name || broker_key(to_string(uri)),
+        host: host,
+        port: port,
+        socket_module: socket_module
     }
 
     actions = [{:next_event, :internal, :connect}]
@@ -284,7 +243,7 @@ defmodule Pulsar.Broker do
 
   # Disconnected state
   def disconnected(:enter, :connected, broker) do
-    wait = next_backoff(broker)
+    wait = Backoff.next(broker.prev_backoff)
     Logger.error("Connection closed. Reconnecting in #{wait}ms.")
 
     # Explicitly close the socket to ensure the remote broker cleans up consumers/producers.
@@ -347,7 +306,7 @@ defmodule Pulsar.Broker do
         {:next_state, :connected, broker, actions}
 
       {:error, error} ->
-        wait = next_backoff(broker)
+        wait = Backoff.next(broker.prev_backoff)
         Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
@@ -366,10 +325,10 @@ defmodule Pulsar.Broker do
   end
 
   # Connected state
-  def connected(:enter, _old_state, _broker) do
+  def connected(:enter, _old_state, broker) do
     actions = [
-      {{:timeout, :ping}, Config.ping_interval(), nil},
-      {{:timeout, :cleanup_stale_requests}, Config.cleanup_interval(), nil}
+      {{:timeout, :ping}, broker.ping_interval, nil},
+      {{:timeout, :cleanup_stale_requests}, broker.cleanup_interval, nil}
     ]
 
     {:keep_state_and_data, actions}
@@ -448,7 +407,7 @@ defmodule Pulsar.Broker do
 
     case send_command_internal(ping, broker) do
       {:ok, new_broker} ->
-        actions = [{{:timeout, :ping}, Config.ping_interval(), nil}]
+        actions = [{{:timeout, :ping}, broker.ping_interval, nil}]
         {:keep_state, new_broker, actions}
 
       {{:error, _error}, new_broker} ->
@@ -458,7 +417,7 @@ defmodule Pulsar.Broker do
 
   def connected({:timeout, :cleanup_stale_requests}, _content, broker) do
     cleaned_broker = cleanup_stale_requests(broker)
-    actions = [{{:timeout, :cleanup_stale_requests}, Config.cleanup_interval(), nil}]
+    actions = [{{:timeout, :cleanup_stale_requests}, broker.cleanup_interval, nil}]
     {:keep_state, cleaned_broker, actions}
   end
 
@@ -474,15 +433,15 @@ defmodule Pulsar.Broker do
     auth_data = get_auth_data(auth)
 
     connect_command = %Binary.CommandConnect{
-      client_version: Config.client_version(),
-      protocol_version: Config.protocol_version(),
+      client_version: @client_version,
+      protocol_version: Pulsar.Protocol.latest_version(),
       auth_method_name: auth_method_name,
       auth_data: auth_data
     }
 
     case send_command_internal(connect_command, broker) do
       {:ok, new_broker} ->
-        actions = [{{:timeout, :ping}, Config.ping_interval(), nil}] ++ broker.actions
+        actions = [{{:timeout, :ping}, broker.ping_interval, nil}] ++ broker.actions
         {:keep_state, new_broker, actions}
 
       {{:error, _error}, new_broker} ->
@@ -909,7 +868,7 @@ defmodule Pulsar.Broker do
 
   defp cleanup_stale_requests(broker) do
     current_time = System.monotonic_time(:millisecond)
-    timeout_threshold = Config.request_timeout()
+    timeout_threshold = broker.request_timeout
 
     {stale_requests, active_requests} =
       Enum.split_with(broker.requests, fn {_request_id, {_from, timestamp}} ->
@@ -986,17 +945,6 @@ defmodule Pulsar.Broker do
       {:ok, commands, buffer} -> {:ok, commands, %{broker | buffer: buffer}}
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp next_backoff(%__MODULE__{prev_backoff: 0}) do
-    :rand.uniform(100)
-  end
-
-  defp next_backoff(%__MODULE__{prev_backoff: prev}) do
-    next = round(prev * 2)
-    max_backoff = Application.get_env(:pulsar, :max_backoff, 30_000)
-    next = min(next, max_backoff)
-    next + :rand.uniform(100)
   end
 
   defp get_auth_method_name(type: type, opts: opts) do

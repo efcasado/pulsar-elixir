@@ -95,6 +95,8 @@ jobs:
             args: test/integration/producer --max-cases 2
           - suite: reader
             args: test/integration/reader --max-cases 2
+          - suite: topology
+            args: test/integration/topology --max-cases 2
 
     steps:
     - name: Checkout code

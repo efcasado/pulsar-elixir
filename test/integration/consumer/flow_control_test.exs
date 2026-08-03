@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :flow_control_test_client
@@ -29,14 +30,17 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :flow_control_producer
       )
 
     for {key, payload} <- @messages do
-      Pulsar.send(:flow_control_producer, payload, partition_key: key, client: @client)
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:flow_control_producer, payload, partition_key: key, client: @client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->
@@ -53,14 +57,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "tiny-permits",
         @consumer_callback,
         subscription_options(1, 1, 0, 1)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -79,14 +83,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "threshold-test",
         @consumer_callback,
         subscription_options(1, 5, 3, 4)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -104,14 +108,14 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
 
   test "manual flow control with zero initial permits", %{expected_count: expected_count} do
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "manual-flow",
         @consumer_callback,
         subscription_options(1, 0, 0, 0)
       )
 
-    [consumer] = Pulsar.get_consumers(consumer_group)
+    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     # Initially, no messages should be received
     Process.sleep(500)
@@ -132,6 +136,29 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     end)
 
     assert @consumer_callback.count_messages(consumer) == expected_count
+  end
+
+  test "granting permits through the group pid reaches its workers" do
+    {:ok, consumer_group} =
+      Pulsar.Consumer.start(@topic, "group-flow", @consumer_callback, subscription_options(2, 0, 0, 0))
+
+    workers =
+      Utils.wait_for(fn -> Topology.workers(consumer_group) end,
+        until: fn workers -> length(workers) == 2 end
+      )
+
+    assert length(workers) == 2
+
+    # The pid start/1 returns is a supervisor, which cannot answer the worker's call.
+    assert :ok = Pulsar.Consumer.send_flow(consumer_group, 2)
+
+    assert Process.alive?(consumer_group)
+    assert Enum.all?(workers, &Process.alive?/1)
+
+    Utils.wait_for(fn -> Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0 end)
+    assert Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0
+
+    Pulsar.Consumer.stop(consumer_group)
   end
 
   defp subscription_options(count, initial, threshold, refill) do

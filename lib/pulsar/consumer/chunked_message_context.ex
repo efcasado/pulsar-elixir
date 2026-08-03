@@ -1,11 +1,8 @@
 defmodule Pulsar.Consumer.ChunkedMessageContext do
-  @moduledoc """
-  Manages chunked message assembly for Pulsar consumers.
+  @moduledoc false
 
-  This module handles the buffering and reassembly of message chunks that arrive
-  from the broker. It tracks multiple concurrent chunked messages and accepts
-  chunks in any order, assembling the complete payload once all chunks are received.
-  """
+  # Buffers the chunks of one chunked message until it is whole. Chunks are accepted in any
+  # order, and several chunked messages can be in flight at once.
 
   defstruct [
     :uuid,

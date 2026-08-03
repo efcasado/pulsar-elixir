@@ -15,10 +15,17 @@ application layer.
 
 ### Producer Side
 
+`Pulsar.Producer.start/2` adds a producer to a running client, so start one first — in your
+supervision tree, or directly in a script:
+
+```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+```
+
 When a producer is configured with chunking enabled:
 
 ```elixir
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "my-topic",
   chunking_enabled: true,
   max_message_size: 1024  # Split messages larger than 1KB
@@ -89,21 +96,24 @@ For non-chunked messages, these fields contain single values.
 ### Producer Configuration
 
 ```elixir
-producers: [
-  my_producer: [
-    topic: "my-topic",
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ producers: [
+   [topic: "my-topic",
+    name: :my_producer,
     chunking_enabled: true,        # Enable chunking (default: false)
     max_message_size: 1024 * 1024  # Split messages larger than 1MB (default: 5MB)
-  ]
-]
+   ]
+ ]}
 ```
 
 ### Consumer Configuration
 
 ```elixir
-consumers: [
-  my_consumer: [
-    topic: "my-topic",
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ consumers: [
+   [topic: "my-topic",
     subscription_name: "my-sub",
     callback_module: MyConsumer,
 
@@ -111,8 +121,8 @@ consumers: [
     max_pending_chunked_messages: 10,                        # Max concurrent chunked messages (default: 10)
     expire_incomplete_chunked_message_after: 60_000,         # Timeout in ms (default: 60s)
     chunk_cleanup_interval: 30_000                           # Cleanup check interval in ms (default: 30s)
-  ]
-]
+   ]
+ ]}
 ```
 
 #### Configuration Details
@@ -186,8 +196,10 @@ num_permits = Pulsar.Message.num_broker_messages(message)
 ## Example: Complete Chunked Message Flow
 
 ```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
 # Producer sends large message
-{:ok, producer} = Pulsar.start_producer(
+{:ok, producer} = Pulsar.Producer.start(
   "large-files",
   chunking_enabled: true,
   max_message_size: 1024 * 1024  # 1MB chunks
@@ -195,7 +207,7 @@ num_permits = Pulsar.Message.num_broker_messages(message)
 
 # Send 5MB file
 large_payload = File.read!("large_file.dat")  # 5MB
-{:ok, _msg_id} = Pulsar.send(producer, large_payload)
+{:ok, _msg_id} = Pulsar.Producer.send(producer, large_payload)
 # Producer automatically splits into 5 chunks
 
 # Consumer receives and assembles

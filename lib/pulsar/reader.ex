@@ -6,77 +6,39 @@ defmodule Pulsar.Reader do
 
   ## Usage
 
-  Basic usage with automatic connection:
+  A reader reads through a client, so there has to be one running. In an application it
+  belongs in your supervision tree; in a script, start it directly:
 
-      # Read 10 messages from earliest
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        start_position: :earliest
-      )
+      {:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
+      Pulsar.Reader.stream("persistent://public/default/my-topic", start_position: :earliest)
       |> Stream.take(10)
-      |> Enum.each(fn message ->
-        IO.inspect(message.payload)
-      end)
+      |> Stream.each(&IO.inspect(&1.payload))
+      |> Stream.run()
 
-  Using an external client (recommended for production):
+      :ok = Pulsar.Client.stop(:default)
 
-      # In your application supervision tree
-      {:ok, _pid} = Pulsar.start(host: "pulsar://localhost:6650")
+  Reading always uses a non-durable subscription, so a reader keeps no position and
+  starts fresh each time.
 
-      # Later, in your code
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        client: :default,
-        start_position: :earliest
-      )
-      |> Stream.map(fn message -> process(message) end)
+  Selecting a client, when there is more than the default:
+
+      Pulsar.Reader.stream(topic, client: :analytics)
+      |> Stream.map(&process/1)
       |> Stream.run()
 
   With custom flow control:
 
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        flow_permits: 50  # Request 50 messages at a time
-      )
-      |> Enum.take(100)
+      Pulsar.Reader.stream(topic, flow_permits: 50) |> Enum.take(100)
 
   Reading from a specific message:
 
-      Pulsar.Reader.stream("persistent://public/default/my-topic",
-        host: "pulsar://localhost:6650",
-        start_message_id: {123, 456}  # {ledger_id, entry_id}
-      )
-      |> Stream.each(&process/1)
-      |> Stream.run()
+      # {ledger_id, entry_id}
+      Pulsar.Reader.stream(topic, start_message_id: {123, 456}) |> Enum.take(10)
 
   ## Options
 
   See `stream/2`.
-
-  ## Connection Management
-
-  ### Internal Client Mode (host)
-  When `:host` is provided, the stream creates a temporary client that lives
-  only for the duration of the stream. The connection is automatically closed when
-  the stream completes or is halted.
-
-      Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650")
-      |> Enum.take(10)
-      # Connection automatically closed after consuming 10 messages
-
-  ### External Client Mode (client)
-  When `:client` is provided (or defaulted), the stream uses an existing client
-  from your application's supervision tree. The client remains running after
-  the stream completes.
-
-      # In your application.ex
-      children = [
-        {Pulsar, host: "pulsar://localhost:6650"}
-      ]
-
-      # Use the existing client
-      Pulsar.Reader.stream(topic, client: :default)
-      |> Enum.take(10)
-      # Client remains running
 
   ## Partitioned Topics
 
@@ -107,36 +69,15 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
+  alias Pulsar.Topology
 
-  require Logger
-
-  @default_flow_permits 100
+  @default_startup_timeout 5_000
 
   @schema [
-    host: [
-      type: :string,
-      doc: """
-      Broker URL for a client the stream starts and stops itself, e.g.
-      `pulsar://localhost:6650`. Mutually exclusive with `:client`.
-      """
-    ],
     client: [
       type: :atom,
       default: :default,
-      doc: "An already running client to read through. Mutually exclusive with `:host`."
-    ],
-    name: [
-      type: :atom,
-      default: :default,
-      doc: "Name for the client started from `:host`. Ignored when reading through `:client`."
-    ],
-    auth: [
-      type: :keyword_list,
-      doc: "Authentication for the client started from `:host`."
-    ],
-    socket_opts: [
-      type: {:list, :any},
-      doc: "Socket options for the client started from `:host`. Not necessarily a keyword list."
+      doc: "The client to read through."
     ],
     start_position: [
       type: {:in, [:earliest, :latest]},
@@ -166,6 +107,11 @@ defmodule Pulsar.Reader do
       default: 60_000,
       doc: "Milliseconds without a message after which the stream halts."
     ],
+    startup_timeout: [
+      type: :timeout,
+      default: @default_startup_timeout,
+      doc: "Milliseconds to wait for topology discovery and consumer initialization."
+    ],
     startup_delay_ms: [
       type: :non_neg_integer,
       default: 0,
@@ -184,34 +130,24 @@ defmodule Pulsar.Reader do
   Returns a `Stream` that yields `Pulsar.Message` structs. If initialization
   fails, the stream emits `{:error, reason}` as the first (and only) element.
 
-  The stream handles connection lifecycle automatically based on whether
-  you provide `:host` or `:client`.
-
   ## Options
 
   #{NimbleOptions.docs(@schema)}
 
   ## Examples
 
-      # Read with internal connection (closes automatically)
-      Pulsar.Reader.stream("persistent://public/default/topic",
-        host: "pulsar://localhost:6650",
-        start_position: :earliest
-      )
+      Pulsar.Reader.stream("persistent://public/default/topic", start_position: :earliest)
       |> Enum.take(5)
 
-      # Read with external client (remains open)
       Pulsar.Reader.stream("persistent://public/default/topic",
-        client: :default,
+        client: :analytics,
         start_position: :latest
       )
       |> Stream.filter(&interesting?/1)
       |> Enum.to_list()
 
       # Handle errors (emitted as first element if initialization fails)
-      Pulsar.Reader.stream("persistent://public/default/topic",
-        host: "pulsar://invalid:6650"
-      )
+      Pulsar.Reader.stream("persistent://public/default/topic", client: :not_running)
       |> Enum.take(1)
       |> case do
         [{:error, reason}] -> Logger.error("Failed: \#{inspect(reason)}")
@@ -230,42 +166,22 @@ defmodule Pulsar.Reader do
   defp start_reader(topic, opts) do
     opts = validate_options!(opts)
 
-    {connection_mode, client_name} = resolve_connection_mode(opts)
-
-    with :ok <- ensure_client_started(connection_mode, client_name, opts),
-         {:ok, state} <- start_consumer(topic, connection_mode, client_name, opts) do
-      state
+    case start_consumer(topic, Keyword.fetch!(opts, :client), opts) do
+      {:ok, state} -> state
+      {:error, _reason} = error -> error
     end
   end
 
-  defp ensure_client_started(:external, _client_name, _opts), do: :ok
-
-  defp ensure_client_started(:internal, client_name, opts) do
-    host = Keyword.fetch!(opts, :host)
-    auth = Keyword.get(opts, :auth)
-    socket_opts = Keyword.get(opts, :socket_opts)
-
-    client_opts =
-      [name: client_name, host: host]
-      |> maybe_put(:auth, auth)
-      |> maybe_put(:socket_opts, socket_opts)
-
-    case Pulsar.Client.start_link(client_opts) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, {:client_start_failed, reason}}
-    end
-  end
-
-  defp start_consumer(topic, connection_mode, client_name, opts) do
-    flow_permits = Keyword.get(opts, :flow_permits, @default_flow_permits)
-    start_position = Keyword.get(opts, :start_position, :earliest)
+  defp start_consumer(topic, client_name, opts) do
+    flow_permits = Keyword.fetch!(opts, :flow_permits)
+    start_position = Keyword.fetch!(opts, :start_position)
     start_message_id = Keyword.get(opts, :start_message_id)
     start_timestamp = Keyword.get(opts, :start_timestamp)
-    read_compacted = Keyword.get(opts, :read_compacted, false)
-    timeout = Keyword.get(opts, :timeout, 60_000)
-    startup_delay_ms = Keyword.get(opts, :startup_delay_ms, 0)
-    startup_jitter_ms = Keyword.get(opts, :startup_jitter_ms, 0)
+    read_compacted = Keyword.fetch!(opts, :read_compacted)
+    timeout = Keyword.fetch!(opts, :timeout)
+    startup_timeout = Keyword.fetch!(opts, :startup_timeout)
+    startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
+    startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
     subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
     reader_ref = make_ref()
@@ -274,6 +190,7 @@ defmodule Pulsar.Reader do
       client: client_name,
       subscription_type: :Exclusive,
       durable: false,
+      consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
       flow_initial: 0,
@@ -288,40 +205,43 @@ defmodule Pulsar.Reader do
       |> maybe_put(:start_message_id, start_message_id)
       |> maybe_put(:start_timestamp, start_timestamp)
 
-    case Pulsar.start_consumer(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
-      {:ok, consumer_group_pid} ->
-        {:ok, build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout)}
+    case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
+      {:ok, consumer} ->
+        case build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
+          {:ok, state} ->
+            {:ok, state}
+
+          {:error, _reason} = error ->
+            stop_consumer(consumer, client_name)
+            error
+        end
 
       {:error, reason} ->
-        cleanup_client_on_error(connection_mode, client_name)
         {:error, reason}
     end
   end
 
-  defp build_reader_state(consumer_group_pid, reader_ref, connection_mode, client_name, flow_permits, timeout) do
-    consumer_pids = wait_for_consumers_ready(consumer_group_pid, reader_ref)
+  defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
+    case wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+      {:ok, consumer_pids} ->
+        permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
-    Enum.each(consumer_pids, fn pid ->
-      :ok = Consumer.send_flow(pid, flow_permits)
-    end)
+        {:ok,
+         %{
+           client: client_name,
+           consumer_pids: consumer_pids,
+           consumer_root: consumer,
+           flow_permits: flow_permits,
+           permits_by_consumer: permits_by_consumer,
+           timeout: timeout,
+           reader_ref: reader_ref,
+           buffer: :queue.new()
+         }}
 
-    permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
-
-    %{
-      consumer_pids: consumer_pids,
-      consumer_group_pid: consumer_group_pid,
-      client_name: client_name,
-      connection_mode: connection_mode,
-      flow_permits: flow_permits,
-      permits_by_consumer: permits_by_consumer,
-      timeout: timeout,
-      reader_ref: reader_ref,
-      buffer: :queue.new()
-    }
+      {:error, _reason} = error ->
+        error
+    end
   end
-
-  defp cleanup_client_on_error(:internal, client_name), do: Pulsar.Client.stop(client_name)
-  defp cleanup_client_on_error(:external, _client_name), do: :ok
 
   defp next_message({:error, reason}) do
     {[{:error, reason}], :halted}
@@ -356,48 +276,17 @@ defmodule Pulsar.Reader do
   defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
-    case Pulsar.stop_consumer(state.consumer_group_pid) do
+    case Consumer.stop(state.consumer_root, client: state.client) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
-
-    case state.connection_mode do
-      :internal ->
-        Pulsar.Client.stop(state.client_name)
-
-      _ ->
-        :ok
-    end
   end
 
-  defp resolve_connection_mode(opts) do
-    host = Keyword.get(opts, :host)
-    name = Keyword.get(opts, :name, :default)
-    client = Keyword.get(opts, :client, :default)
+  @doc false
+  @spec stream_options_docs() :: String.t()
+  def stream_options_docs, do: NimbleOptions.docs(@schema)
 
-    cond do
-      host && client != :default ->
-        raise ArgumentError, "cannot specify both :host and :client options"
-
-      host ->
-        {:internal, name}
-
-      true ->
-        {:external, client}
-    end
-  end
-
-  # Unknown options are only warned about for now, and will be rejected in the next
-  # major version.
-  defp validate_options!(opts) do
-    {known, unknown} = Keyword.split(opts, Keyword.keys(@schema))
-
-    if unknown != [] do
-      Logger.warning("Pulsar.Reader ignoring unknown options: #{inspect(Keyword.keys(unknown))}")
-    end
-
-    NimbleOptions.validate!(known, @schema)
-  end
+  defp validate_options!(opts), do: NimbleOptions.validate!(opts, @schema)
 
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
@@ -421,20 +310,20 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_consumers_ready(consumer_group_pid, reader_ref) do
-    expected_count = length(Pulsar.get_consumers(consumer_group_pid))
-    collect_ready_messages(expected_count, [], 5_000, reader_ref)
+  defp wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+    with :ok <- Consumer.await_ready(consumer, timeout: startup_timeout),
+         :ok <- Consumer.send_flow(consumer, flow_permits),
+         [_ | _] = consumer_pids <- Topology.workers(consumer) do
+      {:ok, consumer_pids}
+    else
+      [] -> {:error, :reader_start_timeout}
+      {:error, _reason} -> {:error, :reader_start_timeout}
+    end
   end
 
-  defp collect_ready_messages(0, pids, _timeout, _reader_ref), do: pids
-
-  defp collect_ready_messages(remaining, pids, timeout, reader_ref) do
-    receive do
-      {:reader_ready, ^reader_ref, pid} ->
-        collect_ready_messages(remaining - 1, [pid | pids], timeout, reader_ref)
-    after
-      timeout ->
-        raise "Reader failed to start: expected #{remaining + length(pids)} consumers, got #{length(pids)} within #{timeout}ms"
-    end
+  defp stop_consumer(consumer, client_name) do
+    Consumer.stop(consumer, client: client_name)
+  catch
+    :exit, _reason -> :ok
   end
 end

@@ -7,6 +7,7 @@ defmodule BingoPlayer do
   def init([game_master, card_size]) do
     card = card(card_size)
     IO.puts("#{inspect(self())} started with card: #{inspect(card, charlists: :as_lists)}")
+    Process.send(game_master, {:player_ready, self()}, [])
     {:ok, {game_master, card}}
   end
 
@@ -56,47 +57,55 @@ defmodule Main do
   def call_numbers(numbers, producer) do
     [number | other_numbers] = Enum.shuffle(numbers)
 
-    IO.puts("#{inspect(self())} calling number: #{number}")
-    Pulsar.send(producer, Integer.to_string(number))
+    case Pulsar.Producer.send(producer, Integer.to_string(number)) do
+      {:ok, _message_id} ->
+        IO.puts("#{inspect(self())} calling number: #{number}")
+        call_numbers(Enum.shuffle(other_numbers), producer)
 
-    call_numbers(Enum.shuffle(other_numbers), producer)
+      {:error, _reason} ->
+        Process.sleep(100)
+        call_numbers(numbers, producer)
+    end
   end
 
   def run do
-    deps = Application.spec(:pulsar, :applications)
-    Enum.each(deps, &Application.ensure_all_started/1)
+    {:ok, _pid} =
+      Pulsar.Client.start_link(
+        host: @broker,
+        producers: [[topic: @topic, name: :game_master]],
+        consumers: consumers(@num_players, @card_size, @topic)
+      )
 
-    config = [
-      host: @broker,
-      producers: [
-        game_master: [
-          topic: @topic
-        ]
-      ],
-      consumers: consumers(@num_players, @card_size, @topic)
-    ]
-
-    {:ok, _pid} = Pulsar.start(config)
+    await_players()
 
     spawn(fn -> call_numbers(1..99, :game_master) end)
 
     and_the_winner_is()
   end
 
+  defp await_players(remaining \\ @num_players)
+
+  defp await_players(0), do: :ok
+
+  defp await_players(remaining) do
+    receive do
+      {:player_ready, _pid} -> await_players(remaining - 1)
+    end
+  end
+
   defp consumers(num_players, card_size, topic) do
     Enum.map(1..num_players, fn player_number ->
       name = "player-#{player_number}"
-      atom_name = String.to_atom(name)
 
-      {atom_name,
-       [
-         topic: topic,
-         subscription_name: name,
-         subscription_type: :Exclusive,
-         callback_module: BingoPlayer,
-         durable: false,
-         init_args: [self(), card_size]
-       ]}
+      [
+        name: name,
+        topic: topic,
+        subscription_name: name,
+        subscription_type: :Exclusive,
+        callback_module: BingoPlayer,
+        durable: false,
+        init_args: [self(), card_size]
+      ]
     end)
   end
 

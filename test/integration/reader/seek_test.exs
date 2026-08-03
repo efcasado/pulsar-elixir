@@ -2,6 +2,7 @@ defmodule Pulsar.Integration.Reader.SeekTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @client :reader_seek_test_client
@@ -18,7 +19,7 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :reader_seek_test_producer
@@ -27,15 +28,21 @@ defmodule Pulsar.Integration.Reader.SeekTest do
     message_ids =
       for i <- 1..@num_messages do
         payload = "Message #{i}"
-        {:ok, message_id} = Pulsar.send(:reader_seek_test_producer, payload, client: @client)
+
+        {:ok, message_id} =
+          Utils.wait_for(
+            fn -> Pulsar.Producer.send(:reader_seek_test_producer, payload, client: @client) end,
+            until: &match?({:ok, _message_id}, &1)
+          )
+
         {i, message_id}
       end
 
     # Read all messages to get their publish times from Pulsar
     messages =
       @topic
-      |> Pulsar.Reader.stream(client: @client, timeout: 100)
-      |> Enum.to_list()
+      |> Pulsar.Reader.stream(client: @client)
+      |> Enum.take(@num_messages)
 
     # Build lookup by payload -> {message_id, publish_time}
     message_info =
@@ -59,10 +66,9 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       @topic
       |> Pulsar.Reader.stream(
         client: @client,
-        start_message_id: {ledger_id, entry_id},
-        timeout: 100
+        start_message_id: {ledger_id, entry_id}
       )
-      |> Enum.to_list()
+      |> Enum.take(6)
 
     assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)
@@ -76,10 +82,9 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       @topic
       |> Pulsar.Reader.stream(
         client: @client,
-        start_timestamp: publish_time,
-        timeout: 100
+        start_timestamp: publish_time
       )
-      |> Enum.to_list()
+      |> Enum.take(6)
 
     assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)

@@ -3,6 +3,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :partition_topic_test_client
@@ -40,14 +41,20 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   test "partitioned consumers", %{expected_count: expected_count} do
     {:ok, partitioned_consumer_pid} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "partitioned-consumers",
         @consumer_callback,
         subscription_options(2)
       )
 
-    consumers = Pulsar.get_consumers(partitioned_consumer_pid)
+    assert Pulsar.Client.consumers(@client) == [partitioned_consumer_pid]
+
+    consumers =
+      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
+        until: &(length(&1) == 6),
+        description: "partitioned consumer workers to start"
+      )
 
     Utils.wait_for(fn ->
       consumers
@@ -62,16 +69,10 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         @consumer_callback.count_messages(consumer_pid) + acc
       end)
 
-    partition_groups = Pulsar.PartitionedConsumer.get_partition_groups(partitioned_consumer_pid)
-
-    # The number of partition groups should be equal to the number of
-    # partitions in the topic. The total number of consumers should be
-    # equal to the number of partitions times the number of consumers per
-    # partition. Last but not least, all messages produced should be
-    # consumed.
-    assert length(partition_groups) == 3
     assert Enum.count(consumers) == 6
     assert consumed_messages == expected_count
+
+    :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
 
   test "discovers partitions added to the topic" do
@@ -83,17 +84,111 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     opts = Keyword.put(subscription_options(1), :partition_discovery_interval_ms, @discovery_interval_ms)
 
     {:ok, partitioned_consumer_pid} =
-      Pulsar.start_consumer(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
+      Pulsar.Consumer.start(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
 
-    assert wait_for_partition_count(partitioned_consumer_pid, 3) == :ok
+    initial_workers =
+      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
+        until: &(length(&1) == 3),
+        description: "initial consumer partitions to start"
+      )
 
     System.update_partitions(topic, 6)
 
     # The discovery poller should pick up the new partitions and start a
     # consumer group for each one, without restarting the existing groups.
-    assert wait_for_partition_count(partitioned_consumer_pid, 6) == :ok
+    current_workers =
+      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
+        until: &(length(&1) == 6),
+        description: "added consumer partitions to start"
+      )
 
-    :ok = Pulsar.stop_consumer(partitioned_consumer_pid)
+    assert Enum.all?(initial_workers, &(&1 in current_workers))
+
+    :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
+  end
+
+  test "topic/1 answers for a partitioned consumer and its workers without stopping them" do
+    {:ok, partitioned} =
+      Pulsar.Consumer.start(@topic, "topic-at-every-level", @consumer_callback, subscription_options(1))
+
+    assert :ok = Pulsar.Consumer.await_ready(partitioned)
+    assert Pulsar.Consumer.topic(partitioned) == @topic
+
+    workers =
+      Utils.wait_for(fn -> Topology.workers(partitioned) end,
+        until: &(length(&1) == 3),
+        description: "partitioned consumer workers to start"
+      )
+
+    assert Pulsar.Consumer.topic(partitioned) == @topic
+    assert length(workers) == 3
+    assert Enum.all?(workers, &(Pulsar.Consumer.topic(&1) =~ "#{@topic}-partition-"))
+
+    assert Process.alive?(partitioned)
+    assert Enum.all?(workers, &Process.alive?/1)
+
+    :ok = Pulsar.Consumer.stop(partitioned)
+  end
+
+  test "topic/1 preserves a concrete partition supplied by the caller" do
+    partition_topic = Pulsar.Topic.partition(@topic, 0)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(
+        partition_topic,
+        "explicit-partition-topic",
+        @consumer_callback,
+        subscription_options(1)
+      )
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+    assert Pulsar.Consumer.topic(consumer) == partition_topic
+
+    assert [worker] =
+             Utils.wait_for(fn -> Topology.workers(consumer) end,
+               until: &match?([_worker], &1),
+               description: "explicit partition consumer to start"
+             )
+
+    assert Pulsar.Consumer.topic(worker) == partition_topic
+
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
+  test "send_flow/2 reports an unavailable partition after granting the live ones" do
+    test_id = :erlang.unique_integer([:positive])
+    topic = "persistent://public/default/partial-flow-#{test_id}"
+    System.create_topic(topic, 3)
+
+    opts =
+      1
+      |> subscription_options()
+      |> Keyword.put(:flow_initial, 0)
+      |> Keyword.put(:partition_discovery_interval_ms, false)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(topic, "partial-flow-#{test_id}", @consumer_callback, opts)
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+
+    workers =
+      Utils.wait_for(fn -> Topology.workers(consumer) end,
+        until: fn workers ->
+          length(workers) == 3 and Enum.all?(workers, &(not is_nil(:sys.get_state(&1).consumer_id)))
+        end,
+        description: "partition consumers to subscribe"
+      )
+
+    [{partition, _group} | _rest] = Topology.groups(consumer)
+    :ok = Supervisor.terminate_child(consumer, {:partition, partition})
+
+    live_workers = Topology.workers(consumer)
+    assert length(live_workers) == 2
+    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer, 1)
+    assert Enum.all?(live_workers, &(:sys.get_state(&1).flow_outstanding_permits == 1))
+
+    refute length(workers) == length(live_workers)
+    :ok = Pulsar.Consumer.stop(consumer)
   end
 
   defp subscription_options(count) do
@@ -105,11 +200,5 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       flow_threshold: 0,
       flow_refill: 1
     ]
-  end
-
-  defp wait_for_partition_count(partitioned_consumer_pid, expected) do
-    Utils.wait_for(fn ->
-      length(Pulsar.PartitionedConsumer.get_partition_groups(partitioned_consumer_pid)) == expected
-    end)
   end
 end

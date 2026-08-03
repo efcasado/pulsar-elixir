@@ -28,11 +28,13 @@ end
 ## Quick Start
 
 Assuming you have Pulsar running on `localhost:6650`, the quickest way to consume messages
-from a Pulsar topic is using the Reader interace as shown below
+from a Pulsar topic is using the Reader interface, reading through a client:
 
 ```elixir
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
 "persistent://my-tenant/my-namespace/my-topic"
-|> Pulsar.Reader.stream(host: "pulsar://localhost:6650", timeout: 100)
+|> Pulsar.Reader.stream(timeout: 100)
 |> Enum.map(fn msg -> String.to_integer(msg.payload) end)
 |> Enum.filter(fn n -> rem(n, 2) == 0 end)
 |> Enum.map(fn n -> n * 2 end)
@@ -52,57 +54,73 @@ defmodule MyPulsarConsumer do
 end
 ```
 
-You can start producing and consuming messages with the following configuration:
+Put a client in your supervision tree and declare its consumers and producers on it:
 
 ```elixir
-config :pulsar,
-  host: "pulsar://localhost:6650",
-  consumers: [
-    my_consumer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic",
-        subscription_name: "my-subscription",
-        callback_module: MyPulsarConsumer
-    ]
-  ],
-  producers: [
-    my_producer: [
-        topic: "persistent://my-tenant/my-namespace/my-topic"
-    ]
-  ]
+children = [
+  {Pulsar.Client,
+   host: "pulsar://localhost:6650",
+   producers: [
+     [topic: "persistent://my-tenant/my-namespace/my-topic", name: :my_producer]
+   ],
+   consumers: [
+     [topic: "persistent://my-tenant/my-namespace/my-topic",
+      subscription_name: "my-subscription",
+      callback_module: MyPulsarConsumer]
+   ]}
+]
+
+Supervisor.start_link(children, strategy: :one_for_one)
+```
+
+The client is the only thing your tree holds; consumers and producers run under it. Sets
+only known at runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
+Resource initialization is asynchronous, so operations may temporarily return
+`{:error, :not_ready}`. Call `Pulsar.Consumer.await_ready/2` or
+`Pulsar.Producer.await_ready/2` when work must wait for topic discovery and worker
+initialization:
+
+```elixir
+:ok = Pulsar.Producer.await_ready(:my_producer, timeout: 10_000)
 ```
 
 Sending a message using the configured producer can be done as follows:
 
 ```elixir
-Pulsar.send(:my_producer, "Hello, Pulsar!")
+Pulsar.Producer.send(:my_producer, "Hello, Pulsar!")
 ```
 
-By default, brokers, consumers and producers are started within the scope of the
-`:default` client, but you can also configure multiple clients (which may come in
-handy if you need to connect to multiple clusters).
+In a script or an IEx session, start the client directly and add to it as you go:
 
 ```elixir
-clients: [
-  client_1: [
-      host: "pulsar://host.cluster1.com:6650"
-  ],
-  client_2: [
-      host: "pulsar://host.cluster2.com:6650"
-  ]
-]
+{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+{:ok, _pid} = Pulsar.Producer.start(topic: "persistent://public/default/t", name: :p)
 ```
 
-Then, you can specify the client in the consumer or producer configuration using
-the `client` key, eg. `client: :client_1`.
+Brokers, consumers and producers belong to the `:default` client unless told otherwise.
+Several clients can coexist, which is useful when connecting to more than one cluster:
 
 ```elixir
-producers: [
-  my_producer_1: [
-    client: :client_1
-    topic: "persistent://my-tenant/my-namespace/my-topic"
-  ]
+children = [
+  {Pulsar.Client, name: :client_1, host: "pulsar://host.cluster1.com:6650"},
+  {Pulsar.Client, name: :client_2, host: "pulsar://host.cluster2.com:6650"}
 ]
+
+Supervisor.start_link(children, strategy: :one_for_one)
 ```
+
+A consumer or producer added at runtime selects its client with `:client`:
+
+```elixir
+Pulsar.Producer.start(
+  client: :client_1,
+  topic: "persistent://my-tenant/my-namespace/my-topic",
+  name: :my_producer_1
+)
+```
+
+See the [architecture guide](https://hexdocs.pm/pulsar_elixir/architecture.html) for ownership,
+resource lifecycle, and recovery details.
 
 If your Pulsar cluster requires authentication, you can configure it in the client
 using the `auth` key:
@@ -151,7 +169,7 @@ The `examples` directory includes a number of examples that demonstrate the use 
 For example:
 
 ```
-mix run --no-start examples/bingo.exs
+mix run examples/bingo.exs
 ```
 
 

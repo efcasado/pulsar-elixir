@@ -3,6 +3,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :subscription_types_test_client
@@ -27,14 +28,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       )
 
     {:ok, _producer_pid} =
-      Pulsar.start_producer(
+      Pulsar.Producer.start(
         @topic,
         client: @client,
         name: :subscription_types_producer
       )
 
     for {key, payload} <- @messages do
-      Pulsar.send(:subscription_types_producer, payload, partition_key: key, client: @client)
+      Utils.wait_for(
+        fn ->
+          Pulsar.Producer.send(:subscription_types_producer, payload, partition_key: key, client: @client)
+        end,
+        until: &match?({:ok, _message_id}, &1)
+      )
     end
 
     on_exit(fn ->
@@ -46,7 +52,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do
     {:ok, _shared_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "shared",
         @consumer_callback,
@@ -77,7 +83,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "key_shared subscription partitions by key", %{expected_count: expected_count} do
     {:ok, _key_shared_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "key-shared",
         @consumer_callback,
@@ -120,7 +126,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "failover subscription uses single active consumer", %{expected_count: expected_count} do
     {:ok, _failover_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "failover",
         @consumer_callback,
@@ -151,7 +157,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
   test "exclusive subscription receives all messages", %{expected_count: expected_count} do
     {:ok, _exclusive_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "exclusive",
         @consumer_callback,
@@ -168,18 +174,24 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert count == expected_count
   end
 
-  test "exclusive subscription fails with multiple consumers" do
+  # An :Exclusive subscription admits one consumer, so the workers past the first are refused
+  # and stop instead of restarting against a slot that will not free up. The one that got the
+  # subscription keeps running. Use :Failover if the others should stand by.
+  test "exclusive subscription keeps only the consumer that got the subscription" do
     {:ok, exclusive_multi_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         @topic,
         "exclusive-multi",
         @consumer_callback,
         subscription_options(:Exclusive, 2)
       )
 
-    Utils.wait_for(fn -> not Process.alive?(exclusive_multi_group) end)
+    assert Process.alive?(exclusive_multi_group)
 
-    assert Process.alive?(exclusive_multi_group) == false
+    assert [_worker] =
+             Utils.wait_for(fn -> Topology.workers(exclusive_multi_group) end,
+               until: &match?([_worker], &1)
+             )
   end
 
   defp subscription_options(type, count) do

@@ -2,7 +2,6 @@ defmodule Pulsar.Protocol do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
   @moduledoc false
 
-  alias Pulsar.Config
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   # A command's field in the BaseCommand oneof carries the same protobuf tag as
@@ -33,6 +32,15 @@ defmodule Pulsar.Protocol do
   spanning many packets copies it once rather than once per packet.
   """
   @type buffer :: {binary(), iodata(), non_neg_integer()} | binary()
+
+  @default_max_frame_size 5 * 1024 * 1024 + 10 * 1024
+
+  @doc """
+  The largest frame accepted by default, in bytes: Pulsar's 5 MiB `maxMessageSize` plus
+  room for the headers that wrap a message.
+  """
+  @spec default_max_frame_size() :: pos_integer()
+  def default_max_frame_size, do: @default_max_frame_size
 
   @magic_crc32c 0x0E01
   @magic_broker_entry_metadata 0x0E02
@@ -123,13 +131,13 @@ defmodule Pulsar.Protocol do
 
   A frame claiming more than `max_frame_size` bytes is rejected on its length
   prefix alone, before its bytes are waited for, so a desynced or absurd length
-  cannot buffer without bound. It defaults to `Pulsar.Config.max_frame_size/0`;
+  cannot buffer without bound. It defaults to `default_max_frame_size/0`;
   `Pulsar.Broker` passes the limit of the client it belongs to, since each client
   may face a cluster with its own `maxMessageSize`.
   """
   @spec decode_stream(buffer(), binary(), pos_integer()) ::
           {:ok, [term()], buffer()} | {:error, term()}
-  def decode_stream(buffer, data, max_frame_size \\ Config.max_frame_size())
+  def decode_stream(buffer, data, max_frame_size \\ default_max_frame_size())
 
   def decode_stream(head, data, max_frame_size) when is_binary(head) do
     decode_stream({head, [], 0}, data, max_frame_size)

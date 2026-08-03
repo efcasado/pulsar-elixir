@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :consumer_schema_test_client
@@ -25,7 +26,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert schema.type == :String
 
     # Verify messages can be sent and received
-    {:ok, _} = Pulsar.send(producer_pid, "test message")
+    {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
@@ -41,7 +42,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     state = :sys.get_state(consumer_pid)
     assert state.schema == nil
 
-    {:ok, _} = Pulsar.send(producer_pid, "test message")
+    {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
@@ -54,7 +55,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     start_producer(topic, schema: [type: :String])
 
     {:ok, consumer_group} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         "incompatible-sub",
         DummyConsumer,
@@ -62,19 +63,37 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         schema: [type: :Int32]
       )
 
-    ref = Process.monitor(consumer_group)
-    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}, 10_000
+    :ok = Topology.await_ready(consumer_group, 1_000)
+    Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
+
+    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 0) ==
+             {:error, :timeout}
+
+    assert Process.alive?(consumer_group)
+    assert consumer_group in Pulsar.Client.consumers(@client)
+    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
+
+    assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
+    Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
+    refute consumer_group in Pulsar.Client.consumers(@client)
   end
 
   defp start_producer(topic, opts) do
-    {:ok, pid} = Pulsar.start_producer(topic, Keyword.merge([client: @client], opts))
-    Utils.wait_for_producer_ready(pid)
+    {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
+
+    Utils.wait_for(fn -> Topology.workers(pid) end,
+      until: fn
+        [producer] -> :sys.get_state(producer).ready
+        _workers -> false
+      end
+    )
+
     pid
   end
 
   defp start_consumer(topic, sub_name, opts \\ []) do
     {:ok, _} =
-      Pulsar.start_consumer(
+      Pulsar.Consumer.start(
         topic,
         sub_name,
         DummyConsumer,
