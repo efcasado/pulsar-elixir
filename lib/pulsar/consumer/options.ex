@@ -120,8 +120,11 @@ defmodule Pulsar.Consumer.Options do
       letter topic that is unavailable leaves the message nacked rather than disturbing the
       subscription. A partitioned consumer diverts every partition into one dead letter topic.
 
-      A diverted message keeps its key, properties and event time, and gains `REAL_TOPIC` and
-      `ORIGIN_MESSAGE_ID` properties naming where it came from.
+      A diverted message keeps its key, ordering key, properties and event time, and gains
+      `REAL_TOPIC` and `ORIGIN_MESSAGE_ID` properties naming where it came from.
+
+      Diverting replaces delivery rather than accompanying it, so neither `c:handle_message/2`
+      nor `c:handle_invalid_message/2` is called for a message that reaches the threshold.
       """
     ],
     max_pending_chunked_messages: [

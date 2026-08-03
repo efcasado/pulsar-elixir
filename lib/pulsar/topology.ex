@@ -48,7 +48,7 @@ defmodule Pulsar.Topology do
   end
 
   # The fifth argument is an internal seam for exercising asynchronous discovery without a
-  # broker. Consumer and Producer deliberately expose only start_link/1.
+  # broker. Consumer and Producer deliberately keep it out of the API they document.
   @doc false
   @spec start_link(module(), atom() | nil, atom(), keyword(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts, controller_opts) do

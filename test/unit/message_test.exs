@@ -3,6 +3,7 @@ defmodule Pulsar.MessageTest do
 
   alias Pulsar.Message
   alias Pulsar.Protocol.Binary.Pulsar.Proto.KeyValue
+  alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageMetadata
   alias Pulsar.Protocol.Binary.Pulsar.Proto.SingleMessageMetadata
 
@@ -100,6 +101,40 @@ defmodule Pulsar.MessageTest do
       assert Message.key(message) == nil
       assert Message.event_time(message) == nil
       assert Message.properties(message) == %{}
+    end
+  end
+
+  describe "message_id_string/1" do
+    defp message_id(overrides \\ []) do
+      struct(%MessageIdData{ledgerId: 7, entryId: 42, partition: -1, batch_index: -1}, overrides)
+    end
+
+    defp id_string(message_id), do: Message.message_id_string(%Message{message_id: message_id})
+
+    test "prints an unbatched id on a non-partitioned topic" do
+      assert id_string(message_id()) == "7:42:-1"
+    end
+
+    test "carries the partition of a partitioned topic" do
+      assert id_string(message_id(partition: 3)) == "7:42:3"
+    end
+
+    # Every entry of a batch shares one ledger and entry id, so without the index the string
+    # would name the batch rather than the message.
+    test "tells two entries of the same batch apart" do
+      ids = Enum.map(0..1, &id_string(message_id(batch_index: &1)))
+
+      assert ids == ["7:42:-1:0", "7:42:-1:1"]
+    end
+
+    # A chunked message carries one id per chunk; the first is where it began.
+    test "answers for the chunk a chunked message began at" do
+      assert id_string([message_id(), message_id(entryId: 43)]) == "7:42:-1"
+    end
+
+    test "answers nil when there is no id" do
+      assert id_string(nil) == nil
+      assert id_string([]) == nil
     end
   end
 end

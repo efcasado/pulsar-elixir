@@ -7,8 +7,6 @@ defmodule Pulsar.Consumer.DeadLetter do
 
   alias Pulsar.Message
   alias Pulsar.Producer
-  alias Pulsar.Producer.Options, as: ProducerOptions
-  alias Pulsar.Producer.Worker, as: ProducerWorker
 
   # Read by a consumer of the dead letter topic to trace a message back to where it failed.
   # The names match the Java client's, so both ends agree on them.
@@ -43,21 +41,12 @@ defmodule Pulsar.Consumer.DeadLetter do
         []
 
       topic ->
-        # Validated here rather than started through Pulsar.Producer, which registers what it
-        # starts in the client's producer registry. This one is reached through the consumer
-        # that owns it, so registering would only couple it to a branch it does not belong to.
-        # Everything below the root is an ordinary producer, defaults included.
-        producer_opts =
-          ProducerOptions.validate!(
-            topic: topic,
-            client: Keyword.fetch!(opts, :client),
-            name: producer_name(opts)
-          )
+        producer_opts = [topic: topic, client: Keyword.fetch!(opts, :client), name: producer_name(opts)]
 
         [
           %{
             id: {:dead_letter, topic},
-            start: {Pulsar.Topology, :start_link, [ProducerWorker, nil, :producer_count, producer_opts]},
+            start: {Producer, :start_link_unregistered, [producer_opts]},
             restart: :permanent,
             type: :supervisor
           }
@@ -66,33 +55,15 @@ defmodule Pulsar.Consumer.DeadLetter do
   end
 
   @doc """
-  Publishes one message to the dead letter topic, carrying what identifies it.
+  The dead letter producer a consumer attached, given the root the workers were told about.
 
-  The key is preserved so a `Key_Shared` dead letter consumer sees the same partitioning as the
-  origin, and the origin's coordinates are added to the properties rather than replacing them.
+  Resolved once per diverted delivery rather than once per message: this is a call into the
+  topology root, which is also the supervisor discovery adds partitions to.
   """
-  @spec divert(map(), Message.t()) :: :ok | {:error, term()}
-  def divert(state, %Message{} = message) do
-    opts = [
-      client: state.client,
-      partition_key: Message.key(message),
-      ordering_key: Message.ordering_key(message),
-      properties: origin_properties(state, message),
-      event_time: Message.event_time(message)
-    ]
+  @spec producer(pid() | nil) :: {:ok, pid()} | {:error, :no_dead_letter_producer}
+  def producer(nil), do: {:error, :no_dead_letter_producer}
 
-    # Pulsar.Producer.send/3 answers {:error, :not_ready} while the dead letter topic is still
-    # being discovered and turns a worker dying mid-send into an error, so a dead letter topic
-    # that is unavailable or slow leaves the message nacked instead of reaching the consumer.
-    with {:ok, producer} <- producer(state.dead_letter_root),
-         {:ok, _message_id} <- Producer.send(producer, message.payload, opts) do
-      :ok
-    end
-  end
-
-  defp producer(nil), do: {:error, :no_dead_letter_producer}
-
-  defp producer(root) do
+  def producer(root) do
     root
     |> Supervisor.which_children()
     |> Enum.find_value({:error, :no_dead_letter_producer}, fn
@@ -103,28 +74,51 @@ defmodule Pulsar.Consumer.DeadLetter do
     :exit, _reason -> {:error, :no_dead_letter_producer}
   end
 
-  defp origin_properties(state, message) do
-    message
-    |> Message.properties()
-    |> Map.put(@real_topic_property, state.topic)
-    |> put_origin_message_id(message)
-  end
+  @doc """
+  Publishes one message to the dead letter topic, carrying what identifies it.
 
-  # A chunked message answers with a list of ids, one per chunk; the first is where it began.
-  defp put_origin_message_id(properties, message) do
-    case message.message_id |> List.wrap() |> List.first() do
-      nil -> properties
-      message_id -> Map.put(properties, @origin_message_id_property, format_message_id(message_id))
+  `origin` is the consumer this message failed on: its `:client` and the `:topic` it was consumed
+  from, which is the partition for a partitioned consumer.
+
+  The key is preserved so a `Key_Shared` dead letter consumer sees the same partitioning as the
+  origin, and the origin's coordinates are added to the properties rather than replacing them.
+  """
+  @spec divert(pid(), Message.t(), keyword()) :: :ok | {:error, term()}
+  def divert(producer, %Message{} = message, origin) do
+    opts = [
+      client: Keyword.fetch!(origin, :client),
+      partition_key: Message.key(message),
+      ordering_key: Message.ordering_key(message),
+      properties: origin_properties(Keyword.fetch!(origin, :topic), message),
+      event_time: Message.event_time(message)
+    ]
+
+    # Pulsar.Producer.send/3 answers {:error, :not_ready} while the dead letter topic is still
+    # being discovered and turns a worker dying mid-send into an error, so a dead letter topic
+    # that is unavailable or slow leaves the message nacked instead of reaching the consumer.
+    case Producer.send(producer, message.payload, opts) do
+      {:ok, _message_id} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
-  # The Java client's MessageId.toString(), which is what reads this property. Its partition is
-  # already -1 when the origin topic was not partitioned.
-  defp format_message_id(%{ledgerId: ledger_id, entryId: entry_id, partition: partition}) do
-    "#{ledger_id}:#{entry_id}:#{partition}"
+  @doc false
+  @spec origin_properties(String.t(), Message.t()) :: %{optional(String.t()) => String.t()}
+  def origin_properties(origin_topic, message) do
+    message
+    |> Message.properties()
+    |> Map.put(@real_topic_property, origin_topic)
+    |> put_origin_message_id(message)
   end
 
-  defp format_message_id(message_id), do: inspect(message_id)
+  # Pulsar.Message owns how an id is read and printed, batch entries and chunks included, and
+  # the string it answers is the one the Java client writes into this property.
+  defp put_origin_message_id(properties, message) do
+    case Message.message_id_string(message) do
+      nil -> properties
+      message_id -> Map.put(properties, @origin_message_id_property, message_id)
+    end
+  end
 
   # Defaults to the base topic rather than the partition a worker happens to hold, so every
   # partition of a partitioned consumer diverts into one dead letter topic.

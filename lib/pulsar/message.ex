@@ -39,6 +39,7 @@ defmodule Pulsar.Message do
   | `ordering_key/1` | The ordering key, or `nil` |
   | `properties/1` | User properties as a map |
   | `redelivery_count/1` | How many times the broker has redelivered it |
+  | `message_id_string/1` | Its id as Pulsar prints it, for logging and correlation |
 
   This matters because the same datum lives in different places depending on delivery: a
   batched message carries its key and properties per message, a non-batched one carries them
@@ -200,6 +201,44 @@ defmodule Pulsar.Message do
   end
 
   def redelivery_count(%__MODULE__{raw: %{command: command}}), do: command.redelivery_count
+
+  @doc """
+  Returns the message's id as Pulsar prints it, or `nil` when it has none.
+
+  The shape is `ledgerId:entryId:partition`, with a batch entry's index appended, which is what
+  the Java client's `MessageId.toString()` produces. It is what to log or carry when a message
+  has to be correlated with one seen elsewhere; `message_id` itself stays opaque.
+
+  A chunked message answers for the chunk it began at.
+
+  ## Examples
+
+      iex> id = %{ledgerId: 7, entryId: 42, partition: -1, batch_index: -1}
+      iex> Pulsar.Message.message_id_string(%Pulsar.Message{message_id: id})
+      "7:42:-1"
+
+  A batch entry appends its index, so two entries of one batch stay distinguishable:
+
+      iex> id = %{ledgerId: 7, entryId: 42, partition: 3, batch_index: 1}
+      iex> Pulsar.Message.message_id_string(%Pulsar.Message{message_id: id})
+      "7:42:3:1"
+  """
+  @spec message_id_string(t()) :: String.t() | nil
+  def message_id_string(%__MODULE__{message_id: message_id}), do: format_message_id(message_id)
+
+  # A chunked message carries one id per chunk; the first is where it began.
+  defp format_message_id([message_id | _rest]), do: format_message_id(message_id)
+  defp format_message_id([]), do: nil
+  defp format_message_id(nil), do: nil
+
+  defp format_message_id(%{ledgerId: ledger_id, entryId: entry_id, partition: partition} = message_id) do
+    base = "#{ledger_id}:#{entry_id}:#{partition}"
+
+    case Map.get(message_id, :batch_index) do
+      index when is_integer(index) and index >= 0 -> "#{base}:#{index}"
+      _not_batched -> base
+    end
+  end
 
   # A batch entry carries its own key, properties and times; a message delivered on its own
   # carries them in the message metadata. Chunks of one message all repeat the same values.

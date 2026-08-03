@@ -471,11 +471,10 @@ defmodule Pulsar.Consumer.Worker do
   # One delivery diverts as a whole: a batch arrives as a single broker command and a chunked
   # message answers the maximum across its chunks, so every message built from it carries the
   # same redelivery count.
-  defp divert?(state, messages) do
-    not is_nil(state.max_redelivery) and state.max_redelivery >= 1 and
-      not is_nil(state.dead_letter_root) and
-      batch_redelivery_count(messages) >= state.max_redelivery
-  end
+  defp divert?(%__MODULE__{max_redelivery: nil}, _messages), do: false
+  defp divert?(%__MODULE__{dead_letter_root: nil}, _messages), do: false
+
+  defp divert?(state, messages), do: batch_redelivery_count(messages) >= state.max_redelivery
 
   defp batch_redelivery_count(messages) do
     messages
@@ -489,11 +488,16 @@ defmodule Pulsar.Consumer.Worker do
         "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
+    # Resolved once for the delivery: this is a call into the topology root, which is also the
+    # supervisor discovery adds partitions to.
+    producer = DeadLetter.producer(state.dead_letter_root)
+    origin = [client: state.client, topic: state.topic]
+
     nacked_ids =
       Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
         message_ids_list = List.wrap(message.message_id)
 
-        case DeadLetter.divert(state, message) do
+        case divert(producer, message, origin) do
           :ok ->
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
@@ -513,6 +517,9 @@ defmodule Pulsar.Consumer.Worker do
 
     track_nacked(state, nacked_ids)
   end
+
+  defp divert({:ok, producer}, message, origin), do: DeadLetter.divert(producer, message, origin)
+  defp divert({:error, _reason} = error, _message, _origin), do: error
 
   defp process_messages_normally(state, messages) when is_list(messages) do
     {final_callback_state, nacked_ids} =
@@ -804,14 +811,9 @@ defmodule Pulsar.Consumer.Worker do
     :ok
   end
 
+  # Pulsar.Consumer.Options requires a positive integer here, so a policy always carries one.
   defp max_redelivery(nil), do: nil
-
-  defp max_redelivery(policy) when is_list(policy) do
-    case Keyword.get(policy, :max_redelivery) do
-      n when is_integer(n) and n >= 1 -> n
-      _invalid -> nil
-    end
-  end
+  defp max_redelivery(policy) when is_list(policy), do: Keyword.fetch!(policy, :max_redelivery)
 
   defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload) do
     payload
