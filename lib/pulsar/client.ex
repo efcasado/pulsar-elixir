@@ -36,8 +36,8 @@ defmodule Pulsar.Client do
   Declared resources are recreated after their client or resource branch restarts. Runtime
   resources are not; their caller must restore them.
 
-  Starting a client or resource establishes ownership, not readiness. Resource initialization
-  continues in the background, so operations may temporarily return `{:error, :not_ready}`.
+  Both forms initialize asynchronously. `Pulsar.Consumer.await_ready/2` and
+  `Pulsar.Producer.await_ready/2` provide a bounded initial-topology barrier when one is needed.
 
   `consumers/1` and `producers/1` list the logical resources currently running under a
   client. Partitioned resources still appear once: the returned pid is their stable root,
@@ -73,24 +73,21 @@ defmodule Pulsar.Client do
               type: {:list, :keyword_list},
               default: [],
               doc: """
-              Consumers to run under this client, each a keyword list of `Pulsar.Consumer`
-              options. Their `:client` is set to this one, and they are restored after the
-              client or consumer branch restarts. They initialize asynchronously after the
-              client starts; declaration is not a readiness signal.
+              Consumers declared under this client, each a keyword list of `Pulsar.Consumer`
+              options. Their `:client` is set to this one. See the module documentation for
+              the lifecycle of declared resources.
               """
             ],
             producers: [
               type: {:list, :keyword_list},
               default: [],
               doc: """
-              Producers to run under this client, each a keyword list of `Pulsar.Producer`
-              options, with the same asynchronous lifecycle and restoration guarantees as
-              `:consumers`.
+              Producers declared under this client, each a keyword list of `Pulsar.Producer`
+              options. Their `:client` is set to this one.
 
-              Consumers and producers are independent and start concurrently, so a consumer
-              can receive a message before a declared producer is registered. A callback that
-              publishes has to handle `{:error, :producer_not_found}` and
-              `{:error, :not_ready}`, since a producer may be starting or restarting.
+              Consumers and producers initialize independently, so callbacks that publish
+              during startup must handle `{:error, :producer_not_found}` and
+              `{:error, :not_ready}`.
               """
             ]
           ] ++ BrokerOptions.schema()

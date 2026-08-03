@@ -89,9 +89,8 @@ defmodule Pulsar do
 
   ## Lifecycle and availability
 
-  Starting establishes ownership, not readiness, so resource operations may temporarily return
-  `{:error, :not_ready}`. Resources declared on a client are restored with it; callers must
-  restore resources added later at runtime.
+  Resource startup is asynchronous. Use `Pulsar.Consumer.await_ready/2` or
+  `Pulsar.Producer.await_ready/2` when an operation must wait for initial topology discovery.
 
   See the [architecture guide](architecture.html) for the ownership tree, asynchronous startup,
   and recovery model.
