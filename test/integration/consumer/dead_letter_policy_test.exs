@@ -195,7 +195,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [_failing_consumer] =
+    [failing_consumer] =
       Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
 
     {:ok, dlq_consumer_group} =
@@ -217,6 +217,41 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     dlq_messages = DummyConsumer.get_messages(dlq_consumer)
     assert length(dlq_messages) == length(@messages)
+
+    assert DummyConsumer.count_messages(failing_consumer) == length(@messages) * 2
+  end
+
+  test "producer options configure the running dead letter producer" do
+    topic = "#{@topic}-producer-options"
+    subscription = "producer-options"
+
+    {:ok, consumer_group} =
+      Pulsar.Consumer.start(topic, subscription, DummyConsumer,
+        client: @client,
+        redelivery_interval: 100,
+        dead_letter_policy: [max_redelivery: 1, producer: [compression: :lz4, batch_enabled: true]]
+      )
+
+    dead_letter_root =
+      Utils.wait_for(
+        fn ->
+          consumer_group
+          |> Supervisor.which_children()
+          |> Enum.find_value(fn
+            {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> pid
+            _child -> nil
+          end)
+        end,
+        until: &is_pid/1
+      )
+
+    [producer] = Utils.wait_for(fn -> Topology.workers(dead_letter_root) end, until: &match?([_], &1))
+
+    producer_state = :sys.get_state(producer)
+
+    # Both differ from the schema defaults, :none and false, so a default cannot satisfy them.
+    assert producer_state.compression == :lz4
+    assert producer_state.batch_enabled == true
   end
 
   @tag telemetry_listen: [
