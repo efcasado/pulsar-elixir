@@ -103,15 +103,24 @@ defmodule Pulsar.Consumer do
   @doc """
   Stops a consumer, given its pid or its name.
 
-  A consumer in a supervision tree will be restarted by its supervisor; stop those by
-  removing them from the tree.
+  A pid must be the stable root returned by `start/1` or `start_link/1`. Worker pids used for
+  acknowledgement are not consumer roots and return `{:error, :not_found}` here.
+
+  A root started as a static child will be restarted by its supervisor; remove that child
+  from the supervision tree instead.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
   def stop(consumer, opts) when is_pid(consumer) do
-    client = Keyword.get(opts, :client, :default)
-    Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
+    case Topology.kind(consumer) do
+      :topology ->
+        client = Keyword.get(opts, :client, :default)
+        Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
+
+      _not_a_root ->
+        {:error, :not_found}
+    end
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do

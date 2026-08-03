@@ -55,6 +55,19 @@ defmodule Pulsar.ConsumerTest do
     end
   end
 
+  describe "stop/2" do
+    test "rejects a worker pid without stopping it" do
+      worker = start_supervised!({Agent, fn -> :worker end})
+
+      assert Consumer.stop(worker) == {:error, :not_found}
+      assert Process.alive?(worker)
+    end
+
+    test "returns not found for a stale pid" do
+      assert Consumer.stop(dead_pid()) == {:error, :not_found}
+    end
+  end
+
   defp dead_pid do
     pid = spawn(fn -> :ok end)
     ref = Process.monitor(pid)

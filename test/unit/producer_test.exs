@@ -54,6 +54,15 @@ defmodule Pulsar.ProducerTest do
     end
   end
 
+  describe "stop/2" do
+    test "rejects a worker pid without stopping it" do
+      worker = start_supervised!({Agent, fn -> :worker end})
+
+      assert Producer.stop(worker) == {:error, :not_found}
+      assert Process.alive?(worker)
+    end
+  end
+
   describe "partition routing" do
     test "keeps the old modulus until a growing topology is contiguous" do
       root = start_routing_topology()

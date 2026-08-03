@@ -127,15 +127,24 @@ defmodule Pulsar.Producer do
   @doc """
   Stops a producer, given its pid or its name.
 
-  A producer in a supervision tree will be restarted by its supervisor; stop those by
-  removing them from the tree.
+  A pid must be the stable root returned by `start/1` or `start_link/1`. Group and worker pids
+  are not producer roots and return `{:error, :not_found}` here.
+
+  A root started as a static child will be restarted by its supervisor; remove that child
+  from the supervision tree instead.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
   def stop(producer, opts) when is_pid(producer) do
-    client = Keyword.get(opts, :client, :default)
-    Topology.remove(producer, Client.resource_supervisor(:producers, client))
+    case Topology.kind(producer) do
+      :topology ->
+        client = Keyword.get(opts, :client, :default)
+        Topology.remove(producer, Client.resource_supervisor(:producers, client))
+
+      _not_a_root ->
+        {:error, :not_found}
+    end
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
