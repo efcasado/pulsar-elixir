@@ -338,7 +338,14 @@ defmodule Pulsar.Reader do
 
       {:error, :no_consumers_available} ->
         ready = Map.new(consumer_pids, &{&1, true})
-        wait_for_consumers_ready(consumer, reader_ref, flow_permits, ready, startup_deadline)
+
+        case receive_ready(consumer, reader_ref, ready, startup_deadline) do
+          {:ok, replacement_pids} ->
+            grant_initial_flow(consumer, reader_ref, replacement_pids, flow_permits, startup_deadline)
+
+          {:error, _reason} = error ->
+            error
+        end
 
       {:error, _reason} = error ->
         error

@@ -242,7 +242,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
     [durable_consumer] = Utils.wait_for(fn -> Topology.workers(durable_group) end, until: &match?([_], &1))
 
-    :ok = Pulsar.Consumer.stop(durable_consumer)
+    :ok = Pulsar.Consumer.stop(durable_group)
 
     Utils.wait_for(fn -> not Process.alive?(durable_consumer) end)
 
@@ -262,7 +262,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     [non_durable_consumer] =
       Utils.wait_for(fn -> Topology.workers(non_durable_group) end, until: &match?([_], &1))
 
-    :ok = Pulsar.Consumer.stop(non_durable_consumer)
+    :ok = Pulsar.Consumer.stop(non_durable_group)
 
     Utils.wait_for(fn -> not Process.alive?(non_durable_consumer) end)
 

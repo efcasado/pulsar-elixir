@@ -546,7 +546,7 @@ defmodule Pulsar.Producer.Worker do
               EpochStore.put(
                 state.client,
                 state.topic,
-                response.producer_name,
+                state.producer_name,
                 state.access_mode,
                 response.topic_epoch
               )
