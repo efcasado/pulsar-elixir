@@ -58,7 +58,11 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
     :ok = Utils.wait_for(fn -> match?([_consumer], Client.consumers(client)) end)
 
-    {:ok, _message_id} = Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: client)
+    {:ok, _message_id} =
+      Utils.wait_for(
+        fn -> Pulsar.Producer.send(:supervision_tree_producer, "from the tree", client: client) end,
+        until: &match?({:ok, _message_id}, &1)
+      )
 
     assert_receive {:received, "from the tree"}, 15_000
   end
@@ -107,7 +111,12 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     {:ok, _producer} = Pulsar.Producer.start(topic: @topic, name: :isolation_producer, client: client)
 
     :ok = Utils.wait_for(fn -> match?([_producer], Client.producers(client)) end)
-    assert {:ok, _message_id} = Pulsar.Producer.send(:isolation_producer, "before", client: client)
+
+    assert {:ok, _message_id} =
+             Utils.wait_for(
+               fn -> Pulsar.Producer.send(:isolation_producer, "before", client: client) end,
+               until: &match?({:ok, _message_id}, &1)
+             )
 
     # The whole consumer branch, as when its children exhaust their restart intensity —
     # a failure inside the branch is contained by the branch and never reaches the producers.

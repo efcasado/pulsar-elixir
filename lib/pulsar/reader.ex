@@ -313,7 +313,7 @@ defmodule Pulsar.Reader do
 
   defp wait_for_topology(consumer, startup_deadline) do
     case Backoff.run(
-           fn -> retryable_consumer_count(consumer) end,
+           fn -> expected_consumer_count(consumer) end,
            &(&1 == :initializing),
            remaining(startup_deadline)
          ) do
@@ -322,13 +322,6 @@ defmodule Pulsar.Reader do
 
       {:ok, _expected_count} ->
         :ok
-    end
-  end
-
-  defp retryable_consumer_count(consumer) do
-    case expected_consumer_count(consumer) do
-      {:ok, _expected_count} = ready -> ready
-      :initializing -> {:error, :initializing}
     end
   end
 
@@ -351,7 +344,7 @@ defmodule Pulsar.Reader do
       {:ok, current_expected_count} ->
         current_ready_consumers(consumer, current_expected_count, ready)
 
-      :initializing ->
+      {:error, :initializing} ->
         :waiting
     end
   end
@@ -360,7 +353,7 @@ defmodule Pulsar.Reader do
     case Topology.status(consumer) do
       {:ready, :non_partitioned} -> {:ok, 1}
       {:ready, {:partitioned, partitions}} -> {:ok, partitions}
-      :initializing -> :initializing
+      :initializing -> {:error, :initializing}
     end
   end
 

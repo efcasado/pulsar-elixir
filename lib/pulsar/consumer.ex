@@ -232,10 +232,9 @@ defmodule Pulsar.Consumer do
         {:error, :not_ready}
 
       {:ready, [worker | _rest]} ->
-        case Worker.topic(worker) do
-          topic when is_binary(topic) -> Topic.base(topic)
-          error -> error
-        end
+        worker
+        |> Worker.topic()
+        |> Topic.base()
 
       {:ready, []} ->
         {:error, :not_found}

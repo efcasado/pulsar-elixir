@@ -34,7 +34,7 @@ defmodule Pulsar.Backoff do
 
   def run(fun, retryable?, budget)
       when is_function(fun, 0) and is_function(retryable?, 1) and is_integer(budget) and budget >= 0 do
-    run(fun, retryable?, now() + budget, 0)
+    run(fun, retryable?, System.monotonic_time(:millisecond) + budget, 0)
   end
 
   # Against a deadline rather than by subtracting the sleeps, so that the time `fun` itself
@@ -59,7 +59,5 @@ defmodule Pulsar.Backoff do
   end
 
   defp within_budget?(:infinity, _wait), do: true
-  defp within_budget?(deadline, wait), do: now() + wait <= deadline
-
-  defp now, do: System.monotonic_time(:millisecond)
+  defp within_budget?(deadline, wait), do: System.monotonic_time(:millisecond) + wait <= deadline
 end
