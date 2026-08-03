@@ -103,7 +103,7 @@ defmodule Pulsar.Producer.Worker do
   `Pulsar.Producer.send/3`, which documents the message options.
 
   Two are not part of that public surface: `:timeout`, the call timeout in milliseconds
-  (default 5000), and `:ordering_key`, which orders within a `Key_Shared` subscription
+  (default 5000), and `:ordering_key`, which orders within a `:key_shared` subscription
   without affecting which partition the message lands on.
   """
   @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
