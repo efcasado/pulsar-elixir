@@ -233,7 +233,7 @@ defmodule Pulsar.Reader do
        %{
          client: client_name,
          consumer_pids: consumer_pids,
-         consumer_group_pid: consumer,
+         consumer_root: consumer,
          flow_permits: flow_permits,
          permits_by_consumer: permits_by_consumer,
          timeout: timeout,
@@ -276,7 +276,7 @@ defmodule Pulsar.Reader do
   defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
-    case Consumer.stop(state.consumer_group_pid, client: state.client) do
+    case Consumer.stop(state.consumer_root, client: state.client) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end

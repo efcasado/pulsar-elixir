@@ -41,7 +41,8 @@ defmodule Pulsar.Producer do
     opts = Options.validate!(opts)
     topic = Keyword.fetch!(opts, :topic)
     client = Keyword.fetch!(opts, :client)
-    opts = Keyword.put_new(opts, :name, default_name(topic))
+
+    opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
 
     Topology.start_link(Worker, Client.registry(:producers, client), :producer_count, opts)
   end
