@@ -35,10 +35,12 @@ defmodule Pulsar.Client.Bootstrap do
   defp attempt(%{pending: []} = state), do: state
 
   defp attempt(state) do
+    supervisor = Client.resource_supervisor(state.kind, state.client)
+
     outcomes =
-      state.pending
-      |> Enum.map(fn {module, opts} = resource -> {resource, start(module, opts)} end)
-      |> settle_contested(Client.resource_supervisor(state.kind, state.client))
+      Enum.map(state.pending, fn {module, opts} = resource ->
+        {resource, start(module, opts, supervisor)}
+      end)
 
     {pending, last_error} =
       Enum.reduce(outcomes, {[], nil}, fn
@@ -49,41 +51,29 @@ defmodule Pulsar.Client.Bootstrap do
     reschedule(%{state | pending: Enum.reverse(pending)}, last_error)
   end
 
-  defp start(module, opts) do
+  defp start(module, opts, supervisor) do
     case module.start(opts) do
-      {:ok, _pid} -> :started
-      {:ok, _pid, _info} -> :started
-      {:error, {:already_started, pid}} -> {:contested, pid}
-      {:error, reason} -> {:pending, reason}
+      {:ok, _pid} ->
+        :started
+
+      {:ok, _pid, _info} ->
+        :started
+
+      {:error, {:already_started, pid}} ->
+        if owned_by?(pid, supervisor), do: :started, else: {:pending, {:already_started, pid}}
+
+      {:error, reason} ->
+        {:pending, reason}
     end
   end
 
-  defp settle_contested(outcomes, supervisor) do
-    case for {_resource, {:contested, pid}} <- outcomes, do: pid do
-      [] ->
-        outcomes
-
-      _pids ->
-        # Only a child of the current resource supervisor satisfies the declaration.
-        # A registered pid owned elsewhere is a name collision, so keep retrying until
-        # the name becomes available.
-        owned =
-          for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
-              is_pid(pid),
-              into: MapSet.new(),
-              do: pid
-
-        Enum.map(outcomes, &settle_outcome(&1, owned))
-    end
+  # Only a child of this resource supervisor satisfies the declaration. A registered pid
+  # owned elsewhere is a name collision, so keep retrying until the name becomes available.
+  defp owned_by?(pid, supervisor) do
+    Enum.any?(DynamicSupervisor.which_children(supervisor), fn
+      {_id, child, _type, _modules} -> child == pid
+    end)
   end
-
-  defp settle_outcome({resource, {:contested, pid}}, owned) do
-    if pid in owned,
-      do: {resource, :started},
-      else: {resource, {:pending, {:already_started, pid}}}
-  end
-
-  defp settle_outcome(settled, _owned), do: settled
 
   defp reschedule(%{pending: []} = state, _last_error) do
     if state.backoff > 0 do
