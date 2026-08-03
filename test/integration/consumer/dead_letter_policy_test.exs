@@ -125,7 +125,9 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     failing_consumer_count = DummyConsumer.count_messages(failing_consumer)
 
-    assert failing_consumer_count == length(@messages) * (max_redelivery + 1)
+    # The delivery that reaches the threshold is diverted rather than delivered, so the callback
+    # sees a message on every attempt below it and never on the one that dead letters it.
+    assert failing_consumer_count == length(@messages) * max_redelivery
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)

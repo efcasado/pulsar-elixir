@@ -389,10 +389,17 @@ defmodule Pulsar.Consumer.Worker do
     permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
     new_state = decrement_permits(new_state, permits_consumed)
 
-    new_state = process_messages_normally(new_state, messages)
-    new_state = maybe_send_batch_to_dead_letter(new_state, messages)
+    # A delivery the policy is done with is diverted instead of delivered, not as well as. Both
+    # ran before, so the callback kept seeing a message for as long as diverting failed, and one
+    # that succeeded on that delivery had its message acknowledged and dead lettered both.
+    new_state =
+      if divert?(new_state, messages) do
+        send_batch_to_dead_letter(new_state, messages)
+      else
+        process_messages_normally(new_state, messages)
+      end
 
-    {:noreply, new_state}
+    {:noreply, check_and_refill_permits(new_state)}
   end
 
   @impl true
@@ -461,23 +468,25 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp maybe_send_batch_to_dead_letter(state, messages) do
-    max_redelivery_count =
-      messages
-      |> Enum.map(&Pulsar.Message.redelivery_count/1)
-      |> Enum.max(fn -> 0 end)
-
-    if is_nil(state.max_redelivery) or state.max_redelivery < 1 or
-         max_redelivery_count < state.max_redelivery or is_nil(state.dead_letter_root) do
-      state
-    else
-      do_send_batch_to_dead_letter(state, messages, max_redelivery_count)
-    end
+  # One delivery diverts as a whole: a batch arrives as a single broker command and a chunked
+  # message answers the maximum across its chunks, so every message built from it carries the
+  # same redelivery count.
+  defp divert?(state, messages) do
+    not is_nil(state.max_redelivery) and state.max_redelivery >= 1 and
+      not is_nil(state.dead_letter_root) and
+      batch_redelivery_count(messages) >= state.max_redelivery
   end
 
-  defp do_send_batch_to_dead_letter(state, messages, redelivery_count) do
+  defp batch_redelivery_count(messages) do
+    messages
+    |> Enum.map(&Pulsar.Message.redelivery_count/1)
+    |> Enum.max(fn -> 0 end)
+  end
+
+  defp send_batch_to_dead_letter(state, messages) do
     Logger.warning(
-      "Redelivery count of #{redelivery_count} exceeds max redelivery of #{state.max_redelivery}, sending batch to DLQ "
+      "Redelivery count of #{batch_redelivery_count(messages)} reached max redelivery of " <>
+        "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
     nacked_ids =
@@ -502,14 +511,7 @@ defmodule Pulsar.Consumer.Worker do
         end
       end)
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-      else
-        state.nacked_messages
-      end
-
-    %{state | nacked_messages: new_nacked_messages}
+    track_nacked(state, nacked_ids)
   end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
@@ -518,20 +520,16 @@ defmodule Pulsar.Consumer.Worker do
         process_single_message(state, message, callback_state, nacked_acc)
       end)
 
-    state = check_and_refill_permits(state)
+    %{track_nacked(state, nacked_ids) | callback_state: final_callback_state}
+  end
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))
-      else
-        state.nacked_messages
-      end
+  # :trigger_redelivery drains this set and only fires when a redelivery interval is configured,
+  # so without one an id is deliberately not tracked rather than left in a set nothing empties.
+  defp track_nacked(state, []), do: state
+  defp track_nacked(%{redelivery_interval: nil} = state, _nacked_ids), do: state
 
-    %{
-      state
-      | callback_state: final_callback_state,
-        nacked_messages: new_nacked_messages
-    }
+  defp track_nacked(state, nacked_ids) do
+    %{state | nacked_messages: MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))}
   end
 
   defp process_single_message(state, %Pulsar.Message{} = message, callback_state, nacked_acc) do
