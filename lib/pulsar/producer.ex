@@ -45,11 +45,8 @@ defmodule Pulsar.Producer do
   end
 
   @doc false
-  # A producer owned by another resource is reached through its owner's tree rather than by name,
-  # so it registers nowhere: nothing outside that owner should resolve or stop it, and it must not
-  # depend on a registry belonging to a branch that restarts separately from its owner. It is a
-  # producer in every other respect, which is what starting it from here rather than assembling
-  # the topology at the call site keeps true.
+  # For a producer owned by another resource: nothing outside that owner should resolve or stop it,
+  # and it must not depend on a registry belonging to a branch that restarts separately from it.
   @spec start_link_unregistered(keyword()) :: Supervisor.on_start()
   def start_link_unregistered(opts), do: opts |> Options.validate!() |> start_topology(nil)
 

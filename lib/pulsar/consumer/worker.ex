@@ -389,9 +389,7 @@ defmodule Pulsar.Consumer.Worker do
     permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
     new_state = decrement_permits(new_state, permits_consumed)
 
-    # A delivery the policy is done with is diverted instead of delivered, not as well as. Both
-    # ran before, so the callback kept seeing a message for as long as diverting failed, and one
-    # that succeeded on that delivery had its message acknowledged and dead lettered both.
+    # A delivery the policy is done with is diverted instead of delivered, not as well as.
     new_state =
       if divert?(new_state, messages) do
         send_batch_to_dead_letter(new_state, messages)

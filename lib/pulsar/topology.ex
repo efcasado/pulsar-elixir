@@ -58,9 +58,6 @@ defmodule Pulsar.Topology do
     Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
 
-  # A resource owned by another resource is reached through its owner's tree, so it registers
-  # nowhere: nothing outside that owner should be able to resolve it, and it must not depend on
-  # a registry that belongs to a branch restarting separately from the one that owns it.
   defp start_options(nil, _name), do: []
   defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
 
@@ -396,12 +393,8 @@ defmodule Pulsar.Topology do
     Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
   end
 
-  # A resource that owns another declares it through `:companions`, a function of this root's
-  # options and the root itself. It answers the options its workers inherit, so it can tell them
-  # where to find what it attached, together with the children to run alongside them.
-  #
-  # The function is taken out of the options rather than read from them, since it configures
-  # this root and is not part of what a worker is started with.
+  # Popped rather than read: `:companions` configures this root and is not part of what a worker
+  # is started with.
   defp attach_companions(config, root) do
     case Keyword.pop(config.opts, :companions) do
       {nil, opts} ->

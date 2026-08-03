@@ -92,7 +92,6 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert properties["REAL_TOPIC"] == "orders-partition-2"
     end
 
-    # Pulsar.Message owns the format; this only pins that the property carries it.
     test "names the message it came from" do
       properties = DeadLetter.origin_properties("orders", message(message_id(partition: 3)))
 
@@ -123,7 +122,6 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert Topology.resource?(dlq, :producers)
     end
 
-    # The point of owning it: nothing else restarts a producer hanging off a consumer.
     test "restarts the dead letter producer when it dies" do
       root = root()
       dlq = dead_letter_producer(root)
@@ -138,7 +136,6 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert Topology.resource?(restarted, :producers)
     end
 
-    # The other half of owning it: it does not outlive the consumer that diverts into it.
     test "goes down with the consumer that owns it" do
       root = root()
       dlq = dead_letter_producer(root)

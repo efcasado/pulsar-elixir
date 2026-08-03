@@ -2,32 +2,26 @@ defmodule Pulsar.Consumer.DeadLetter do
   @moduledoc false
 
   # The dead letter producer belongs to the consumer that diverts into it, so it hangs off that
-  # consumer's Pulsar.Topology root rather than the client's producer branch. It is a producer
-  # like any other below that point: its own topology, its own discovery, its own partitions.
+  # consumer's Pulsar.Topology root rather than the client's producer branch.
 
   alias Pulsar.Message
   alias Pulsar.Producer
 
-  # Read by a consumer of the dead letter topic to trace a message back to where it failed.
-  # The names match the Java client's, so both ends agree on them.
+  # The Java client's names, so both ends of a dead letter topic agree on them.
   @real_topic_property "REAL_TOPIC"
   @origin_message_id_property "ORIGIN_MESSAGE_ID"
 
   @doc """
   Attaches a dead letter producer to a consumer's topology. `Pulsar.Topology`'s `:companions`.
 
-  Called with the logical consumer's options, before `Pulsar.Topology.Group` rewrites `:name`
-  and `:topic` per partition and per worker, so both the producer and what the workers are told
-  about it describe the whole consumer rather than the one partition a worker happens to hold.
-
-  A consumer with no dead letter policy attaches nothing.
+  Called with the logical consumer's options, before `Pulsar.Topology.Group` rewrites `:name` and
+  `:topic` per partition, so what it builds describes the whole consumer rather than one partition.
   """
   @spec attach(keyword(), pid()) :: {keyword(), [Supervisor.child_spec()]}
   def attach(opts, root), do: {annotate(opts, root), child_specs(opts)}
 
-  # What the workers inherit is the topology root, not a pid or a registered name. The producer
-  # is a child of that root, so resolving through it is what makes a restart of the producer
-  # invisible to them, and keeps them off a registry owned by a branch that restarts separately.
+  # Workers inherit the topology root rather than a pid, and find the producer among its children
+  # when they need it, so a producer that restarts under them goes unnoticed.
   defp annotate(opts, root) do
     case topic(opts) do
       nil -> opts
@@ -54,12 +48,6 @@ defmodule Pulsar.Consumer.DeadLetter do
     end
   end
 
-  @doc """
-  The dead letter producer a consumer attached, given the root the workers were told about.
-
-  Resolved once per diverted delivery rather than once per message: this is a call into the
-  topology root, which is also the supervisor discovery adds partitions to.
-  """
   @spec producer(pid() | nil) :: {:ok, pid()} | {:error, :no_dead_letter_producer}
   def producer(nil), do: {:error, :no_dead_letter_producer}
 
@@ -80,8 +68,7 @@ defmodule Pulsar.Consumer.DeadLetter do
   `origin` is the consumer this message failed on: its `:client` and the `:topic` it was consumed
   from, which is the partition for a partitioned consumer.
 
-  The key is preserved so a `Key_Shared` dead letter consumer sees the same partitioning as the
-  origin, and the origin's coordinates are added to the properties rather than replacing them.
+  The key is preserved, so a `:key_shared` dead letter consumer partitions as the origin did.
   """
   @spec divert(pid(), Message.t(), keyword()) :: :ok | {:error, term()}
   def divert(producer, %Message{} = message, origin) do
@@ -93,9 +80,8 @@ defmodule Pulsar.Consumer.DeadLetter do
       event_time: Message.event_time(message)
     ]
 
-    # Pulsar.Producer.send/3 answers {:error, :not_ready} while the dead letter topic is still
-    # being discovered and turns a worker dying mid-send into an error, so a dead letter topic
-    # that is unavailable or slow leaves the message nacked instead of reaching the consumer.
+    # send/3 already answers {:error, :not_ready} during discovery and turns a worker dying
+    # mid-send into an error, so an unavailable dead letter topic never reaches the consumer.
     case Producer.send(producer, message.payload, opts) do
       {:ok, _message_id} -> :ok
       {:error, _reason} = error -> error
@@ -111,8 +97,6 @@ defmodule Pulsar.Consumer.DeadLetter do
     |> put_origin_message_id(message)
   end
 
-  # Pulsar.Message owns how an id is read and printed, batch entries and chunks included, and
-  # the string it answers is the one the Java client writes into this property.
   defp put_origin_message_id(properties, message) do
     case Message.message_id_string(message) do
       nil -> properties
