@@ -32,6 +32,16 @@ defmodule Pulsar.Topology do
   @spec restart_intensity() :: keyword()
   def restart_intensity, do: [max_restarts: @max_restarts, max_seconds: @max_seconds]
 
+  @doc false
+  def child_spec(module, id, opts) do
+    %{
+      id: {module, id},
+      start: {module, :start_link, [opts]},
+      restart: :permanent,
+      type: :supervisor
+    }
+  end
+
   @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
     start_link(worker, registry, count_key, opts, [])
@@ -86,7 +96,7 @@ defmodule Pulsar.Topology do
         await_ready(root, timeout)
 
       name when is_binary(name) or is_atom(name) ->
-        resolve = fn -> resolve_resource(kind, name, Keyword.fetch!(opts, :client)) end
+        resolve = fn -> Pulsar.Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
         await_ready(resolve, timeout)
     end
   end
@@ -115,12 +125,6 @@ defmodule Pulsar.Topology do
       end
     else
       {:error, :not_found}
-    end
-  end
-
-  defp resolve_resource(kind, name, client) do
-    with {:ok, client_name} <- Pulsar.Client.name(client) do
-      Pulsar.Client.lookup(Pulsar.Client.registry(kind, client_name), name)
     end
   end
 

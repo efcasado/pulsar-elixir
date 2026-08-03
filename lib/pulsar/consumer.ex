@@ -20,23 +20,15 @@ defmodule Pulsar.Consumer do
   #{Pulsar.Consumer.Options.docs()}
   """
 
+  alias Pulsar.Client
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topic
   alias Pulsar.Topology
 
-  @default_client :default
-
   @doc false
-  def child_spec(opts) do
-    %{
-      id: {__MODULE__, id(opts)},
-      start: {__MODULE__, :start_link, [opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
-  end
+  def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
 
   @doc """
   Starts a consumer, linked to the calling process.
@@ -54,7 +46,7 @@ defmodule Pulsar.Consumer do
         default_name(topic, Keyword.fetch!(opts, :subscription_name))
       end)
 
-    Topology.start_link(Worker, Pulsar.Client.registry(:consumers, client), :consumer_count, opts)
+    Topology.start_link(Worker, Client.registry(:consumers, client), :consumer_count, opts)
   end
 
   @doc """
@@ -72,7 +64,7 @@ defmodule Pulsar.Consumer do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
 
-    Pulsar.Client.start_resource(Pulsar.Client.resource_supervisor(:consumers, client), {__MODULE__, opts})
+    Client.start_resource(Client.resource_supervisor(:consumers, client), {__MODULE__, opts})
   end
 
   @doc """
@@ -121,12 +113,12 @@ defmodule Pulsar.Consumer do
   def stop(consumer, opts \\ [])
 
   def stop(consumer, opts) when is_pid(consumer) do
-    client = Keyword.get(opts, :client, @default_client)
-    Topology.remove(consumer, Pulsar.Client.resource_supervisor(:consumers, client))
+    client = Keyword.get(opts, :client, :default)
+    Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    case resolve(name, opts) do
+    case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
       {:ok, consumer} -> stop(consumer, opts)
       {:error, :not_found} -> {:error, :consumer_not_found}
     end
@@ -203,7 +195,7 @@ defmodule Pulsar.Consumer do
   end
 
   def send_flow(name, permits, opts) when (is_binary(name) or is_atom(name)) and is_integer(permits) and permits > 0 do
-    case resolve(name, opts) do
+    case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
       {:ok, consumer} -> send_flow(consumer, permits, opts)
       {:error, :not_found} -> {:error, :consumer_not_found}
     end
@@ -291,12 +283,6 @@ defmodule Pulsar.Consumer do
 
   defp await_result({:error, :not_found}), do: {:error, :consumer_not_found}
   defp await_result(result), do: result
-
-  defp resolve(name, opts) do
-    client = Keyword.get(opts, :client, @default_client)
-
-    Pulsar.Client.lookup(Pulsar.Client.registry(:consumers, client), name)
-  end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows
   # the same default as the consumer's name.

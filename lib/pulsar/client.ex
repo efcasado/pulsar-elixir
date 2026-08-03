@@ -212,8 +212,14 @@ defmodule Pulsar.Client do
   end
 
   @doc false
-  @spec lookup(atom(), term()) :: {:ok, pid()} | {:error, :not_found}
-  def lookup(registry, key) do
+  @spec lookup(:consumers | :producers, term(), atom() | pid()) :: {:ok, pid()} | {:error, :not_found}
+  def lookup(kind, key, client \\ :default) when kind in [:consumers, :producers] do
+    with {:ok, client_name} <- client_name(client) do
+      lookup_registry(registry(kind, client_name), key)
+    end
+  end
+
+  defp lookup_registry(registry, key) do
     case Registry.lookup(registry, key) do
       [{pid, _value}] -> {:ok, pid}
       [] -> {:error, :not_found}
@@ -263,11 +269,9 @@ defmodule Pulsar.Client do
 
   ## Process Name Helpers
 
-  @doc false
-  @spec name(atom() | pid()) :: {:ok, atom()} | {:error, :not_found}
-  def name(name) when is_atom(name), do: {:ok, name}
+  defp client_name(name) when is_atom(name), do: {:ok, name}
 
-  def name(pid) when is_pid(pid) do
+  defp client_name(pid) when is_pid(pid) do
     case Process.info(pid, :registered_name) do
       {:registered_name, name} when is_atom(name) -> {:ok, name}
       _not_registered -> {:error, :not_found}
@@ -409,7 +413,7 @@ defmodule Pulsar.Client do
     client = Keyword.get(opts, :client, :default)
     broker_registry = broker_registry(client)
 
-    lookup(broker_registry, broker_url)
+    lookup_registry(broker_registry, broker_url)
   end
 
   @doc """

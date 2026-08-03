@@ -22,22 +22,14 @@ defmodule Pulsar.Producer do
   #{Pulsar.Producer.Options.docs()}
   """
 
+  alias Pulsar.Client
   alias Pulsar.Producer.Options
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topology
 
-  @default_client :default
-
   @doc false
-  def child_spec(opts) do
-    %{
-      id: {__MODULE__, id(opts)},
-      start: {__MODULE__, :start_link, [opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
-  end
+  def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
 
   @doc """
   Starts a producer, linked to the calling process.
@@ -51,7 +43,7 @@ defmodule Pulsar.Producer do
     client = Keyword.fetch!(opts, :client)
     opts = Keyword.put_new(opts, :name, default_name(topic))
 
-    Topology.start_link(Worker, Pulsar.Client.registry(:producers, client), :producer_count, opts)
+    Topology.start_link(Worker, Client.registry(:producers, client), :producer_count, opts)
   end
 
   @doc """
@@ -71,7 +63,7 @@ defmodule Pulsar.Producer do
     opts = Options.validate!(opts)
     client = Keyword.fetch!(opts, :client)
 
-    Pulsar.Client.start_resource(Pulsar.Client.resource_supervisor(:producers, client), {__MODULE__, opts})
+    Client.start_resource(Client.resource_supervisor(:producers, client), {__MODULE__, opts})
   end
 
   @doc """
@@ -128,7 +120,7 @@ defmodule Pulsar.Producer do
   def send(producer, message, opts) when is_pid(producer) and is_binary(message), do: publish(producer, message, opts)
 
   def send(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
-    case resolve(name, opts) do
+    case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
       {:ok, pid} -> publish(pid, message, opts)
       {:error, :not_found} -> {:error, :producer_not_found}
     end
@@ -144,12 +136,12 @@ defmodule Pulsar.Producer do
   def stop(producer, opts \\ [])
 
   def stop(producer, opts) when is_pid(producer) do
-    client = Keyword.get(opts, :client, @default_client)
-    Topology.remove(producer, Pulsar.Client.resource_supervisor(:producers, client))
+    client = Keyword.get(opts, :client, :default)
+    Topology.remove(producer, Client.resource_supervisor(:producers, client))
   end
 
   def stop(name, opts) when is_binary(name) or is_atom(name) do
-    case resolve(name, opts) do
+    case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
       {:ok, producer} -> stop(producer, opts)
       {:error, :not_found} -> {:error, :producer_not_found}
     end
@@ -197,12 +189,6 @@ defmodule Pulsar.Producer do
 
   defp send_to_worker([worker | _rest], message, opts) do
     Worker.send_message(worker, message, opts)
-  end
-
-  defp resolve(name, opts) do
-    client = Keyword.get(opts, :client, @default_client)
-
-    Pulsar.Client.lookup(Pulsar.Client.registry(:producers, client), name)
   end
 
   defp await_result({:error, :not_found}), do: {:error, :producer_not_found}
