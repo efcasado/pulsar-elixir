@@ -157,42 +157,13 @@ defmodule Pulsar.Topology.Discovery do
   end
 
   defp reconcile_topology(state, desired) do
-    before = Map.new(Topology.groups(state.topology))
-
     case Topology.reconcile(state.topology, desired, state.config) do
-      {:ok, partitions} ->
-        after_reconciliation = Map.new(Topology.groups(state.topology))
-
-        {:ok,
-         %{
-           desired_partition_count: desired,
-           partition_count: partitions,
-           added_groups: added_groups(before, after_reconciliation),
-           revived_groups: revived_groups(before, after_reconciliation)
-         }}
+      {:ok, outcome} ->
+        {:ok, Map.put(outcome, :desired_partition_count, desired)}
 
       {:error, _reason} = error ->
         error
     end
-  end
-
-  defp added_groups(before, after_reconciliation) do
-    after_reconciliation
-    |> Enum.flat_map(fn {index, pid} ->
-      if is_pid(pid) and not Map.has_key?(before, index), do: [index], else: []
-    end)
-    |> Enum.sort()
-  end
-
-  defp revived_groups(before, after_reconciliation) do
-    after_reconciliation
-    |> Enum.flat_map(fn {index, pid} ->
-      case Map.fetch(before, index) do
-        {:ok, previous} when is_pid(pid) and previous != pid -> [index]
-        _unchanged -> []
-      end
-    end)
-    |> Enum.sort()
   end
 
   defp ready(state, outcome) do

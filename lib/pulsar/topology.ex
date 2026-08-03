@@ -321,13 +321,25 @@ defmodule Pulsar.Topology do
   end
 
   @doc false
-  @spec reconcile(pid(), non_neg_integer(), map()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @spec reconcile(pid(), non_neg_integer(), map()) ::
+          {:ok,
+           %{
+             partition_count: non_neg_integer(),
+             added_groups: [non_neg_integer()],
+             revived_groups: [non_neg_integer()]
+           }}
+          | {:error, term()}
   def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
     children = Supervisor.which_children(root)
 
-    case restart_stopped_groups(root, children) do
-      :ok -> reconcile_children(root, children, desired, config)
-      {:error, _reason} = error -> error
+    with {:ok, revived_groups} <- restart_stopped_groups(root, children),
+         {:ok, partition_count, added_groups} <- reconcile_children(root, children, desired, config) do
+      {:ok,
+       %{
+         partition_count: partition_count,
+         added_groups: added_groups,
+         revived_groups: revived_groups
+       }}
     end
   catch
     :exit, reason -> {:error, reason}
@@ -346,21 +358,26 @@ defmodule Pulsar.Topology do
   end
 
   defp restart_stopped_groups(root, children) do
-    Enum.reduce_while(children, :ok, fn
-      {{:topic, :non_partitioned} = id, :undefined, :supervisor, _modules}, :ok ->
-        restart_stopped_group(root, id)
+    children
+    |> Enum.reduce_while({:ok, []}, fn
+      {{:topic, :non_partitioned} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
+        restart_stopped_group(root, id, 0, revived)
 
-      {{:partition, _index} = id, :undefined, :supervisor, _modules}, :ok ->
-        restart_stopped_group(root, id)
+      {{:partition, index} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
+        restart_stopped_group(root, id, index, revived)
 
-      _child, :ok ->
-        {:cont, :ok}
+      _child, {:ok, revived} ->
+        {:cont, {:ok, revived}}
+    end)
+    |> then(fn
+      {:ok, revived} -> {:ok, Enum.sort(revived)}
+      {:error, _reason} = error -> error
     end)
   end
 
-  defp restart_stopped_group(root, id) do
+  defp restart_stopped_group(root, id, index, revived) do
     case restart_group(root, id) do
-      :ok -> {:cont, :ok}
+      :ok -> {:cont, {:ok, [index | revived]}}
       {:error, reason} -> {:halt, {:error, {:group_restart_failed, id, reason}}}
     end
   end
@@ -373,7 +390,7 @@ defmodule Pulsar.Topology do
     if partitions == [], do: :empty, else: {:partitioned, partitions}
   end
 
-  defp reconcile_shape(:non_partitioned, _root, 0, _config), do: {:ok, 0}
+  defp reconcile_shape(:non_partitioned, _root, 0, _config), do: {:ok, 0, []}
 
   defp reconcile_shape(:non_partitioned, _root, desired, _config) do
     {:error, {:incompatible_topology, :non_partitioned, desired}}
@@ -384,21 +401,23 @@ defmodule Pulsar.Topology do
   end
 
   defp reconcile_shape({:partitioned, partitions}, _root, 0, _config) do
-    {:ok, partition_width(partitions)}
+    {:ok, partition_width(partitions), []}
   end
 
   defp reconcile_shape({:partitioned, partitions}, root, desired, config) do
-    with :ok <- add_missing_partitions(root, desired, partitions, config) do
-      {:ok, max(desired, partition_width(partitions))}
+    with {:ok, added_groups} <- add_missing_partitions(root, desired, partitions, config) do
+      {:ok, max(desired, partition_width(partitions)), added_groups}
     end
   end
 
   defp reconcile_shape(:empty, root, 0, config) do
-    with :ok <- start_group(root, topic_child_spec(config)), do: {:ok, 0}
+    with :ok <- start_group(root, topic_child_spec(config)), do: {:ok, 0, [0]}
   end
 
   defp reconcile_shape(:empty, root, desired, config) do
-    with :ok <- add_missing_partitions(root, desired, [], config), do: {:ok, desired}
+    with {:ok, added_groups} <- add_missing_partitions(root, desired, [], config) do
+      {:ok, desired, added_groups}
+    end
   end
 
   defp partition_width(partitions), do: Enum.max(partitions) + 1
@@ -407,9 +426,9 @@ defmodule Pulsar.Topology do
     0..(desired - 1)
     |> Enum.reject(&(&1 in existing))
     |> Enum.sort(:desc)
-    |> Enum.reduce_while(:ok, fn index, :ok ->
+    |> Enum.reduce_while({:ok, []}, fn index, {:ok, added} ->
       case start_group(root, partition_child_spec(index, config)) do
-        :ok -> {:cont, :ok}
+        :ok -> {:cont, {:ok, [index | added]}}
         {:error, reason} -> {:halt, {:error, {:partition_start_failed, index, reason}}}
       end
     end)

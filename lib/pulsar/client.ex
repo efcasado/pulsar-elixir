@@ -173,14 +173,11 @@ defmodule Pulsar.Client do
     }
   end
 
-  # Consumers and producers depend on the brokers and on their own registry, but not on each
-  # other. One flat :rest_for_one chain made them dependants of whichever came first, so a
-  # consumer supervisor exceeding its restart intensity took every runtime producer with it.
+  # Separate branches isolate consumer and producer failures. OTP's default intensity at this
+  # boundary remains the final escalation path above the wider resource-level budget.
   defp resources_spec(opts) do
     branches = Enum.map([:consumers, :producers], &branch_spec(&1, opts))
 
-    # This boundary counts whole branch failures, not the resource restarts below them. Keep
-    # OTP's default intensity so repeatedly rebuilding a branch escalates to the client.
     %{
       id: :resources,
       start: {Supervisor, :start_link, [branches, [strategy: :one_for_one]]},
@@ -188,8 +185,7 @@ defmodule Pulsar.Client do
     }
   end
 
-  # Within a branch the order is a dependency: resources register their names in the registry
-  # as they start, so a registry that came back empty would leave them alive and unreachable.
+  # The registry precedes its resources so :rest_for_one rebuilds the branch if it is replaced.
   defp branch_spec(kind, opts) do
     client = Keyword.fetch!(opts, :name)
     registry = registry(kind, client)
@@ -201,9 +197,6 @@ defmodule Pulsar.Client do
       {Bootstrap, {kind, opts}}
     ]
 
-    # Resource roots use the wider topology budget in their DynamicSupervisor. The branch
-    # supervisor described below keeps OTP's default so repeated registry, Bootstrap, or
-    # exhausted DynamicSupervisor failures rebuild the branch instead of cycling indefinitely.
     %{
       id: kind,
       start: {Supervisor, :start_link, [children, [strategy: :rest_for_one]]},
@@ -303,7 +296,8 @@ defmodule Pulsar.Client do
 
   @doc false
   @spec registry(:consumers | :producers, atom()) :: atom()
-  def registry(kind, client_name), do: process_name(kind, client_name, "Registry")
+  def registry(:consumers, client_name), do: Module.concat([__MODULE__, client_name, "ConsumerRegistry"])
+  def registry(:producers, client_name), do: Module.concat([__MODULE__, client_name, "ProducerRegistry"])
 
   @doc false
   def broker_supervisor(client_name) do
@@ -312,12 +306,9 @@ defmodule Pulsar.Client do
 
   @doc false
   @spec resource_supervisor(:consumers | :producers, atom()) :: atom()
-  def resource_supervisor(kind, client_name), do: process_name(kind, client_name, "Supervisor")
+  def resource_supervisor(:consumers, client_name), do: Module.concat([__MODULE__, client_name, "ConsumerSupervisor"])
 
-  defp process_name(kind, client_name, suffix) do
-    resource = kind |> resource_module() |> Module.split() |> List.last()
-    Module.concat([__MODULE__, client_name, resource <> suffix])
-  end
+  def resource_supervisor(:producers, client_name), do: Module.concat([__MODULE__, client_name, "ProducerSupervisor"])
 
   @doc false
   def get_broker_opts(client_name) do
