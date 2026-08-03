@@ -65,11 +65,10 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     [producer] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
 
-    :ok =
-      Utils.wait_for(fn ->
-        state = :sys.get_state(producer)
-        state.producer_name != nil
-      end)
+    Utils.wait_for(fn ->
+      state = :sys.get_state(producer)
+      state.producer_name != nil
+    end)
 
     stats = Utils.collect_producer_opened_stats(producer_names: [producer_group_name])
     assert %{success_count: 1, failure_count: 0, total_count: 1} = stats

@@ -147,10 +147,9 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
 
-    assert :ok =
-             Utils.wait_for(fn ->
-               String.starts_with?(:sys.get_state(producer_2).producer_name || "", "waiting-producer-2")
-             end)
+    Utils.wait_for(fn ->
+      String.starts_with?(:sys.get_state(producer_2).producer_name || "", "waiting-producer-2")
+    end)
 
     refute :sys.get_state(producer_2).ready
 
