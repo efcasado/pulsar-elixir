@@ -204,7 +204,11 @@ defmodule Pulsar.Client do
   def start_resource(supervisor, child_spec) do
     DynamicSupervisor.start_child(supervisor, child_spec)
   catch
-    :exit, {:noproc, _call} -> {:error, :client_not_found}
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, :client_not_found}
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      {:error, :client_not_found}
   end
 
   @doc """

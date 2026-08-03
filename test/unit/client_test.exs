@@ -3,6 +3,19 @@ defmodule Pulsar.ClientTest do
 
   alias Pulsar.Client
 
+  defmodule StoppingResourceSupervisor do
+    @moduledoc false
+    use GenServer
+
+    def start(name, reason), do: GenServer.start(__MODULE__, reason, name: name)
+
+    @impl true
+    def init(reason), do: {:ok, reason}
+
+    @impl true
+    def handle_call({:start_child, _child_spec}, _from, reason), do: {:stop, reason, reason}
+  end
+
   describe "start_link/1 option validation" do
     test "requires a host" do
       assert_raise NimbleOptions.ValidationError, ~r/required :host option not found/, fn ->
@@ -150,6 +163,31 @@ defmodule Pulsar.ClientTest do
                subscription_name: "s",
                callback_module: MyApp.Handler,
                client: :never_started
+             ) == {:error, :client_not_found}
+    end
+
+    test "resource starts report a restarting resource branch rather than exiting" do
+      client = :restarting_resources
+
+      {:ok, _producer_supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.resource_supervisor(:producers, client),
+          :shutdown
+        )
+
+      assert Pulsar.Producer.start(topic: "t", client: client) == {:error, :client_not_found}
+
+      {:ok, _consumer_supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.resource_supervisor(:consumers, client),
+          {:shutdown, :restarting}
+        )
+
+      assert Pulsar.Consumer.start(
+               topic: "t",
+               subscription_name: "s",
+               callback_module: MyApp.Handler,
+               client: client
              ) == {:error, :client_not_found}
     end
   end
