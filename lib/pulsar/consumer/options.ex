@@ -115,6 +115,13 @@ defmodule Pulsar.Consumer.Options do
       doc: """
       Diverts a message to another topic once it has been redelivered too often.
       Omit it entirely for no dead letter topic.
+
+      The producer this needs runs under the consumer, so it restarts on its own and a dead
+      letter topic that is unavailable leaves the message nacked rather than disturbing the
+      subscription. A partitioned consumer diverts every partition into one dead letter topic.
+
+      A diverted message keeps its key, properties and event time, and gains `REAL_TOPIC` and
+      `ORIGIN_MESSAGE_ID` properties naming where it came from.
       """
     ],
     max_pending_chunked_messages: [

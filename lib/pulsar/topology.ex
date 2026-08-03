@@ -6,6 +6,7 @@ defmodule Pulsar.Topology do
   @behaviour Supervisor
 
   alias Pulsar.Backoff
+  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Consumer.Worker, as: ConsumerWorker
   alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Topic
@@ -244,8 +245,10 @@ defmodule Pulsar.Topology do
       {_id, pid, :worker, [module]} when module in @worker_modules ->
         if is_pid(pid), do: [pid], else: []
 
+      # A nested topology root owns its own workers, which are not this resource's. A consumer's
+      # dead letter producer is one, and its producer workers must not read as consumer workers.
       {_id, pid, :supervisor, _modules} when is_pid(pid) ->
-        workers(pid)
+        if kind(pid) == :topology, do: [], else: workers(pid)
 
       _child ->
         []
@@ -370,6 +373,7 @@ defmodule Pulsar.Topology do
 
   @impl true
   def init({config, controller_opts}) do
+    config = annotate(config, self())
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
 
@@ -380,8 +384,24 @@ defmodule Pulsar.Topology do
       |> Discovery.child_spec()
       |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic})
 
-    Supervisor.init([discovery], [strategy: :one_for_one] ++ restart_intensity())
+    # Companions start before discovery so a worker never observes the tree without them. They
+    # resolve their own brokers asynchronously, so none of them delays this root coming up.
+    children = companion_specs(config) ++ [discovery]
+
+    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
   end
+
+  # A consumer's dead letter producer is scoped to the consumer that diverts into it, so it is
+  # owned here rather than by the client's producer branch. Workers are told this root so they
+  # can resolve it as a child, which survives it restarting under them.
+  defp annotate(%{worker: ConsumerWorker, opts: opts} = config, root) do
+    %{config | opts: DeadLetter.annotate(opts, root)}
+  end
+
+  defp annotate(config, _root), do: config
+
+  defp companion_specs(%{worker: ConsumerWorker, opts: opts}), do: DeadLetter.child_specs(opts)
+  defp companion_specs(_config), do: []
 
   defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers
   defp resource_kind_for_config(%{count_key: :producer_count}), do: :producers

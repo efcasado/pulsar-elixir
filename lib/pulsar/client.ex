@@ -176,8 +176,12 @@ defmodule Pulsar.Client do
 
   # Separate branches isolate consumer and producer failures. OTP's default intensity at this
   # boundary remains the final escalation path above the wider resource-level budget.
+  #
+  # Producers come first because a consumer can own one: a dead letter producer runs under its
+  # consumer's topology but still registers in the producer registry, which has to exist by then.
+  # The branches stay independent, so this is start order only and not a restart dependency.
   defp resources_spec(opts) do
-    branches = Enum.map([:consumers, :producers], &branch_spec(&1, opts))
+    branches = Enum.map([:producers, :consumers], &branch_spec(&1, opts))
 
     %{
       id: :resources,

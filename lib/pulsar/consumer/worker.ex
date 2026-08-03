@@ -8,8 +8,7 @@ defmodule Pulsar.Consumer.Worker do
 
   alias Pulsar.Backoff
   alias Pulsar.Consumer.ChunkedMessageContext
-  alias Pulsar.Producer.Options, as: ProducerOptions
-  alias Pulsar.Producer.Worker, as: ProducerWorker
+  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
@@ -55,8 +54,7 @@ defmodule Pulsar.Consumer.Worker do
     {:nacked_messages, MapSet.new()},
     :redelivery_interval,
     :max_redelivery,
-    :dead_letter_topic,
-    :dead_letter_producer_pid,
+    :dead_letter_root,
     {:chunked_message_contexts, %{}},
     :max_pending_chunked_messages,
     :expire_incomplete_chunked_message_after,
@@ -89,8 +87,7 @@ defmodule Pulsar.Consumer.Worker do
           nacked_messages: MapSet.t(),
           redelivery_interval: non_neg_integer() | nil,
           max_redelivery: non_neg_integer() | nil,
-          dead_letter_topic: String.t() | nil,
-          dead_letter_producer_pid: pid() | nil,
+          dead_letter_root: pid() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
           expire_incomplete_chunked_message_after: non_neg_integer(),
@@ -170,17 +167,15 @@ defmodule Pulsar.Consumer.Worker do
 
   @impl true
   def init(opts) do
-    {max_redelivery, dead_letter_topic} = parse_dead_letter_policy(Keyword.get(opts, :dead_letter_policy))
-
     # Option names and struct field names are the same, so struct/2 carries them across
-    # and ignores the group-level options that are not part of a consumer's state.
+    # and ignores the group-level options that are not part of a consumer's state. That
+    # includes :dead_letter_root, resolved once for the whole consumer by Pulsar.Topology.
     state = %{
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
         schema: build_schema(Keyword.get(opts, :schema)),
-        max_redelivery: max_redelivery,
-        dead_letter_topic: dead_letter_topic
+        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
 
     Logger.debug("Starting consumer for topic #{state.topic}")
@@ -293,26 +288,10 @@ defmodule Pulsar.Consumer.Worker do
            state
            | broker_monitor: broker_monitor,
              flow_outstanding_permits: state.flow_initial
-         }, {:continue, {:init_dead_letter_producer, init_args}}}
+         }, {:continue, {:init_callback, init_args}}}
 
       {:error, reason} ->
         {:stop, reason, state}
-    end
-  end
-
-  def handle_continue({:init_dead_letter_producer, init_args}, state) do
-    if should_init_dead_letter_producer?(state) do
-      case start_dead_letter_producer(state) do
-        {:ok, producer_pid} ->
-          Logger.info("Started dead letter producer for consumer on topic #{state.topic}")
-          {:noreply, %{state | dead_letter_producer_pid: producer_pid}, {:continue, {:init_callback, init_args}}}
-
-        {:error, reason} ->
-          Logger.error("Failed to start dead letter producer: #{inspect(reason)}")
-          {:stop, reason, state}
-      end
-    else
-      {:noreply, state, {:continue, {:init_callback, init_args}}}
     end
   end
 
@@ -489,7 +468,7 @@ defmodule Pulsar.Consumer.Worker do
       |> Enum.max(fn -> 0 end)
 
     if is_nil(state.max_redelivery) or state.max_redelivery < 1 or
-         max_redelivery_count < state.max_redelivery or is_nil(state.dead_letter_producer_pid) do
+         max_redelivery_count < state.max_redelivery or is_nil(state.dead_letter_root) do
       state
     else
       do_send_batch_to_dead_letter(state, messages, max_redelivery_count)
@@ -505,7 +484,7 @@ defmodule Pulsar.Consumer.Worker do
       Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
         message_ids_list = List.wrap(message.message_id)
 
-        case send_to_dead_letter(state, message.payload, List.first(message_ids_list)) do
+        case DeadLetter.divert(state, message) do
           :ok ->
             ack_command = %Binary.CommandAck{
               consumer_id: state.consumer_id,
@@ -827,47 +806,12 @@ defmodule Pulsar.Consumer.Worker do
     :ok
   end
 
-  defp parse_dead_letter_policy(nil), do: {nil, nil}
+  defp max_redelivery(nil), do: nil
 
-  defp parse_dead_letter_policy(policy) when is_list(policy) do
-    max_redelivery = Keyword.get(policy, :max_redelivery)
-    topic = Keyword.get(policy, :topic)
-
-    validated_max_redelivery =
-      case max_redelivery do
-        n when is_integer(n) and n >= 1 -> n
-        _ -> nil
-      end
-
-    {validated_max_redelivery, topic}
-  end
-
-  defp should_init_dead_letter_producer?(state) do
-    state.max_redelivery != nil and state.max_redelivery >= 1
-  end
-
-  defp start_dead_letter_producer(state) do
-    dead_letter_topic =
-      state.dead_letter_topic ||
-        "#{state.topic}-#{state.subscription_name}-DLQ"
-
-    # Through the schema, so the dead letter producer gets the same defaults as any other.
-    [topic: dead_letter_topic, client: state.client]
-    |> ProducerOptions.validate!()
-    |> ProducerWorker.start_link()
-  end
-
-  defp send_to_dead_letter(state, payload, _message_id) do
-    if state.dead_letter_producer_pid == nil do
-      {:error, :no_dead_letter_producer}
-    else
-      case ProducerWorker.send_message(state.dead_letter_producer_pid, payload) do
-        {:ok, _dlq_message_id} ->
-          :ok
-
-        {:error, _reason} = error ->
-          error
-      end
+  defp max_redelivery(policy) when is_list(policy) do
+    case Keyword.get(policy, :max_redelivery) do
+      n when is_integer(n) and n >= 1 -> n
+      _invalid -> nil
     end
   end
 
