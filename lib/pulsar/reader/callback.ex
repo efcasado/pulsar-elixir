@@ -10,7 +10,7 @@ defmodule Pulsar.Reader.Callback do
   use Pulsar.Consumer.Callback
 
   @impl true
-  def init([stream_pid, reader_ref]) do
+  def init([stream_pid, reader_ref], _context) do
     {:ok, %{stream_pid: stream_pid, reader_ref: reader_ref}}
   end
 

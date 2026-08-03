@@ -14,7 +14,7 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
     use Pulsar.Consumer.Callback
 
     @impl true
-    def init([test_pid]), do: {:ok, test_pid}
+    def init([test_pid], _context), do: {:ok, test_pid}
 
     @impl true
     def handle_message(message, test_pid) do

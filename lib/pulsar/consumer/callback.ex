@@ -32,7 +32,8 @@ defmodule Pulsar.Consumer.Callback do
 
   All optional callbacks have sensible defaults that you can override:
 
-  - `init/1` - Initialize the callback module state (default: `{:ok, nil}`)
+  - `init/2` - Initialize the callback module state, given the consumer's resolved topic and
+    subscription (default: `{:ok, nil}`)
   - `terminate/2` - Cleanup when consumer terminates (default: `:ok`)
   - `handle_call/3` - Handle synchronous calls (default: `{:reply, {:error, :not_implemented}, state}`)
   - `handle_cast/2` - Handle asynchronous casts (default: `{:noreply, state}`)
@@ -70,7 +71,7 @@ defmodule Pulsar.Consumer.Callback do
       defmodule MyApp.MessageCounter do
         use Pulsar.Consumer.Callback
 
-        def init(opts) do
+        def init(opts, _context) do
           max_messages = Keyword.get(opts, :max_messages, 1000)
           {:ok, %{count: 0, max_messages: max_messages, messages: []}}
         end
@@ -119,12 +120,14 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Return Values
 
-  ### `init/1` (Optional)
+  ### `init/2` (Optional)
 
   If not implemented, defaults to `{:ok, nil}`.
 
   - `{:ok, state}` - Successful initialization with initial state
   - `{:error, reason}` - Initialization failed
+
+  Its second argument is the consumer's resolved context; see `## Consumer Context` below.
 
   ### `handle_message/2`
 
@@ -139,6 +142,45 @@ defmodule Pulsar.Consumer.Callback do
 
   - `:ok` - Cleanup completed successfully
   - Any other value is ignored
+
+  ## Consumer Context
+
+  A consumer on a partitioned topic subscribes to one partition of it, so several callback
+  processes share a configured topic while each handles a different partition. `init/2`
+  receives which one this process ended up on:
+
+      %{
+        topic: "persistent://public/default/orders-partition-2",
+        base_topic: "persistent://public/default/orders",
+        partition: 2,
+        subscription_name: "order-service",
+        subscription_type: :Shared,
+        consumer_name: "orders-order-service-partition-2-1"
+      }
+
+  `:topic` is what this consumer subscribed to and `:base_topic` what it was configured with;
+  they are equal, and `:partition` is `nil`, when the topic is not partitioned. Use `:topic`
+  as a per-partition key for metrics or flow accounting, and `:base_topic` where business
+  logic cares about the logical topic.
+
+  `:partition` is the index this library fanned out to, so a consumer configured with an
+  already concrete partition topic such as `"orders-partition-2"` reports `nil` for it: the
+  caller did the fanning out, and the topic it gave has no partitions of its own.
+
+  Keep whatever you need in your state rather than looking it up per message:
+
+      defmodule MyApp.PerPartitionMetrics do
+        use Pulsar.Consumer.Callback
+
+        def init(_init_args, context) do
+          {:ok, %{topic: context.topic, partition: context.partition, count: 0}}
+        end
+
+        def handle_message(%Pulsar.Message{}, state) do
+          :telemetry.execute([:my_app, :message], %{count: 1}, %{topic: state.topic})
+          {:ok, %{state | count: state.count + 1}}
+        end
+      end
 
   ## Failover Consumer Events
 
@@ -184,14 +226,31 @@ defmodule Pulsar.Consumer.Callback do
   @type state :: term()
   @type reason :: term()
 
-  @callback init(init_arg) :: {:ok, state} | {:error, reason}
+  @typedoc """
+  The consumer's resolved identity, passed to `c:init/2`.
+
+  `:topic` is the topic this consumer subscribed to, which for a partitioned topic is one
+  concrete partition. `:base_topic` is the topic the consumer was configured with, and equals
+  `:topic` unless the topic is partitioned. `:partition` is the partition index, or `nil` when
+  the topic is not partitioned.
+  """
+  @type context :: %{
+          topic: String.t(),
+          base_topic: String.t(),
+          partition: non_neg_integer() | nil,
+          subscription_name: String.t(),
+          subscription_type: atom(),
+          consumer_name: String.t() | nil
+        }
+
+  @callback init(init_arg, context) :: {:ok, state} | {:error, reason}
   @callback handle_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}
               | {:noreply, state}
               | {:stop, state}
 
-  @optional_callbacks init: 1,
+  @optional_callbacks init: 2,
                       terminate: 2,
                       handle_call: 3,
                       handle_cast: 2,
@@ -233,7 +292,7 @@ defmodule Pulsar.Consumer.Callback do
       @behaviour Pulsar.Consumer.Callback
 
       # Provide default implementations for optional callbacks
-      def init(_init_args), do: {:ok, nil}
+      def init(_init_args, _context), do: {:ok, nil}
 
       def terminate(_reason, _state), do: :ok
 
@@ -265,7 +324,7 @@ defmodule Pulsar.Consumer.Callback do
         {:ok, state}
       end
 
-      defoverridable init: 1,
+      defoverridable init: 2,
                      terminate: 2,
                      handle_call: 3,
                      handle_cast: 2,

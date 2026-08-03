@@ -4,7 +4,7 @@ defmodule BingoPlayer do
 
   require Logger
 
-  def init([game_master, card_size]) do
+  def init([game_master, card_size], _context) do
     card = card(card_size)
     IO.puts("#{inspect(self())} started with card: #{inspect(card, charlists: :as_lists)}")
     Process.send(game_master, {:player_ready, self()}, [])

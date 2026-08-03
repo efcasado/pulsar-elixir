@@ -155,6 +155,61 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(consumer)
   end
 
+  test "init/2 tells each worker which partition it resolved to" do
+    {:ok, consumer} =
+      Pulsar.Consumer.start(@topic, "init-context", @consumer_callback, subscription_options(1))
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+
+    workers =
+      Utils.wait_for(fn -> Topology.workers(consumer) end,
+        until: &(length(&1) == 3),
+        description: "partitioned consumer workers to start"
+      )
+
+    contexts = Enum.map(workers, &@consumer_callback.context/1)
+
+    assert contexts |> Enum.map(& &1.partition) |> Enum.sort() == [0, 1, 2]
+
+    for context <- contexts do
+      assert context.base_topic == @topic
+      assert context.topic == Pulsar.Topic.partition(@topic, context.partition)
+      assert context.subscription_name == "init-context"
+      assert context.subscription_type == :Shared
+      assert context.consumer_name =~ "-partition-#{context.partition}-"
+    end
+
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
+  test "init/2 reports no partition for a consumer started on a concrete partition topic" do
+    partition_topic = Pulsar.Topic.partition(@topic, 0)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(
+        partition_topic,
+        "init-context-explicit-partition",
+        @consumer_callback,
+        subscription_options(1)
+      )
+
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+
+    assert [worker] =
+             Utils.wait_for(fn -> Topology.workers(consumer) end,
+               until: &match?([_worker], &1),
+               description: "explicit partition consumer to start"
+             )
+
+    context = @consumer_callback.context(worker)
+
+    assert context.partition == nil
+    assert context.topic == partition_topic
+    assert context.base_topic == partition_topic
+
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
   test "send_flow/2 reports an unavailable partition after granting the live ones" do
     test_id = :erlang.unique_integer([:positive])
     topic = "persistent://public/default/partial-flow-#{test_id}"
