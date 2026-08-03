@@ -142,7 +142,7 @@ defmodule Pulsar.Consumer do
   along the worker and the message id:
 
       def handle_message(message, state) do
-        MyApp.Jobs.enqueue(message.payload, ack: {self(), message.message_id_to_ack})
+        MyApp.Jobs.enqueue(message.payload, ack: {self(), message.message_id})
         {:noreply, state}
       end
 

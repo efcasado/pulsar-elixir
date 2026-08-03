@@ -49,7 +49,7 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       messages
       |> Enum.with_index(1)
       |> Map.new(fn {msg, i} ->
-        {i, %{message_id: Map.new(message_ids)[i], publish_time: msg.metadata.publish_time}}
+        {i, %{message_id: Map.new(message_ids)[i], publish_time: Pulsar.Message.publish_time(msg)}}
       end)
 
     on_exit(fn ->

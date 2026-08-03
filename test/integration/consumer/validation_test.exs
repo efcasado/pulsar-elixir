@@ -55,8 +55,8 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     refute Pulsar.Message.valid?(message)
     assert message.validation_error == :checksum_mismatch
     assert message.payload == <<255, 255, 255>>
-    assert message.metadata == nil
-    assert message.message_id_to_ack == command.message_id
+    assert message.raw.metadata == nil
+    assert message.message_id == command.message_id
   end
 
   test "a callback that does not opt in never sees it" do

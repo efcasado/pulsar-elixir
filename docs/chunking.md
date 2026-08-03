@@ -79,13 +79,12 @@ The `Pulsar.Message` struct provides information about chunked messages:
   - `received_chunks` - Number of chunks received (for incomplete messages)
   - `error` - Reason for incompleteness (if incomplete)
 
-For chunked messages, some fields contain data from all chunks:
-- `command` - List of commands from all chunks
-- `metadata` - List of metadata from all chunks
-- `broker_metadata` - List of broker metadata from all chunks
-- `message_id_to_ack` - List of all chunk message IDs
+A chunked message is assembled before the callback sees it, so `payload` is the complete
+payload and `message_id` covers every chunk: acknowledging it acknowledges them all.
 
-For non-chunked messages, these fields contain single values.
+`Pulsar.Message`'s accessors — `producer_name/1`, `key/1`, `properties/1` and the rest — answer
+the same way for a chunked message as for any other. Only the `raw` field reflects the split,
+holding a list of protocol structs per chunk rather than a single one.
 
 ## Configuration Options
 

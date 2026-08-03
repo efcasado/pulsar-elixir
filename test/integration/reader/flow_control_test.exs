@@ -52,7 +52,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
     assert length(messages) == @num_messages
 
-    consumer_id = hd(messages).command.consumer_id
+    consumer_id = hd(messages).raw.command.consumer_id
     consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == 5
@@ -68,7 +68,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
     assert length(messages) == @num_messages
 
-    consumer_id = hd(messages).command.consumer_id
+    consumer_id = hd(messages).raw.command.consumer_id
     consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == @num_messages + 1
@@ -84,7 +84,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
     assert length(messages) == @num_messages
 
-    consumer_id = hd(messages).command.consumer_id
+    consumer_id = hd(messages).raw.command.consumer_id
     consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
     assert consumer_stats.event_count == 1

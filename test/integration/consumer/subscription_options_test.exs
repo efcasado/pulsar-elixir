@@ -137,7 +137,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     [_message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
 
     # Start consumer from second message
-    message_id = {message2.command.message_id.ledgerId, message2.command.message_id.entryId}
+    message_id = {message2.raw.command.message_id.ledgerId, message2.raw.command.message_id.entryId}
 
     {:ok, message_id_group} =
       Pulsar.Consumer.start(
@@ -345,7 +345,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
     compacted_messages = @consumer_callback.get_messages(compacted_consumer)
 
-    compacted_messages_map = Map.new(compacted_messages, &{&1.metadata.partition_key, &1.payload})
+    compacted_messages_map = Map.new(compacted_messages, &{Pulsar.Message.key(&1), &1.payload})
 
     assert Enum.count(compacted_messages) == 4
 
@@ -366,7 +366,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     ] ++ opts
   end
 
-  defp publish_time_from_message(%Pulsar.Message{metadata: metadata}) do
-    metadata.publish_time
+  defp publish_time_from_message(%Pulsar.Message{} = message) do
+    Pulsar.Message.publish_time(message)
   end
 end
