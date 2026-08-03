@@ -11,7 +11,6 @@ defmodule Pulsar.Reader.Callback do
 
   @impl true
   def init([stream_pid, reader_ref]) do
-    send(stream_pid, {:reader_ready, reader_ref, self()})
     {:ok, %{stream_pid: stream_pid, reader_ref: reader_ref}}
   end
 

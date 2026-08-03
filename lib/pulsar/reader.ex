@@ -222,24 +222,24 @@ defmodule Pulsar.Reader do
   end
 
   defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
-    startup_deadline = deadline(startup_timeout)
+    case wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+      {:ok, consumer_pids} ->
+        permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
-    with :ok <- wait_for_topology(consumer, startup_deadline),
-         {:ok, consumer_pids} <-
-           wait_for_consumers_ready(consumer, reader_ref, flow_permits, startup_deadline) do
-      permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
+        {:ok,
+         %{
+           client: client_name,
+           consumer_pids: consumer_pids,
+           consumer_root: consumer,
+           flow_permits: flow_permits,
+           permits_by_consumer: permits_by_consumer,
+           timeout: timeout,
+           reader_ref: reader_ref,
+           buffer: :queue.new()
+         }}
 
-      {:ok,
-       %{
-         client: client_name,
-         consumer_pids: consumer_pids,
-         consumer_root: consumer,
-         flow_permits: flow_permits,
-         permits_by_consumer: permits_by_consumer,
-         timeout: timeout,
-         reader_ref: reader_ref,
-         buffer: :queue.new()
-       }}
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -310,120 +310,15 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_topology(consumer, startup_deadline) do
-    case Topology.await_ready(consumer, remaining(startup_deadline)) do
-      :ok -> :ok
+  defp wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+    with :ok <- Consumer.await_ready(consumer, timeout: startup_timeout),
+         :ok <- Consumer.send_flow(consumer, flow_permits),
+         [_ | _] = consumer_pids <- Topology.workers(consumer) do
+      {:ok, consumer_pids}
+    else
+      [] -> {:error, :reader_start_timeout}
       {:error, _reason} -> {:error, :reader_start_timeout}
     end
-  end
-
-  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, startup_deadline) do
-    tracker = %{ready: %{}, granted: MapSet.new()}
-    wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline)
-  end
-
-  defp wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline) do
-    case collect_ready_messages(consumer, reader_ref, tracker, startup_deadline) do
-      {:ok, consumer_pids, tracker} ->
-        grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, tracker, startup_deadline)
-
-      {:error, _reason} = error ->
-        error
-    end
-  end
-
-  defp grant_initial_flow(consumer, reader_ref, consumer_pids, flow_permits, tracker, startup_deadline) do
-    {granted, failed} = grant_workers(consumer_pids, flow_permits, tracker.granted)
-    tracker = %{tracker | ready: Map.drop(tracker.ready, failed), granted: granted}
-
-    case ready_consumers(consumer, tracker.ready) do
-      {:ok, current_pids} ->
-        if Enum.all?(current_pids, &MapSet.member?(granted, &1)) do
-          {:ok, current_pids}
-        else
-          grant_initial_flow(consumer, reader_ref, current_pids, flow_permits, tracker, startup_deadline)
-        end
-
-      :waiting ->
-        wait_for_consumers_ready(consumer, reader_ref, flow_permits, tracker, startup_deadline)
-    end
-  end
-
-  defp grant_workers(consumer_pids, flow_permits, granted) do
-    Enum.reduce(consumer_pids, {granted, []}, &grant_worker(&1, flow_permits, &2))
-  end
-
-  defp grant_worker(consumer_pid, flow_permits, {granted, failed}) do
-    if MapSet.member?(granted, consumer_pid) do
-      {granted, failed}
-    else
-      case Consumer.send_flow(consumer_pid, flow_permits) do
-        :ok -> {MapSet.put(granted, consumer_pid), failed}
-        {:error, _reason} -> {granted, [consumer_pid | failed]}
-      end
-    end
-  end
-
-  defp collect_ready_messages(consumer, reader_ref, tracker, startup_deadline) do
-    case ready_consumers(consumer, tracker.ready) do
-      {:ok, consumers} ->
-        {:ok, consumers, tracker}
-
-      :waiting ->
-        receive_ready(consumer, reader_ref, tracker, startup_deadline)
-    end
-  end
-
-  defp ready_consumers(consumer, ready) do
-    case expected_consumer_count(consumer) do
-      {:ok, current_expected_count} ->
-        current_ready_consumers(consumer, current_expected_count, ready)
-
-      {:error, :initializing} ->
-        :waiting
-    end
-  end
-
-  defp expected_consumer_count(consumer) do
-    case Topology.groups(consumer) do
-      [] -> {:error, :initializing}
-      groups -> {:ok, length(groups)}
-    end
-  end
-
-  defp current_ready_consumers(consumer, expected_count, ready) do
-    consumers = Topology.workers(consumer)
-
-    if length(consumers) == expected_count and Enum.all?(consumers, &Map.has_key?(ready, &1)) do
-      {:ok, consumers}
-    else
-      :waiting
-    end
-  end
-
-  defp receive_ready(consumer, reader_ref, tracker, startup_deadline) do
-    case remaining(startup_deadline) do
-      0 ->
-        {:error, :reader_start_timeout}
-
-      timeout ->
-        receive do
-          {:reader_ready, ^reader_ref, pid} ->
-            tracker = %{tracker | ready: Map.put(tracker.ready, pid, true)}
-            collect_ready_messages(consumer, reader_ref, tracker, startup_deadline)
-        after
-          timeout -> {:error, :reader_start_timeout}
-        end
-    end
-  end
-
-  defp deadline(:infinity), do: :infinity
-  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
-
-  defp remaining(:infinity), do: :infinity
-
-  defp remaining(deadline) do
-    max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
   defp stop_consumer(consumer, client_name) do
