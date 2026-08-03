@@ -222,86 +222,39 @@ Registry and broker lookups also account for these restart windows. Public opera
 their documented error tuples when a client, branch, registry, broker, or worker is missing
 instead of making the caller exit because an internal process is temporarily unavailable.
 
-## Internal Modules
+## Implementation Notes for Contributors
 
-The shared topology implementation removes separate group and partitioned supervisors for
-consumers and producers:
+<code>Pulsar.Topology</code> is the stable root of a logical resource, and
+<code>Pulsar.Topology.Group</code> owns the workers for one topic or partition. The stateful
+<code>Pulsar.Topology.Discovery</code> process owns discovery status, retry backoff, and polling;
+the stateless <code>Pulsar.Topology.Resolver</code> performs broker metadata and owner lookups.
+These modules remain behind the Consumer and Producer facades.
 
-- <code>Pulsar.Topology</code> owns one logical resource;
-- <code>Pulsar.Topology.Discovery</code> initializes and reconciles its partitions;
-- <code>Pulsar.Topology.Resolver</code> resolves topic owners and partition metadata;
-- <code>Pulsar.Topology.Group</code> owns the workers for one topic or partition;
-- <code>Pulsar.Consumer.Worker</code> and <code>Pulsar.Producer.Worker</code> implement broker-facing behavior;
-- <code>Pulsar.Backoff</code> provides the common retry policy.
+After a metadata lookup, Discovery reconciles the root and remembers the resulting partition
+count. A separate local schedule reconciles that known shape without contacting a broker. A
+pass first restarts stopped groups whose child specifications remain under the root, then adds
+missing partition groups from highest index to lowest. Existing groups are not replaced, and
+a lower metadata result never removes partitions.
 
-These modules are implementation details rather than additional application-facing APIs.
-Keeping traversal inside this layer lets the public Consumer and Producer facades remain
-stable if the supervision shape changes.
+Starting higher indexes first lets producer routing treat growth as one transition. Routing
+uses the contiguous partition range beginning at zero, so a partial 4-to-6 expansion continues
+to use modulus 4 until both new groups exist, then switches directly to modulus 6. Restarting
+or stopped groups retain their slots and return an availability error instead of temporarily
+moving the key to another partition.
 
-### The Reconciliation Loop
+A public name resolves through the client registry to the stable root. The facades classify a
+pid from its OTP initial call, read partition identity from group child ids, and traverse only
+live consumer or producer workers. Processes may still disappear between those steps, so the
+facades translate expected shutdown races into their documented error results.
 
-<code>Pulsar.Topology.Discovery</code> is the stateful part of discovery. It owns the current
-status, retry backoff, and polling schedule. <code>Pulsar.Topology.Resolver</code> remains stateless:
-it asks a broker for partition metadata and is also reused by workers when they resolve the
-owner of a topic.
+Discovery and reconciliation logs report topology changes and failures. Their telemetry spans
+use `[:pulsar, :topology, :discovery, ...]` and
+`[:pulsar, :topology, :reconciliation, ...]`; resolver spans use
+`[:pulsar, :topology, :resolver, ...]`. Metadata polling follows
+`:partition_discovery_interval_ms`, while local recovery remains enabled when polling is
+disabled.
 
-After each metadata lookup, Discovery asks <code>Pulsar.Topology</code> to reconcile the stable
-root. It retains the resulting partition count and also reconciles that known shape locally,
-on a separate schedule that does not contact a broker. The child ids describe the shape:
-`{:topic, :non_partitioned}` identifies the one group for a non-partitioned topic, while
-`{:partition, index}` identifies each partition group. Using ids rather than names or
-child-list positions makes partition identity independent of supervisor ordering.
-
-Reconciliation first restarts any group whose child specification remains under the root but
-whose process has stopped. It then adds groups for partition indexes reported by the broker
-but not yet present. Existing groups are left alone, and a lower partition count never removes
-them. Failed metadata checks and reconciliation attempts are retried with backoff. Metadata
-polling follows `:partition_discovery_interval_ms`; local reconciliation remains enabled even
-when metadata polling is disabled.
-
-This gives a terminal worker response a useful boundary. The worker does not immediately
-restart into the same rejection, but the stable root can try the stopped group again on a
-later local pass, after broker-side state may have changed. This remains true when every group
-is stopped: the logical resource becomes degraded rather than disappearing.
-
-Discovery and reconciliation passes emit debug logs with their result. Adding partitions after
-initialization or reviving groups is reported at info level, while failures identify the
-metadata or reconciliation stage at warning level. The
-`[:pulsar, :topology, :discovery, ...]` and
-`[:pulsar, :topology, :reconciliation, ...]` telemetry spans carry the topic, client, partition
-counts, changed group indexes, and outcome for programmatic monitoring.
-
-Broker metadata operations emit
-`[:pulsar, :topology, :resolver, :partition_count, ...]` and
-`[:pulsar, :topology, :resolver, :lookup_topic, ...]` spans. These identify the lower-level
-resolution work used by discovery and worker startup, separately from reconciliation of the
-local supervision tree.
-
-### Traversing a Topology
-
-A public name resolves through the client registry to the stable topology root. Facades also
-accept pids at different levels, so <code>Pulsar.Topology.kind/1</code> classifies a pid as a root,
-group, or worker from its OTP initial call. This avoids probing a supervisor with a worker
-request merely to discover what kind of process it is.
-
-<code>Pulsar.Topology.groups/1</code> reads group child ids from a root and returns their partition
-indexes. A group that is restarting or stopped keeps its slot in that result. In particular,
-producer routing continues to hash a key across every configured partition instead of moving
-the key to a different partition while its usual group is unavailable.
-
-<code>Pulsar.Topology.workers/1</code> walks the live supervisors below a root or group and returns
-only consumer or producer workers. It ignores Discovery, stopped children, and unrelated
-processes. The facade can therefore dispatch directly to a worker, traverse one group, or
-traverse the complete logical resource without exposing those distinctions as separate public
-APIs.
-
-Processes can still disappear between classification, traversal, and invocation. Facades
-contain those races and translate them into their documented error results, leaving callers
-independent of short-lived group and worker pids.
-
-## Architectural Guarantees
-
-The design is built around a small set of guarantees:
+## Design Invariants
 
 1. A consumer or producer cannot outlive the client context it depends on.
 2. Each logical consumer or producer has one registered stable root, even while it has no
@@ -310,6 +263,3 @@ The design is built around a small set of guarantees:
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.
 6. Declared resources are restored automatically; owners restore runtime resources.
-
-These guarantees are the durable contract. The exact processes below each stable root may
-evolve without requiring applications to change how they start, address, or stop resources.

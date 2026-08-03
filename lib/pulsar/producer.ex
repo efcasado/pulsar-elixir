@@ -156,8 +156,7 @@ defmodule Pulsar.Producer do
         route(Topology.groups(producer), message, opts)
     end
   catch
-    # The producer went away while we were looking at it, which is what a caller holding
-    # a stale pid sees; it reads the same as a worker dying mid-send.
+    # A stale root and a worker that dies mid-send have the same public result.
     :exit, reason -> {:error, {:producer_died, reason}}
   end
 

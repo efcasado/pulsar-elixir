@@ -30,8 +30,7 @@ defmodule Pulsar.Backoff do
 
   `fun` returns `{:error, reason}` to fail and anything else to succeed. `budget` is how long
   retrying may take in total, in milliseconds, or `:infinity`; the error is returned unchanged
-  once `retryable?` rejects its reason or the next wait would outlast what is left of the budget,
-  so giving up reads the same as failing outright.
+  once `retryable?` rejects its reason or the next wait would outlast what is left of the budget.
 
   Blocks the calling process, so this is for a process with nothing else to do meanwhile —
   a worker resolving its own startup, not one that owes replies.

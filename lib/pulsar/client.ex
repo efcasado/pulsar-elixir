@@ -225,8 +225,7 @@ defmodule Pulsar.Client do
       [] -> {:error, :not_found}
     end
   rescue
-    # A client that is not running has no registry to ask, which reads the same as having
-    # nothing registered rather than raising at whoever asked.
+    # Registry.lookup/2 raises when the client's registry is not running.
     ArgumentError -> {:error, :not_found}
   end
 
@@ -349,8 +348,7 @@ defmodule Pulsar.Client do
     ArgumentError -> []
   end
 
-  # A client that was never started has no supervisor to ask, which reads the same as a
-  # client with no brokers rather than exiting whoever asked.
+  # An unavailable supervisor contributes no children during startup or restart.
   defp children_of(supervisor) do
     Supervisor.which_children(supervisor)
   catch
