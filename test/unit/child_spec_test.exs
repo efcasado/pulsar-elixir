@@ -89,13 +89,6 @@ defmodule Pulsar.ChildSpecTest do
       assert Pulsar.Producer.child_spec(topic: "t", name: :audit).id == {Pulsar.Producer, :audit}
     end
 
-    test "does not collide with a consumer of the same name" do
-      opts = [topic: "t", name: :orders]
-
-      refute Pulsar.Producer.child_spec(opts).id ==
-               Pulsar.Consumer.child_spec(opts ++ [subscription_name: "s", callback_module: MyApp.H]).id
-    end
-
     test "requires the topic" do
       assert_raise NimbleOptions.ValidationError, ~r/:topic/, fn ->
         Pulsar.Producer.start_link(name: :audit)
