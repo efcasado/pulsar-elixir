@@ -104,7 +104,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
   end
 
   test "send message with deliver_at_time option", %{producer: producer, consumer: consumer} do
-    deliver_at = DateTime.add(DateTime.utc_now(), 1, :second)
+    deliver_at = DateTime.shift(DateTime.utc_now(), second: 1)
     deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
 
     assert {:ok, _message_id} =
