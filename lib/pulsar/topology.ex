@@ -197,7 +197,7 @@ defmodule Pulsar.Topology do
     root
     |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, _topic}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
+      {{Discovery, _kind, _topic}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
       _child -> false
     end)
   end
@@ -208,7 +208,22 @@ defmodule Pulsar.Topology do
     root
     |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, topic}, _pid, :worker, [Discovery]} -> topic
+      {{Discovery, _kind, topic}, _pid, :worker, [Discovery]} -> topic
+      _child -> false
+    end)
+  end
+
+  @doc false
+  @spec resource?(pid(), :consumers | :producers) :: boolean()
+  def resource?(root, expected_kind) when expected_kind in [:consumers, :producers] do
+    kind(root) == :topology and resource_kind(root) == expected_kind
+  end
+
+  defp resource_kind(root) do
+    root
+    |> supervisor_children()
+    |> Enum.find_value(:unknown, fn
+      {{Discovery, kind, _topic}, _pid, :worker, [Discovery]} -> kind
       _child -> false
     end)
   end
@@ -363,10 +378,14 @@ defmodule Pulsar.Topology do
     discovery =
       {self(), config, controller_opts}
       |> Discovery.child_spec()
-      |> Map.put(:id, {Discovery, topic})
+      |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic})
 
     Supervisor.init([discovery], [strategy: :one_for_one] ++ restart_intensity())
   end
+
+  defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers
+  defp resource_kind_for_config(%{count_key: :producer_count}), do: :producers
+  defp resource_kind_for_config(_config), do: :unknown
 
   @doc false
   @spec reconcile(pid(), non_neg_integer(), map()) ::

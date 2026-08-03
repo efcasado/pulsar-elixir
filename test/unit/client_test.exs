@@ -262,6 +262,28 @@ defmodule Pulsar.ClientTest do
       assert Pulsar.Consumer.send_flow(consumer, 1) == {:error, :not_ready}
     end
 
+    test "consumer and producer facades reject each other's roots" do
+      client = :resource_kind_validation
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1"})
+
+      assert {:ok, producer} =
+               Pulsar.Producer.start(topic: "producer", name: :kind_producer, client: client)
+
+      assert {:ok, consumer} =
+               Pulsar.Consumer.start(
+                 topic: "consumer",
+                 subscription_name: "sub",
+                 callback_module: MyApp.Handler,
+                 name: :kind_consumer,
+                 client: client
+               )
+
+      assert Pulsar.Consumer.stop(producer) == {:error, :not_found}
+      assert Pulsar.Producer.stop(consumer) == {:error, :not_found}
+      assert Process.alive?(producer)
+      assert Process.alive?(consumer)
+    end
+
     test "a reader reports a startup timeout and removes its consumer" do
       client = :reader_unavailable
       start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1"})
@@ -337,6 +359,18 @@ defmodule Pulsar.ClientTest do
 
       assert is_pid(restarted_client)
       assert broker_opts[:max_frame_size] == 111_111
+    end
+
+    test "erases broker options when a directly started client stops" do
+      client = :broker_opts_after_stop
+      {:ok, client_pid} = Client.start_link(name: client, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111)
+      on_exit(fn -> Client.stop(client) end)
+
+      ref = Process.monitor(client_pid)
+      assert Client.get_broker_opts(client)[:max_frame_size] == 111_111
+      assert :ok = Client.stop(client)
+      assert_receive {:DOWN, ^ref, :process, ^client_pid, :normal}
+      assert Client.get_broker_opts(client) == []
     end
 
     test "ignores the application environment" do

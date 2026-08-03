@@ -130,7 +130,7 @@ defmodule Pulsar.Client do
     client_name = Keyword.fetch!(opts, :name)
     broker_opts = build_broker_opts(opts)
 
-    :persistent_term.put({__MODULE__, client_name, :broker_opts}, broker_opts)
+    :persistent_term.put(broker_opts_key(client_name), broker_opts)
 
     EpochStore.init(client_name)
 
@@ -313,7 +313,7 @@ defmodule Pulsar.Client do
 
   @doc false
   def get_broker_opts(client_name) do
-    :persistent_term.get({__MODULE__, client_name, :broker_opts}, [])
+    :persistent_term.get(broker_opts_key(client_name), [])
   end
 
   @doc """
@@ -445,6 +445,8 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
+    :persistent_term.erase(broker_opts_key(client_name))
+
     try do
       Supervisor.stop(client_name, :normal, timeout)
     catch
@@ -497,4 +499,6 @@ defmodule Pulsar.Client do
   defp build_broker_opts(opts) do
     Keyword.take(opts, BrokerOptions.keys())
   end
+
+  defp broker_opts_key(client_name), do: {__MODULE__, client_name, :broker_opts}
 end

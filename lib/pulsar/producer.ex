@@ -138,13 +138,11 @@ defmodule Pulsar.Producer do
   def stop(producer, opts \\ [])
 
   def stop(producer, opts) when is_pid(producer) do
-    case Topology.kind(producer) do
-      :topology ->
-        client = Keyword.get(opts, :client, :default)
-        Topology.remove(producer, Client.resource_supervisor(:producers, client))
-
-      _not_a_root ->
-        {:error, :not_found}
+    if Topology.resource?(producer, :producers) do
+      client = Keyword.get(opts, :client, :default)
+      Topology.remove(producer, Client.resource_supervisor(:producers, client))
+    else
+      {:error, :not_found}
     end
   end
 

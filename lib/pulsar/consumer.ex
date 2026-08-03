@@ -114,13 +114,11 @@ defmodule Pulsar.Consumer do
   def stop(consumer, opts \\ [])
 
   def stop(consumer, opts) when is_pid(consumer) do
-    case Topology.kind(consumer) do
-      :topology ->
-        client = Keyword.get(opts, :client, :default)
-        Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
-
-      _not_a_root ->
-        {:error, :not_found}
+    if Topology.resource?(consumer, :consumers) do
+      client = Keyword.get(opts, :client, :default)
+      Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
+    else
+      {:error, :not_found}
     end
   end
 
