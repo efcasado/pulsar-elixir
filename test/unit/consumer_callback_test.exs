@@ -25,7 +25,7 @@ defmodule Pulsar.Consumer.CallbackTest do
     base_topic: "persistent://public/default/orders",
     partition: 2,
     subscription_name: "order-service",
-    subscription_type: :Shared,
+    subscription_type: :shared,
     consumer_name: "orders-order-service-partition-2-1"
   }
 

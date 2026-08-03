@@ -35,14 +35,14 @@ defmodule Pulsar.Integration.AccessModesTest do
 
   setup [:telemetry_listen]
 
-  test "multiple producers can publish with :Shared access mode" do
-    # Start two separate producer groups with :Shared mode on same topic
+  test "multiple producers can publish with :shared access mode" do
+    # Start two separate producer groups with :shared mode on same topic
     assert {:ok, group_pid_1} =
-             Pulsar.Producer.start(@shared_topic, access_mode: :Shared, client: @client)
+             Pulsar.Producer.start(@shared_topic, access_mode: :shared, client: @client)
 
     assert {:ok, group_pid_2} =
              Pulsar.Producer.start(@shared_topic,
-               access_mode: :Shared,
+               access_mode: :shared,
                name: "shared-producer-2",
                client: @client
              )
@@ -63,10 +63,10 @@ defmodule Pulsar.Integration.AccessModesTest do
   end
 
   @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
-  test "only one producer can connect with :Exclusive access mode" do
-    # Start first producer with :Exclusive
+  test "only one producer can connect with :exclusive access mode" do
+    # Start first producer with :exclusive
     assert {:ok, group_pid_1} =
-             Pulsar.Producer.start(@exclusive_topic, access_mode: :Exclusive, client: @client)
+             Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
 
     [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
 
@@ -76,7 +76,7 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     assert {:ok, group_pid_2} =
              Pulsar.Producer.start(@exclusive_topic,
-               access_mode: :Exclusive,
+               access_mode: :exclusive,
                name: "exclusive-2",
                client: @client
              )
@@ -110,7 +110,7 @@ defmodule Pulsar.Integration.AccessModesTest do
     # New exclusive producer should now succeed
     assert {:ok, group_pid_2} =
              Pulsar.Producer.start(@exclusive_topic,
-               access_mode: :Exclusive,
+               access_mode: :exclusive,
                name: "exclusive-3",
                client: @client
              )
@@ -123,13 +123,13 @@ defmodule Pulsar.Integration.AccessModesTest do
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  test ":WaitForExclusive waits for exclusive access " do
+  test ":wait_for_exclusive waits for exclusive access " do
     # See: https://github.com/apache/pulsar/blob/master/pip/pip-68.md
 
-    # Start first producer with :Exclusive - becomes the exclusive producer immediately
+    # Start first producer with :exclusive - becomes the exclusive producer immediately
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@wait_exclusive_topic,
-               access_mode: :Exclusive,
+               access_mode: :exclusive,
                name: "producer-1",
                client: @client
              )
@@ -137,10 +137,10 @@ defmodule Pulsar.Integration.AccessModesTest do
     [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
     Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
 
-    # Start second producer with :WaitForExclusive. It should not be ready
+    # Start second producer with :wait_for_exclusive. It should not be ready
     {:ok, group_pid_2} =
       Pulsar.Producer.start(@wait_exclusive_topic,
-        access_mode: :WaitForExclusive,
+        access_mode: :wait_for_exclusive,
         name: "waiting-producer-2",
         client: @client
       )
@@ -174,10 +174,10 @@ defmodule Pulsar.Integration.AccessModesTest do
   end
 
   @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
-  test ":ExclusiveWithFencing takes over and fences old producer" do
+  test ":exclusive_with_fencing takes over and fences old producer" do
     {:ok, group_pid_1} =
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
-        access_mode: :Exclusive,
+        access_mode: :exclusive,
         name: "original-exclusive",
         client: @client
       )
@@ -188,10 +188,10 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert :sys.get_state(producer_1).topic_epoch == 0
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from original producer", client: @client)
 
-    # Step 2: Start second producer with :ExclusiveWithFencing. It should fence out first
+    # Step 2: Start second producer with :exclusive_with_fencing. It should fence out first
     {:ok, group_pid_2} =
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
-        access_mode: :ExclusiveWithFencing,
+        access_mode: :exclusive_with_fencing,
         name: "fencing-takeover",
         client: @client
       )

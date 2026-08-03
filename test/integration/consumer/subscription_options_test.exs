@@ -361,7 +361,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
   defp subscription_options(initial_position, opts \\ []) do
     [
       client: @client,
-      subscription_type: :Exclusive,
+      subscription_type: :exclusive,
       initial_position: initial_position
     ] ++ opts
   end

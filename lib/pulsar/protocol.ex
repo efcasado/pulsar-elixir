@@ -347,4 +347,38 @@ defmodule Pulsar.Protocol do
   def to_key_value_list(props) when is_map(props) do
     Enum.map(props, fn {k, v} -> %Binary.KeyValue{key: to_string(k), value: to_string(v)} end)
   end
+
+  @subscription_types %{
+    exclusive: :Exclusive,
+    shared: :Shared,
+    failover: :Failover,
+    key_shared: :Key_Shared
+  }
+
+  @access_modes %{
+    shared: :Shared,
+    exclusive: :Exclusive,
+    wait_for_exclusive: :WaitForExclusive,
+    exclusive_with_fencing: :ExclusiveWithFencing
+  }
+
+  @compressions %{none: :NONE, lz4: :LZ4, zlib: :ZLIB, zstd: :ZSTD, snappy: :SNAPPY}
+
+  @doc """
+  Translates a `:subscription_type` option to the wire's subscription type.
+  """
+  @spec to_subscription_type(atom()) :: atom()
+  def to_subscription_type(subscription_type), do: Map.fetch!(@subscription_types, subscription_type)
+
+  @doc """
+  Translates an `:access_mode` option to the wire's producer access mode.
+  """
+  @spec to_producer_access_mode(atom()) :: atom()
+  def to_producer_access_mode(access_mode), do: Map.fetch!(@access_modes, access_mode)
+
+  @doc """
+  Translates a `:compression` option to the wire's compression type.
+  """
+  @spec to_compression(atom()) :: atom()
+  def to_compression(compression), do: Map.fetch!(@compressions, compression)
 end

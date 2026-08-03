@@ -31,8 +31,8 @@ defmodule Pulsar.Consumer.Options do
       """
     ],
     subscription_type: [
-      type: {:in, [:Exclusive, :Shared, :Failover, :Key_Shared]},
-      default: :Shared,
+      type: {:in, [:exclusive, :shared, :failover, :key_shared]},
+      default: :shared,
       doc: "How the subscription is shared between consumers."
     ],
     consumer_count: [

@@ -101,7 +101,7 @@ defmodule Pulsar.Producer do
   ## Options
 
   - `:partition_key` - decides the partition of a partitioned topic, and is carried
-    with the message so a `Key_Shared` subscription can use it
+    with the message so a `:key_shared` subscription can use it
   - `:properties` - a map of user properties carried with the message
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery

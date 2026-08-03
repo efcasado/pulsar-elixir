@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         "shared",
         @consumer_callback,
-        manual_flow_options(:Shared, 2)
+        manual_flow_options(:shared, 2)
       )
 
     [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
@@ -87,7 +87,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         "key-shared",
         @consumer_callback,
-        manual_flow_options(:Key_Shared, 2)
+        manual_flow_options(:key_shared, 2)
       )
 
     [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
@@ -130,7 +130,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         "failover",
         @consumer_callback,
-        subscription_options(:Failover, 2)
+        subscription_options(:failover, 2)
       )
 
     [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
@@ -161,7 +161,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         "exclusive",
         @consumer_callback,
-        subscription_options(:Exclusive, 1)
+        subscription_options(:exclusive, 1)
       )
 
     [consumer] = Utils.wait_for_consumer_ready(1)
@@ -174,16 +174,16 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert count == expected_count
   end
 
-  # An :Exclusive subscription admits one consumer, so the workers past the first are refused
+  # An :exclusive subscription admits one consumer, so the workers past the first are refused
   # and stop instead of restarting against a slot that will not free up. The one that got the
-  # subscription keeps running. Use :Failover if the others should stand by.
+  # subscription keeps running. Use :failover if the others should stand by.
   test "exclusive subscription keeps only the consumer that got the subscription" do
     {:ok, exclusive_multi_group} =
       Pulsar.Consumer.start(
         @topic,
         "exclusive-multi",
         @consumer_callback,
-        subscription_options(:Exclusive, 2)
+        subscription_options(:exclusive, 2)
       )
 
     assert Process.alive?(exclusive_multi_group)

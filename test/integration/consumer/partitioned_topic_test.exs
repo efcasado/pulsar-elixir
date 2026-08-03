@@ -175,7 +175,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       assert context.base_topic == @topic
       assert context.topic == Pulsar.Topic.partition(@topic, context.partition)
       assert context.subscription_name == "init-context"
-      assert context.subscription_type == :Shared
+      assert context.subscription_type == :shared
       assert context.consumer_name =~ "-partition-#{context.partition}-"
     end
 

@@ -30,31 +30,31 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,
-        producer_options("none", :NONE)
+        producer_options("none", :none)
       )
 
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,
-        producer_options("lz4", :LZ4)
+        producer_options("lz4", :lz4)
       )
 
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,
-        producer_options("zlib", :ZLIB)
+        producer_options("zlib", :zlib)
       )
 
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,
-        producer_options("zstd", :ZSTD)
+        producer_options("zstd", :zstd)
       )
 
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,
-        producer_options("snappy", :SNAPPY)
+        producer_options("snappy", :snappy)
       )
 
     {:ok, consumer_pid} =

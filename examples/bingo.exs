@@ -101,7 +101,7 @@ defmodule Main do
         name: name,
         topic: topic,
         subscription_name: name,
-        subscription_type: :Exclusive,
+        subscription_type: :exclusive,
         callback_module: BingoPlayer,
         durable: false,
         init_args: [self(), card_size]

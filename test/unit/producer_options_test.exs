@@ -13,8 +13,8 @@ defmodule Pulsar.Producer.OptionsTest do
 
       assert opts[:client] == :default
       assert opts[:producer_count] == 1
-      assert opts[:access_mode] == :Shared
-      assert opts[:compression] == :NONE
+      assert opts[:access_mode] == :shared
+      assert opts[:compression] == :none
       assert opts[:batch_enabled] == false
     end
 

@@ -22,7 +22,7 @@ defmodule Pulsar.Consumer.WorkerTest do
       base_topic: @topic,
       partition: 2,
       subscription_name: "order-service",
-      subscription_type: :Shared,
+      subscription_type: :shared,
       consumer_name: "orders-order-service-partition-2-1",
       callback_module: Callback
     )
@@ -39,7 +39,7 @@ defmodule Pulsar.Consumer.WorkerTest do
                base_topic: @topic,
                partition: 2,
                subscription_name: "order-service",
-               subscription_type: :Shared,
+               subscription_type: :shared,
                consumer_name: "orders-order-service-partition-2-1"
              }
     end

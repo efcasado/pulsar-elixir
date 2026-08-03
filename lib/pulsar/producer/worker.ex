@@ -60,7 +60,7 @@ defmodule Pulsar.Producer.Worker do
           sequence_id: integer(),
           pending_sends: %{integer() => {GenServer.from(), map()}},
           access_mode: atom(),
-          compression: :NONE | :LZ4 | :ZLIB | :SNAPPY | :ZSTD,
+          compression: :none | :lz4 | :zlib | :snappy | :zstd,
           ready: boolean(),
           registration_request_id: integer() | nil,
           topic_epoch: integer() | nil,
@@ -103,7 +103,7 @@ defmodule Pulsar.Producer.Worker do
   `Pulsar.Producer.send/3`, which documents the message options.
 
   Two are not part of that public surface: `:timeout`, the call timeout in milliseconds
-  (default 5000), and `:ordering_key`, which orders within a `Key_Shared` subscription
+  (default 5000), and `:ordering_key`, which orders within a `:key_shared` subscription
   without affecting which partition the message lands on.
   """
   @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -251,7 +251,7 @@ defmodule Pulsar.Producer.Worker do
           sequence_id: sequence_id,
           publish_time: System.system_time(:millisecond),
           uncompressed_size: byte_size(chunk_payload),
-          compression: acc_state.compression,
+          compression: Protocol.to_compression(acc_state.compression),
           partition_key: Keyword.get(opts, :partition_key),
           ordering_key: Keyword.get(opts, :ordering_key),
           properties: Protocol.to_key_value_list(Keyword.get(opts, :properties)),
@@ -451,7 +451,7 @@ defmodule Pulsar.Producer.Worker do
       producer_name: state.producer_name,
       sequence_id: sequence_id,
       publish_time: System.system_time(:millisecond),
-      compression: state.compression,
+      compression: Protocol.to_compression(state.compression),
       uncompressed_size: uncompressed_size,
       num_messages_in_batch: messages_count,
       schema_version: state.schema_version
@@ -611,7 +611,7 @@ defmodule Pulsar.Producer.Worker do
       topic: state.topic,
       producer_id: state.producer_id,
       producer_name: producer_name,
-      producer_access_mode: state.access_mode,
+      producer_access_mode: Protocol.to_producer_access_mode(state.access_mode),
       topic_epoch: state.topic_epoch,
       schema: Schema.to_binary(state.schema)
     }

@@ -95,7 +95,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         init_args: [fail_all: true],
         client: @client,
         initial_position: :earliest,
-        subscription_type: :Shared,
+        subscription_type: :shared,
         redelivery_interval: 100,
         dead_letter_policy: [
           max_redelivery: max_redelivery,
@@ -112,7 +112,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         "dlq-consumer",
         DummyConsumer,
         client: @client,
-        subscription_type: :Shared,
+        subscription_type: :shared,
         initial_position: :earliest
       )
 
@@ -151,7 +151,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         init_args: [fail_all: true],
         client: @client,
         initial_position: :earliest,
-        subscription_type: :Shared,
+        subscription_type: :shared,
         redelivery_interval: 100
       )
 
@@ -182,7 +182,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         init_args: [fail_all: true],
         client: @client,
         initial_position: :earliest,
-        subscription_type: :Shared,
+        subscription_type: :shared,
         redelivery_interval: 100,
         dead_letter_policy: [
           max_redelivery: 2
@@ -198,7 +198,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         "dlq-default-monitor",
         DummyConsumer,
         client: @client,
-        subscription_type: :Shared,
+        subscription_type: :shared,
         initial_position: :earliest
       )
 

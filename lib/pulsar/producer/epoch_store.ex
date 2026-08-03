@@ -2,7 +2,7 @@ defmodule Pulsar.Producer.EpochStore do
   @moduledoc false
 
   # Topic epochs per client, in ETS, so a restarting producer can tell whether a newer one
-  # fenced it under the :ExclusiveWithFencing access mode. The table belongs to the client.
+  # fenced it under the :exclusive_with_fencing access mode. The table belongs to the client.
 
   @doc "Returns the ETS table name for a client."
   @spec table_name(atom()) :: atom()
