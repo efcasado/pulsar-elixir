@@ -483,5 +483,20 @@ defmodule Pulsar.TopologyTest do
       assert Topology.kind(root) == :topology
       assert Topology.kind(group) == :group
     end
+
+    test "answers workers and stale pids with no groups" do
+      {root, _registry} = start_topology(0)
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+
+      assert Topology.groups(worker) == []
+
+      stale = spawn(fn -> :ok end)
+      ref = Process.monitor(stale)
+      assert_receive {:DOWN, ^ref, :process, ^stale, _reason}
+
+      assert Topology.kind(stale) == :worker
+      assert Topology.groups(stale) == []
+    end
   end
 end

@@ -101,7 +101,7 @@ defmodule Pulsar.Topology do
 
   A non-partitioned topology answers its one internal group at index zero. A `Pulsar.Topology.Group`
   passed directly is treated the same way and answers itself, so callers routing over either
-  shape need no special case.
+  shape need no special case. Workers and stale pids have no groups and answer an empty list.
 
   Partition indexes come from the integer child ids rather than a group's position in the list.
 
@@ -113,6 +113,7 @@ defmodule Pulsar.Topology do
     case kind(root) do
       :group -> [{0, root}]
       :topology -> topology_groups(root)
+      :worker -> []
     end
   end
 
