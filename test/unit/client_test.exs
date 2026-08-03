@@ -2,6 +2,7 @@ defmodule Pulsar.ClientTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Client
+  alias Pulsar.Test.Support.Utils
 
   defmodule StoppingResourceSupervisor do
     @moduledoc false
@@ -312,6 +313,30 @@ defmodule Pulsar.ClientTest do
       start_supervised!({Client, name: :broker_explicit, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111})
 
       assert Client.get_broker_opts(:broker_explicit)[:max_frame_size] == 111_111
+    end
+
+    test "preserves broker options when a supervised client is cycled" do
+      client = :broker_opts_after_restart
+
+      old_client =
+        start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111})
+
+      assert :ok = Client.stop(client)
+
+      {restarted_client, broker_opts} =
+        Utils.wait_for(
+          fn ->
+            restarted_client = Process.whereis(client)
+            {restarted_client, Client.get_broker_opts(client)}
+          end,
+          until: fn {pid, opts} ->
+            is_pid(pid) and pid != old_client and opts[:max_frame_size] == 111_111
+          end,
+          description: "supervised client to restart"
+        )
+
+      assert is_pid(restarted_client)
+      assert broker_opts[:max_frame_size] == 111_111
     end
 
     test "ignores the application environment" do

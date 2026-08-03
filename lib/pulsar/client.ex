@@ -455,13 +455,14 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
+    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
+
     try do
       Supervisor.stop(client_name, :normal, timeout)
     catch
       :exit, _reason -> :ok
     end
 
-    :persistent_term.erase({__MODULE__, client_name, :broker_opts})
     :ok
   end
 
