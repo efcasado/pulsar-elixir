@@ -38,8 +38,8 @@ defmodule Pulsar.Consumer.Callback do
   - `handle_call/3` - Handle synchronous calls (default: `{:reply, {:error, :not_implemented}, state}`)
   - `handle_cast/2` - Handle asynchronous casts (default: `{:noreply, state}`)
   - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
-  - `became_active/1` - Called when this consumer becomes the active consumer of a `:Failover` subscription (default: `{:noreply, state}`)
-  - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:Failover` subscription (default: `{:noreply, state}`)
+  - `became_active/1` - Called when this consumer becomes the active consumer of a `:failover` subscription (default: `{:noreply, state}`)
+  - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:failover` subscription (default: `{:noreply, state}`)
   - `handle_invalid_message/2` - Called instead of `handle_message/2` for a message whose
     bytes could not be trusted (default: log a warning and acknowledge it, so it is not
     redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
@@ -109,7 +109,7 @@ defmodule Pulsar.Consumer.Callback do
          [topic: topic,
           subscription_name: subscription,
           callback_module: MyCallback,
-          subscription_type: :Key_Shared,
+          subscription_type: :key_shared,
           consumer_count: 3,
           name: :orders]
        ]}
@@ -154,7 +154,7 @@ defmodule Pulsar.Consumer.Callback do
         base_topic: "persistent://public/default/orders",
         partition: 2,
         subscription_name: "order-service",
-        subscription_type: :Shared,
+        subscription_type: :shared,
         consumer_name: "orders-order-service-partition-2-1"
       }
 
@@ -187,7 +187,7 @@ defmodule Pulsar.Consumer.Callback do
 
   ## Failover Consumer Events
 
-  For `:Failover` subscriptions, `became_active/1` and `became_passive/1`
+  For `:failover` subscriptions, `became_active/1` and `became_passive/1`
   notify a consumer when the broker promotes it to (or demotes it from) the
   active role. Useful for metrics/alerting or warming up state before a
   takeover; not meaningful for other subscription types. A passive consumer

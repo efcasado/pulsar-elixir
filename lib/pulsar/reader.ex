@@ -188,7 +188,7 @@ defmodule Pulsar.Reader do
 
     consumer_opts = [
       client: client_name,
-      subscription_type: :Exclusive,
+      subscription_type: :exclusive,
       durable: false,
       consumer_count: 1,
       initial_position: start_position,

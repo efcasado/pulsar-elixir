@@ -22,17 +22,17 @@ defmodule Pulsar.Producer.Options do
       doc: "Number of producer processes to start for the topic, or for each partition."
     ],
     access_mode: [
-      type: {:in, [:Shared, :Exclusive, :WaitForExclusive, :ExclusiveWithFencing]},
-      default: :Shared,
+      type: {:in, [:shared, :exclusive, :wait_for_exclusive, :exclusive_with_fencing]},
+      default: :shared,
       doc: """
-      How the topic is shared with other producers. `:Shared` allows several,
-      `:Exclusive` fails if one is already connected, `:WaitForExclusive` waits for
-      it to disconnect, and `:ExclusiveWithFencing` evicts it.
+      How the topic is shared with other producers. `:shared` allows several,
+      `:exclusive` fails if one is already connected, `:wait_for_exclusive` waits for
+      it to disconnect, and `:exclusive_with_fencing` evicts it.
       """
     ],
     compression: [
-      type: {:in, [:NONE, :LZ4, :ZLIB, :SNAPPY, :ZSTD]},
-      default: :NONE,
+      type: {:in, [:none, :lz4, :zlib, :snappy, :zstd]},
+      default: :none,
       doc: "Compression applied to the payload."
     ],
     batch_enabled: [

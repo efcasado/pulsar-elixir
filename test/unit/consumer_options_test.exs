@@ -12,7 +12,7 @@ defmodule Pulsar.Consumer.OptionsTest do
       opts = validate!([])
 
       assert opts[:client] == :default
-      assert opts[:subscription_type] == :Shared
+      assert opts[:subscription_type] == :shared
       assert opts[:consumer_count] == 1
       assert opts[:flow_initial] == 100
       assert opts[:initial_position] == :latest

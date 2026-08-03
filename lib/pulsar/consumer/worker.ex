@@ -10,6 +10,7 @@ defmodule Pulsar.Consumer.Worker do
   alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Producer.Options, as: ProducerOptions
   alias Pulsar.Producer.Worker, as: ProducerWorker
+  alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
   alias Pulsar.Topology.Resolver
@@ -211,7 +212,7 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
 
       # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic
-      # stays malformed, and an :Exclusive subscription already taken stays taken. Stopping
+      # stays malformed, and an :exclusive subscription already taken stays taken. Stopping
       # with :shutdown leaves the worker down instead of restarting it into the same answer,
       # and the group follows once its last worker has gone.
       {:error, {code, _message} = reason} when code in @terminal_errors ->
@@ -714,7 +715,7 @@ defmodule Pulsar.Consumer.Worker do
       %Binary.CommandSubscribe{
         topic: topic,
         subscription: subscription_name,
-        subType: subscription_type,
+        subType: Protocol.to_subscription_type(subscription_type),
         consumer_id: consumer_id,
         consumer_name: consumer_name,
         request_id: request_id,
