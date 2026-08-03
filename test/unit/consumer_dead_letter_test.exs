@@ -33,7 +33,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
 
     test "defaults the topic to the base topic and subscription" do
       assert [%{id: {:dead_letter, @default_dlq}} = spec] = DeadLetter.child_specs(opts())
-      assert {Pulsar.Producer, :start_link, [producer_opts]} = spec.start
+      assert {Topology, :start_link, [_worker, _registry, _count_key, producer_opts]} = spec.start
       assert Keyword.fetch!(producer_opts, :topic) == @default_dlq
     end
 
@@ -44,14 +44,14 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert [%{id: {:dead_letter, ^explicit}}] = specs
     end
 
-    # Two subscriptions may be configured to divert into the same topic, and each still needs
-    # its own registered producer.
+    # Two subscriptions may be configured to divert into the same topic, and each still gets
+    # its own producer with its own identity.
     test "names the producer after the consumer rather than the dead letter topic" do
       explicit = [max_redelivery: 3, topic: "persistent://public/default/parked"]
 
       names =
         for name <- [@consumer_name, "#{@consumer_name}-other"] do
-          [%{start: {_module, _fun, [producer_opts]}}] =
+          [%{start: {_module, _fun, [_worker, _registry, _count_key, producer_opts]}}] =
             DeadLetter.child_specs(opts(name: name, dead_letter_policy: explicit))
 
           Keyword.fetch!(producer_opts, :name)
@@ -96,15 +96,19 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert Topology.resource?(dlq, :producers)
     end
 
-    test "the dead letter producer comes up without waiting on a broker" do
+    # It comes up even though the consumer's own discovery never resolves here, so it is not
+    # sequenced behind it and does not wait on a broker.
+    test "the dead letter producer is reached through its consumer, not the producer registry" do
       root = start_consumer_topology()
 
-      # The consumer's own discovery never resolves here, so this also shows the producer is
-      # not sequenced behind it.
       assert {_id, dlq, :supervisor, _modules} =
                root |> Supervisor.which_children() |> List.keyfind({:dead_letter, @default_dlq}, 0)
 
-      assert Client.lookup(:producers, "#{@consumer_name}-dead-letter-producer", :test) == {:ok, dlq}
+      assert is_pid(dlq)
+
+      # Registering would tie a consumer's startup to a branch that restarts separately from it.
+      assert Client.lookup(:producers, "#{@consumer_name}-dead-letter-producer", :test) ==
+               {:error, :not_found}
     end
 
     test "a consumer without a dead letter policy has no such child" do

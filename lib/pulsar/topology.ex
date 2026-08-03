@@ -43,7 +43,7 @@ defmodule Pulsar.Topology do
     }
   end
 
-  @spec start_link(module(), atom(), atom(), keyword()) :: Supervisor.on_start()
+  @spec start_link(module(), atom() | nil, atom(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts) do
     start_link(worker, registry, count_key, opts, [])
   end
@@ -51,13 +51,19 @@ defmodule Pulsar.Topology do
   # The fifth argument is an internal seam for exercising asynchronous discovery without a
   # broker. Consumer and Producer deliberately expose only start_link/1.
   @doc false
-  @spec start_link(module(), atom(), atom(), keyword(), keyword()) :: Supervisor.on_start()
+  @spec start_link(module(), atom() | nil, atom(), keyword(), keyword()) :: Supervisor.on_start()
   def start_link(worker, registry, count_key, opts, controller_opts) do
     name = Keyword.fetch!(opts, :name)
     config = %{worker: worker, count_key: count_key, opts: opts}
 
-    Supervisor.start_link(__MODULE__, {config, controller_opts}, name: {:via, Registry, {registry, name}})
+    Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
+
+  # A resource owned by another resource is reached through its owner's tree, so it registers
+  # nowhere: nothing outside that owner should be able to resolve it, and it must not depend on
+  # a registry that belongs to a branch restarting separately from the one that owns it.
+  defp start_options(nil, _name), do: []
+  defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
 
   @typedoc false
   @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}

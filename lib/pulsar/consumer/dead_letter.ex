@@ -7,6 +7,8 @@ defmodule Pulsar.Consumer.DeadLetter do
 
   alias Pulsar.Message
   alias Pulsar.Producer
+  alias Pulsar.Producer.Options, as: ProducerOptions
+  alias Pulsar.Producer.Worker, as: ProducerWorker
 
   # Read by a consumer of the dead letter topic to trace a message back to where it failed.
   # The names match the Java client's, so both ends agree on them.
@@ -42,14 +44,21 @@ defmodule Pulsar.Consumer.DeadLetter do
         []
 
       topic ->
-        # Only the three options that tie it to this consumer; Pulsar.Producer validates the
-        # rest, so the dead letter producer gets the same defaults as any other.
-        producer_opts = [topic: topic, client: Keyword.fetch!(opts, :client), name: producer_name(opts)]
+        # Validated here rather than started through Pulsar.Producer, which registers what it
+        # starts in the client's producer registry. This one is reached through the consumer
+        # that owns it, so registering would only couple it to a branch it does not belong to.
+        # Everything below the root is an ordinary producer, defaults included.
+        producer_opts =
+          ProducerOptions.validate!(
+            topic: topic,
+            client: Keyword.fetch!(opts, :client),
+            name: producer_name(opts)
+          )
 
         [
           %{
             id: {:dead_letter, topic},
-            start: {Producer, :start_link, [producer_opts]},
+            start: {Pulsar.Topology, :start_link, [ProducerWorker, nil, :producer_count, producer_opts]},
             restart: :permanent,
             type: :supervisor
           }
@@ -132,7 +141,7 @@ defmodule Pulsar.Consumer.DeadLetter do
   end
 
   # Named after the consumer, not the dead letter topic: two subscriptions may be configured to
-  # divert into the same topic, and each still needs its own registered producer.
+  # divert into the same topic, and the name keys this one's producer epochs and telemetry.
   defp producer_name(opts) do
     case topic(opts) do
       nil -> nil
