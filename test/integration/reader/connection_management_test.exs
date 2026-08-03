@@ -84,6 +84,6 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
 
     assert length(result) == @num_messages
 
-    assert :ok = Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end)
+    Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end)
   end
 end

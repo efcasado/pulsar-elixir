@@ -2,69 +2,44 @@ defmodule Pulsar.Test.Support.Utils do
   @moduledoc false
   import ExUnit.Assertions, only: [flunk: 1]
 
-  @default_attempts 100
+  @default_timeout 10_000
   @default_interval_ms 100
 
   @doc """
-  Waits until `fun` returns a truthy value, failing when the time budget expires.
+  Polls `fun` until its result satisfies `:until`, and returns that result.
 
-  The attempts-based interface is retained for existing tests, but elapsed time is tracked with
-  a monotonic deadline so time spent evaluating `fun` also consumes the budget. Pass an `:until`
-  predicate to wait for and return a particular observed value.
+  Fails the test when `:timeout` expires. The budget is a monotonic deadline, so time spent
+  inside `fun` counts against it too. `:until` defaults to a truthiness check.
   """
-  def wait_for(fun), do: wait_for(fun, @default_attempts, @default_interval_ms)
-  def wait_for(fun, attempts) when is_integer(attempts), do: wait_for(fun, attempts, @default_interval_ms)
-
-  def wait_for(fun, opts) when is_list(opts) do
-    timeout = Keyword.get(opts, :timeout, @default_attempts * @default_interval_ms)
+  def wait_for(fun, opts \\ []) do
+    until = Keyword.get(opts, :until, &truthy?/1)
     interval = Keyword.get(opts, :interval, @default_interval_ms)
     description = Keyword.get(opts, :description, "condition")
-    until = Keyword.fetch!(opts, :until)
+    deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout, @default_timeout)
 
-    poll(
-      fn ->
-        observation = fun.()
-
-        if until.(observation),
-          do: {:ok, observation},
-          else: {:retry, observation}
-      end,
-      deadline(timeout),
-      interval,
-      description
-    )
-  end
-
-  def wait_for(fun, attempts, interval_ms) when is_integer(attempts) do
-    _observation =
-      wait_for(fun,
-        until: &truthy?/1,
-        timeout: attempts * interval_ms,
-        interval: interval_ms,
-        description: "condition to become true"
-      )
-
-    :ok
+    poll(fun, until, deadline, interval, description)
   end
 
   defp truthy?(result), do: result not in [false, nil]
 
-  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+  defp poll(fun, until, deadline, interval, description) do
+    observation = fun.()
 
-  defp poll(fun, deadline, interval, description) do
-    case fun.() do
-      {:ok, value} ->
-        value
+    if until.(observation) do
+      observation
+    else
+      retry(fun, until, deadline, interval, description, observation)
+    end
+  end
 
-      {:retry, observation} ->
-        now = System.monotonic_time(:millisecond)
+  defp retry(fun, until, deadline, interval, description, observation) do
+    case deadline - System.monotonic_time(:millisecond) do
+      remaining when remaining > 0 ->
+        Process.sleep(min(interval, remaining))
+        poll(fun, until, deadline, interval, description)
 
-        if now >= deadline do
-          flunk("Timed out waiting for #{description}; last observation: #{inspect(observation)}")
-        else
-          Process.sleep(min(interval, deadline - now))
-          poll(fun, deadline, interval, description)
-        end
+      _expired ->
+        flunk("Timed out waiting for #{description}; last observation: #{inspect(observation)}")
     end
   end
 

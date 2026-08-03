@@ -50,7 +50,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     {:ok, group_pid} = Pulsar.Producer.start(topic, producer_options())
 
     assert_worker_restarts(group_pid, fn producer ->
-      :ok = Utils.wait_for(fn -> :sys.get_state(producer).ready end)
+      Utils.wait_for(fn -> :sys.get_state(producer).ready end)
       :ok = System.unload_topic(topic)
     end)
 
@@ -99,7 +99,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
       )
 
     restart.(before)
-    :ok = Utils.wait_for(fn -> not Process.alive?(before) end)
+    Utils.wait_for(fn -> not Process.alive?(before) end)
 
     [after_restart] =
       Utils.wait_for(fn -> Topology.workers(group) end,

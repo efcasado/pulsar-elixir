@@ -297,7 +297,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
       )
 
     :ok = Topology.await_ready(no_force_create_group, 1_000)
-    :ok = Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
+    Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
 
     assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 0) ==
              {:error, :timeout}
@@ -307,7 +307,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
 
     assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
-    :ok = Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
+    Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
     refute no_force_create_group in Pulsar.Client.consumers(@client)
   end
 

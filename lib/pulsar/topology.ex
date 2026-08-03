@@ -3,7 +3,7 @@ defmodule Pulsar.Topology do
 
   # Stable root for one logical consumer or producer; Discovery reconciles its internal groups.
 
-  use Supervisor
+  @behaviour Supervisor
 
   alias Pulsar.Backoff
   alias Pulsar.Consumer.Worker, as: ConsumerWorker

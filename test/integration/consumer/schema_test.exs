@@ -64,7 +64,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
       )
 
     :ok = Topology.await_ready(consumer_group, 1_000)
-    :ok = Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
+    Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
 
     assert Pulsar.Consumer.await_ready(consumer_group, timeout: 0) ==
              {:error, :timeout}
@@ -74,7 +74,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
 
     assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
-    :ok = Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
+    Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
     refute consumer_group in Pulsar.Client.consumers(@client)
   end
 

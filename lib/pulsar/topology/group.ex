@@ -1,7 +1,7 @@
 defmodule Pulsar.Topology.Group do
   @moduledoc false
 
-  use Supervisor
+  @behaviour Supervisor
 
   alias Pulsar.Topology
 

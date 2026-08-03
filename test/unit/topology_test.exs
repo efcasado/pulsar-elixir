@@ -273,17 +273,16 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:DOWN, ^ref, :process, ^old_group, _reason}
       assert Topology.groups(root) == [{0, :undefined}]
 
-      :ok =
-        Utils.wait_for(
-          fn ->
-            case Topology.groups(root) do
-              [{0, new_group}] when is_pid(new_group) -> new_group != old_group
-              _not_running -> false
-            end
-          end,
-          100,
-          10
-        )
+      Utils.wait_for(
+        fn ->
+          case Topology.groups(root) do
+            [{0, new_group}] when is_pid(new_group) -> new_group != old_group
+            _not_running -> false
+          end
+        end,
+        timeout: 1_000,
+        interval: 10
+      )
 
       assert_receive {:telemetry_event,
                       %{
@@ -322,7 +321,7 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:resolved, 2}
       :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolved, 4}
-      :ok = Utils.wait_for(fn -> length(Topology.groups(root)) == 4 end, 100, 10)
+      Utils.wait_for(fn -> length(Topology.groups(root)) == 4 end, timeout: 1_000, interval: 10)
       assert_receive {:resolved, 2}
 
       assert_receive {:telemetry_event,
@@ -446,21 +445,20 @@ defmodule Pulsar.TopologyTest do
 
       send(discovery, :resolve)
 
-      :ok =
-        Utils.wait_for(
-          fn ->
-            groups = Map.new(Topology.groups(root))
+      Utils.wait_for(
+        fn ->
+          groups = Map.new(Topology.groups(root))
 
-            Enum.all?(old_groups, fn {index, old_group} ->
-              case Map.fetch(groups, index) do
-                {:ok, new_group} when is_pid(new_group) -> new_group != old_group
-                _not_running -> false
-              end
-            end)
-          end,
-          100,
-          10
-        )
+          Enum.all?(old_groups, fn {index, old_group} ->
+            case Map.fetch(groups, index) do
+              {:ok, new_group} when is_pid(new_group) -> new_group != old_group
+              _not_running -> false
+            end
+          end)
+        end,
+        timeout: 1_000,
+        interval: 10
+      )
 
       for {index, new_group} <- Topology.groups(root) do
         assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)

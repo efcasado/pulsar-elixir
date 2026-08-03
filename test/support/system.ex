@@ -42,7 +42,8 @@ defmodule Pulsar.Test.Support.System do
     Logger.info("Starting Pulsar ...")
     {_output, 0} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)
 
-    :ok = Utils.wait_for(&brokers_up?/0, _attempts = 100, _delay = 100)
+    Utils.wait_for(&brokers_up?/0)
+    :ok
   end
 
   def stop_pulsar do

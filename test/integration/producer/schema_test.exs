@@ -145,7 +145,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       )
 
     :ok = Topology.await_ready(producer_group, 1_000)
-    :ok = Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
+    Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
 
     assert Pulsar.Producer.await_ready(producer_group, timeout: 0) ==
              {:error, :timeout}
@@ -155,7 +155,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
 
     assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
-    :ok = Utils.wait_for(fn -> not Process.alive?(producer_group) end)
+    Utils.wait_for(fn -> not Process.alive?(producer_group) end)
     refute producer_group in Pulsar.Client.producers(@client)
   end
 
