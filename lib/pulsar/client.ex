@@ -65,7 +65,7 @@ defmodule Pulsar.Client do
               """
             ],
             host: [
-              type: :string,
+              type: {:custom, __MODULE__, :validate_broker_url, []},
               required: true,
               doc: "Bootstrap broker URL, e.g. `pulsar://localhost:6650`."
             ],
@@ -138,13 +138,42 @@ defmodule Pulsar.Client do
 
     children = [
       {Registry, keys: :unique, name: broker_registry(client_name)},
-      {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client_name)},
+      brokers_spec(opts),
       resources_spec(opts)
     ]
 
     # Brokers first: everything below resolves topics through them, so losing them means
     # starting the resources over.
     Supervisor.init(children, strategy: :rest_for_one)
+  end
+
+  # The initial broker is static because it belongs to the client configuration. Brokers
+  # learned through lookup remain dynamic, but both kinds register in the same registry.
+  defp brokers_spec(opts) do
+    client = Keyword.fetch!(opts, :name)
+    url = Keyword.fetch!(opts, :host)
+
+    children = [
+      {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client)},
+      broker_spec(url, client)
+    ]
+
+    %{
+      id: :brokers,
+      start: {Supervisor, :start_link, [children, [strategy: :one_for_one]]},
+      type: :supervisor
+    }
+  end
+
+  defp broker_spec(url, client) do
+    name = {:via, Registry, {broker_registry(client), url}}
+    opts = [{:name, name} | get_broker_opts(client)]
+
+    %{
+      id: {:broker, url},
+      start: {Pulsar.Broker, :start_link, [url, opts]},
+      restart: :permanent
+    }
   end
 
   # Consumers and producers depend on the brokers and on their own registry, but not on each
@@ -249,6 +278,21 @@ defmodule Pulsar.Client do
   end
 
   @doc false
+  @spec validate_broker_url(term()) :: {:ok, String.t()} | {:error, String.t()}
+  def validate_broker_url(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host}}
+      when scheme in ["pulsar", "pulsar+ssl"] and is_binary(host) and host != "" ->
+        {:ok, url}
+
+      _invalid ->
+        {:error, "must be a valid pulsar:// or pulsar+ssl:// broker URL"}
+    end
+  end
+
+  def validate_broker_url(_url), do: {:error, "must be a valid pulsar:// or pulsar+ssl:// broker URL"}
+
+  @doc false
   def broker_registry(client_name) do
     Module.concat([__MODULE__, client_name, BrokerRegistry])
   end
@@ -281,7 +325,7 @@ defmodule Pulsar.Client do
   end
 
   @doc """
-  Returns a random broker process from the specified client's broker supervisor.
+  Returns a random broker process registered to the specified client.
 
   Defaults to the `:default` client if no client is specified.
 
@@ -289,14 +333,19 @@ defmodule Pulsar.Client do
   """
   @spec random_broker(atom()) :: pid() | nil
   def random_broker(client_name \\ :default) do
-    case children_of(broker_supervisor(client_name)) do
+    case registered_brokers(client_name) do
       [] ->
         nil
 
-      children ->
-        {_id, pid, _, _} = Enum.random(children)
-        pid
+      brokers ->
+        Enum.random(brokers)
     end
+  end
+
+  defp registered_brokers(client_name) do
+    Registry.select(broker_registry(client_name), [{{:"$1", :"$2", :"$3"}, [], [:"$2"]}])
+  rescue
+    ArgumentError -> []
   end
 
   # A client that was never started has no supervisor to ask, which reads the same as a

@@ -43,6 +43,6 @@ defmodule Pulsar.Client.BootstrapTest do
   end
 
   defp client_opts(client, producer) do
-    [name: client, host: @host, producers: [producer]]
+    [name: client, producers: [producer]]
   end
 end

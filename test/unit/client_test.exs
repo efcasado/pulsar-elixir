@@ -38,6 +38,19 @@ defmodule Pulsar.ClientTest do
       end
     end
 
+    test "rejects malformed and unsupported broker URLs" do
+      for {name, url} <- [
+            {:missing_scheme, "localhost:6650"},
+            {:unsupported_scheme, "http://localhost:6650"},
+            {:missing_hostname, "pulsar://"},
+            {:invalid_port, "pulsar://localhost:not-a-port"}
+          ] do
+        assert_raise NimbleOptions.ValidationError,
+                     ~r/must be a valid pulsar:\/\/ or pulsar\+ssl:\/\/ broker URL/,
+                     fn -> Client.start_link(name: name, host: url) end
+      end
+    end
+
     test "rejects unknown options" do
       assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:conn_timout.*:bogus/, fn ->
         Client.start_link(
@@ -236,6 +249,27 @@ defmodule Pulsar.ClientTest do
   end
 
   describe "broker options" do
+    test "owns the initial broker in a client-level broker branch" do
+      client = :initial_broker_owner
+      url = "pulsar://127.0.0.1:1"
+      client_pid = start_supervised!({Client, name: client, host: url})
+
+      brokers = child_pid(client_pid, :brokers)
+      dynamic = Process.whereis(Client.broker_supervisor(client))
+      initial = child_pid(brokers, {:broker, url})
+
+      assert Enum.any?(Supervisor.which_children(brokers), &match?({_id, ^dynamic, :supervisor, _modules}, &1))
+      assert DynamicSupervisor.which_children(dynamic) == []
+      assert Client.lookup_broker(url, client: client) == {:ok, initial}
+      assert Client.random_broker(client) == initial
+
+      redirected_url = "pulsar://127.0.0.1:2"
+      assert {:ok, redirected} = Client.start_broker(redirected_url, client: client)
+      assert Enum.any?(DynamicSupervisor.which_children(dynamic), &match?({_id, ^redirected, :worker, _modules}, &1))
+      assert Client.lookup_broker(redirected_url, client: client) == {:ok, redirected}
+      assert Client.random_broker(client) in [initial, redirected]
+    end
+
     test "carries the connection tunables to the broker with their defaults" do
       start_supervised!({Client, name: :broker_defaults, host: "pulsar://127.0.0.1:1"})
 
@@ -300,5 +334,11 @@ defmodule Pulsar.ClientTest do
         Client.start_link(name: :bad_socket_opts, host: "pulsar://127.0.0.1:6650", socket_opts: :inet6)
       end
     end
+  end
+
+  defp child_pid(supervisor, id) do
+    supervisor
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
   end
 end

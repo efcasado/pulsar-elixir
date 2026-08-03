@@ -71,8 +71,10 @@ A client starts the following ownership tree:
 MyApp.Supervisor
 └── Pulsar.Client
     ├── BrokerRegistry
-    ├── BrokerSupervisor
-    │   └── broker connection(s)
+    ├── brokers
+    │   ├── BrokerSupervisor
+    │   │   └── broker connection(s) learned through lookup
+    │   └── initial broker connection
     └── resources
         ├── consumers
         │   ├── ConsumerRegistry
@@ -92,9 +94,11 @@ MyApp.Supervisor
             └── Bootstrap
 ```
 
-The broker registry maps service URLs to connection processes. The consumer and producer
-registries map application-facing names to stable topology roots; internal partition groups
-are not registered as public resources.
+The client-configured broker is a static child of the broker branch. Connections learned
+through topic lookup are children of its dynamic broker supervisor. Both kinds register in
+the broker registry, which maps service URLs to connection processes. The consumer and
+producer registries map application-facing names to stable topology roots; internal
+partition groups are not registered as public resources.
 
 Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
 does not take runtime producers down with it, and the reverse is also true. If the broker

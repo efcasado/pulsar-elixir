@@ -15,9 +15,6 @@ defmodule Pulsar.Client.Bootstrap do
   @impl true
   def init({kind, opts}) do
     client = Keyword.fetch!(opts, :name)
-
-    {:ok, _broker} = Client.start_broker(Keyword.fetch!(opts, :host), client: client)
-
     pending = Enum.map(Keyword.fetch!(opts, kind), &{Client.resource_module(kind), &1})
 
     state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
