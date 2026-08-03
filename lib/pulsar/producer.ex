@@ -14,8 +14,8 @@ defmodule Pulsar.Producer do
 
   `start/1` adds a producer to a running client and `stop/2` removes it. Operations target
   the logical producer by its stable root or registered name without exposing its partition
-  workers. `await_ready/2` waits for its initial topic topology when an operation must not
-  observe asynchronous startup.
+  workers. `await_ready/2` waits for its topology and configured workers when an operation
+  must not observe asynchronous startup.
 
   ## Options
 
@@ -73,15 +73,16 @@ defmodule Pulsar.Producer do
   def start(topic, opts) when is_binary(topic), do: start(Keyword.put(opts, :topic, topic))
 
   @doc """
-  Waits for a producer's initial topic topology to be ready.
+  Waits for a producer and all its configured workers to be ready.
 
   Takes the stable root returned by `start/1` or its registered name. A named producer is
   resolved repeatedly, so this can be called immediately after starting a client whose
   resources are declared asynchronously.
 
-  Readiness means initial topic discovery and topology construction have completed — the
-  point after which publishing no longer returns `{:error, :not_ready}`. It does not guarantee
-  continued broker availability or prevent a worker from restarting immediately afterward.
+  Readiness means initial topic discovery and topology construction have completed, and every
+  configured worker has registered with its broker. A worker that repeatedly fails registration
+  causes the wait to time out. Readiness is a snapshot: it does not guarantee continued broker
+  availability or prevent a worker from restarting immediately afterward.
 
   Options:
 

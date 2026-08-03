@@ -63,8 +63,11 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         schema: [type: :Int32]
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    :ok = Topology.await_ready(consumer_group, 1_000)
     :ok = Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
+
+    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 0) ==
+             {:error, :timeout}
 
     assert Process.alive?(consumer_group)
     assert consumer_group in Pulsar.Client.consumers(@client)

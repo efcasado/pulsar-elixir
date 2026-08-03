@@ -77,7 +77,8 @@ The client is the only thing your tree holds; consumers and producers run under 
 only known at runtime are added with `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1`.
 Resource initialization is asynchronous, so operations may temporarily return
 `{:error, :not_ready}`. Call `Pulsar.Consumer.await_ready/2` or
-`Pulsar.Producer.await_ready/2` when work must wait for initial topic discovery:
+`Pulsar.Producer.await_ready/2` when work must wait for topic discovery and worker
+initialization:
 
 ```elixir
 :ok = Pulsar.Producer.await_ready(:my_producer, timeout: 10_000)

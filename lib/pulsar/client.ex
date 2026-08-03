@@ -37,7 +37,8 @@ defmodule Pulsar.Client do
   resources are not; their caller must restore them.
 
   Both forms initialize asynchronously. `Pulsar.Consumer.await_ready/2` and
-  `Pulsar.Producer.await_ready/2` provide a bounded initial-topology barrier when one is needed.
+  `Pulsar.Producer.await_ready/2` provide a bounded topology-and-worker readiness barrier when
+  one is needed.
 
   `consumers/1` and `producers/1` list the logical resources currently running under a
   client. Partitioned resources still appear once: the returned pid is their stable root,

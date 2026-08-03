@@ -166,8 +166,9 @@ For example, publishing by name can return `{:error, :not_found}` before a decla
 producer has been registered, and `{:error, :not_ready}` while its topology is initializing.
 Applications that publish during startup or from a consumer callback should handle both.
 `Pulsar.Consumer.await_ready/2` and `Pulsar.Producer.await_ready/2` provide a bounded wait for
-initial topology construction when an application needs a startup barrier. This readiness is
-a snapshot: broker availability and worker restarts can still affect the following operation.
+initial topology construction and worker initialization when an application needs a startup
+barrier. This readiness is a snapshot: broker availability and worker restarts can still affect
+the following operation.
 
 Initial metadata failures are retried with backoff by the discovery process. Resolver also
 finds the topic owner when workers connect. Once a partitioned topology is ready, discovery

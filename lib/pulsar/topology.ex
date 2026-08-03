@@ -6,6 +6,8 @@ defmodule Pulsar.Topology do
   use Supervisor
 
   alias Pulsar.Backoff
+  alias Pulsar.Consumer.Worker, as: ConsumerWorker
+  alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Topic
   alias Pulsar.Topology.Discovery
   alias Pulsar.Topology.Group
@@ -80,34 +82,91 @@ defmodule Pulsar.Topology do
   def await_ready(resource, kind, opts) when kind in [:consumers, :producers] do
     opts = await_options!(opts)
     timeout = Keyword.fetch!(opts, :timeout)
+    readiness = fn resolve, deadline -> resource_readiness(resolve, kind, deadline) end
 
     case resource do
       root when is_pid(root) ->
-        await_ready(root, timeout)
+        await_resource(root, timeout, readiness)
 
       name when is_binary(name) or is_atom(name) ->
         resolve = fn -> Pulsar.Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
-        await_ready(resolve, timeout)
+        await(resolve, timeout, &(&1 in [:not_found, :not_ready]), readiness)
+    end
+  end
+
+  defp await_resource(root, timeout, readiness) do
+    if topology_root?(root) do
+      await(fn -> {:ok, root} end, timeout, &(&1 == :not_ready), readiness)
+    else
+      {:error, :not_found}
     end
   end
 
   defp await_options!(opts), do: NimbleOptions.validate!(opts, @await_options_schema)
 
-  defp await(resolve, timeout, retryable?) do
+  defp await(resolve, timeout, retryable?, readiness \\ &topology_readiness/2) do
     deadline = deadline(timeout)
 
-    case Backoff.run(fn -> readiness(resolve, remaining(deadline)) end, retryable?, timeout) do
+    case Backoff.run(fn -> readiness.(resolve, deadline) end, retryable?, timeout) do
       {:error, :not_ready} -> {:error, :timeout}
       result -> result
     end
   end
 
-  defp readiness(resolve, timeout) do
+  defp topology_readiness(resolve, deadline) do
     case resolve.() do
-      {:ok, root} -> root_readiness(root, timeout)
+      {:ok, root} -> root_readiness(root, remaining(deadline))
       {:error, _reason} = error -> error
     end
   end
+
+  defp resource_readiness(resolve, kind, deadline) do
+    case resolve.() do
+      {:ok, root} ->
+        case root_readiness(root, remaining(deadline)) do
+          :ok -> workers_readiness(root, kind, deadline)
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp workers_readiness(root, kind, deadline) do
+    groups = groups(root)
+    worker_module = worker_module(kind)
+
+    if groups != [] and Enum.all?(groups, &group_ready?(&1, worker_module, deadline)) do
+      :ok
+    else
+      {:error, :not_ready}
+    end
+  end
+
+  defp group_ready?({_index, group}, worker_module, deadline) when is_pid(group) do
+    children = supervisor_children(group)
+
+    children != [] and
+      Enum.all?(children, fn
+        {_id, worker, :worker, [^worker_module]} when is_pid(worker) ->
+          worker_ready?(worker_module, worker, deadline)
+
+        _not_ready ->
+          false
+      end)
+  end
+
+  defp group_ready?({_index, _not_running}, _worker_module, _deadline), do: false
+
+  defp worker_ready?(worker_module, worker, deadline) do
+    worker_module.ready?(worker, remaining(deadline))
+  catch
+    :exit, {_reason, {GenServer, :call, _call}} -> false
+  end
+
+  defp worker_module(:consumers), do: ConsumerWorker
+  defp worker_module(:producers), do: ProducerWorker
 
   defp root_readiness(root, timeout) do
     if topology_root?(root) do
@@ -166,7 +225,7 @@ defmodule Pulsar.Topology do
   end
 
   # Discovery is also an OTP :worker child, so traversal explicitly allows only resource workers.
-  @worker_modules [Pulsar.Consumer.Worker, Pulsar.Producer.Worker]
+  @worker_modules [ConsumerWorker, ProducerWorker]
 
   @doc """
   Returns the worker processes under `root`, across every partition it has.

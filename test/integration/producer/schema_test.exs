@@ -144,8 +144,11 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         name: "compat-test-producer-2"
       )
 
-    :ok = Pulsar.Producer.await_ready(producer_group)
+    :ok = Topology.await_ready(producer_group, 1_000)
     :ok = Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
+
+    assert Pulsar.Producer.await_ready(producer_group, timeout: 0) ==
+             {:error, :timeout}
 
     assert Process.alive?(producer_group)
     assert producer_group in Pulsar.Client.producers(@client)

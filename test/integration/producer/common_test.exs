@@ -34,6 +34,21 @@ defmodule Pulsar.Integration.Producer.CommonTest do
              Pulsar.Producer.send("non-existent-producer-group", "message", client: @client)
   end
 
+  test "await_ready waits for producer registration" do
+    {:ok, producer} =
+      Pulsar.Producer.start(@topic,
+        client: @client,
+        name: "delayed-producer",
+        startup_delay_ms: 500
+      )
+
+    assert :ok = Topology.await_ready(producer, 1_000)
+    assert Pulsar.Producer.await_ready(producer, timeout: 25) == {:error, :timeout}
+    assert :ok = Pulsar.Producer.await_ready(producer)
+    assert {:ok, _message_id} = Pulsar.Producer.send(producer, "ready")
+    assert :ok = Pulsar.Producer.stop(producer, client: @client)
+  end
+
   @tag telemetry_listen: [
          [:pulsar, :producer, :opened, :stop],
          [:pulsar, :producer, :closed, :stop],

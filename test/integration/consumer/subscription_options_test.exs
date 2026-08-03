@@ -250,6 +250,21 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert "durable" in subscriptions
   end
 
+  test "await_ready waits for subscription and callback initialization" do
+    {:ok, consumer} =
+      Pulsar.Consumer.start(
+        @topic,
+        "delayed-ready",
+        @consumer_callback,
+        subscription_options(:earliest, startup_delay_ms: 500)
+      )
+
+    assert :ok = Topology.await_ready(consumer, 1_000)
+    assert Pulsar.Consumer.await_ready(consumer, timeout: 25) == {:error, :timeout}
+    assert :ok = Pulsar.Consumer.await_ready(consumer)
+    assert :ok = Pulsar.Consumer.stop(consumer, client: @client)
+  end
+
   test "non-durable subscription is removed after consumer stops" do
     {:ok, non_durable_group} =
       Pulsar.Consumer.start(
@@ -281,8 +296,11 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, force_create_topic: false)
       )
 
-    :ok = Pulsar.Consumer.await_ready(no_force_create_group)
+    :ok = Topology.await_ready(no_force_create_group, 1_000)
     :ok = Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
+
+    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 0) ==
+             {:error, :timeout}
 
     assert Process.alive?(no_force_create_group)
     assert no_force_create_group in Pulsar.Client.consumers(@client)

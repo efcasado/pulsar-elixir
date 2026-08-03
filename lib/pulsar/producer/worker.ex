@@ -36,7 +36,7 @@ defmodule Pulsar.Producer.Worker do
     {:pending_sends, %{}},
     :access_mode,
     :compression,
-    :ready,
+    {:ready, false},
     :registration_request_id,
     :topic_epoch,
     :chunking_enabled,
@@ -61,7 +61,7 @@ defmodule Pulsar.Producer.Worker do
           pending_sends: %{integer() => {GenServer.from(), map()}},
           access_mode: atom(),
           compression: :NONE | :LZ4 | :ZLIB | :SNAPPY | :ZSTD,
-          ready: boolean() | nil,
+          ready: boolean(),
           registration_request_id: integer() | nil,
           topic_epoch: integer() | nil,
           chunking_enabled: boolean(),
@@ -93,6 +93,10 @@ defmodule Pulsar.Producer.Worker do
   def stop(producer, reason \\ :normal, timeout \\ :infinity) do
     GenServer.stop(producer, reason, timeout)
   end
+
+  @doc false
+  @spec ready?(pid(), timeout()) :: boolean()
+  def ready?(producer, timeout), do: GenServer.call(producer, :ready?, timeout)
 
   @doc """
   Publishes a message and waits for the broker to acknowledge it. Backs
@@ -207,6 +211,8 @@ defmodule Pulsar.Producer.Worker do
   end
 
   @impl true
+  def handle_call(:ready?, _from, state), do: {:reply, state.ready, state}
+
   def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}

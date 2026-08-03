@@ -38,6 +38,7 @@ defmodule Pulsar.Consumer.Worker do
     :callback_state,
     :broker_pid,
     :broker_monitor,
+    {:ready, false},
     :flow_initial,
     :flow_threshold,
     :flow_refill,
@@ -71,6 +72,7 @@ defmodule Pulsar.Consumer.Worker do
           callback_state: term(),
           broker_pid: pid(),
           broker_monitor: reference(),
+          ready: boolean(),
           flow_initial: non_neg_integer(),
           flow_threshold: non_neg_integer(),
           flow_refill: non_neg_integer(),
@@ -108,6 +110,10 @@ defmodule Pulsar.Consumer.Worker do
   def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
     GenServer.stop(consumer, reason, timeout)
   end
+
+  @doc false
+  @spec ready?(pid(), timeout()) :: boolean()
+  def ready?(consumer, timeout), do: GenServer.call(consumer, :ready?, timeout)
 
   @doc """
   Returns the fully resolved topic this consumer is subscribed to.
@@ -308,7 +314,7 @@ defmodule Pulsar.Consumer.Worker do
   def handle_continue({:init_callback, init_args}, state) do
     case state.callback_module.init(init_args) do
       {:ok, callback_state} ->
-        {:noreply, %{state | callback_state: callback_state}}
+        {:noreply, %{state | callback_state: callback_state, ready: true}}
 
       {:error, reason} ->
         {:stop, reason, nil}
@@ -594,6 +600,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
+  def handle_call(:ready?, _from, state), do: {:reply, state.ready, state}
+
   def handle_call(:topic, _from, state) do
     {:reply, state.topic, state}
   end

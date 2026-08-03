@@ -90,7 +90,8 @@ defmodule Pulsar do
   ## Lifecycle and availability
 
   Resource startup is asynchronous. Use `Pulsar.Consumer.await_ready/2` or
-  `Pulsar.Producer.await_ready/2` when an operation must wait for initial topology discovery.
+  `Pulsar.Producer.await_ready/2` when an operation must wait for topology discovery and worker
+  initialization.
 
   See the [architecture guide](architecture.html) for the ownership tree, asynchronous startup,
   and recovery model.
