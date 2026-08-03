@@ -33,6 +33,35 @@ defmodule Pulsar.BackoffTest do
     assert Enum.uniq(waits) != [hd(waits)]
   end
 
+  describe "run/1" do
+    test "retries the standard transient broker errors" do
+      for reason <- [:disconnected, {:ServiceNotReady, "try again"}] do
+        counter = :counters.new(1, [])
+
+        assert Backoff.run(fn ->
+                 :counters.add(counter, 1, 1)
+
+                 case :counters.get(counter, 1) do
+                   1 -> {:error, reason}
+                   2 -> {:ok, :retried}
+                 end
+               end) == {:ok, :retried}
+      end
+    end
+
+    test "returns other broker errors without retrying" do
+      counter = :counters.new(1, [])
+      error = {:error, {:AuthorizationError, "denied"}}
+
+      assert Backoff.run(fn ->
+               :counters.add(counter, 1, 1)
+               error
+             end) == error
+
+      assert :counters.get(counter, 1) == 1
+    end
+  end
+
   describe "run/3" do
     defp retryable?(:transient), do: true
     defp retryable?(_reason), do: false

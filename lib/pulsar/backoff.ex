@@ -7,12 +7,23 @@ defmodule Pulsar.Backoff do
   # Maximum total wait in a bounded retry, the kind `run/3` drives.
   @retry_budget 3_000
 
+  @retryable_errors [:disconnected, :ServiceNotReady]
+
   @spec next(non_neg_integer()) :: pos_integer()
   def next(0), do: :rand.uniform(100)
 
   def next(previous) do
     min(round(previous * 2), @max_backoff) + :rand.uniform(100)
   end
+
+  @doc """
+  Runs a broker operation using Pulsar's standard retry policy and budget.
+
+  Disconnected brokers and `ServiceNotReady` responses can recover without the caller
+  changing anything. Other errors are returned immediately.
+  """
+  @spec run((-> result)) :: result when result: term()
+  def run(fun) when is_function(fun, 0), do: run(fun, &retryable?/1, @retry_budget)
 
   @doc """
   Runs `fun`, retrying the failures `retryable?` accepts and backing off between attempts.
@@ -60,4 +71,7 @@ defmodule Pulsar.Backoff do
 
   defp within_budget?(:infinity, _wait), do: true
   defp within_budget?(deadline, wait), do: System.monotonic_time(:millisecond) + wait <= deadline
+
+  defp retryable?({code, _message}), do: code in @retryable_errors
+  defp retryable?(reason), do: reason in @retryable_errors
 end

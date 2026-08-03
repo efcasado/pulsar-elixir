@@ -164,7 +164,7 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def handle_continue(:register_producer, state) do
-    case Backoff.run(fn -> register(state) end, &retryable?/1) do
+    case Backoff.run(fn -> register(state) end) do
       {:ok, new_state} ->
         {:noreply, new_state, {:continue, :monitor_broker}}
 
@@ -205,13 +205,6 @@ defmodule Pulsar.Producer.Worker do
         error
     end
   end
-
-  # :disconnected is the broker answering while it re-establishes its connection, which it is
-  # already retrying with its own backoff; ServiceNotReady is a topic still being reassigned
-  # between brokers. Both are answers that change on their own.
-  defp retryable?(:disconnected), do: true
-  defp retryable?({:ServiceNotReady, _message}), do: true
-  defp retryable?(_reason), do: false
 
   @impl true
   def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do

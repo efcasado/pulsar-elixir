@@ -196,7 +196,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_continue({:subscribe, init_args}, state) do
-    case Backoff.run(fn -> subscribe(state) end, &retryable?/1) do
+    case Backoff.run(fn -> subscribe(state) end) do
       {:ok, broker_pid} ->
         {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
 
@@ -335,13 +335,6 @@ defmodule Pulsar.Consumer.Worker do
       {:ok, broker_pid}
     end
   end
-
-  # :disconnected is the broker answering while it re-establishes its connection, which it is
-  # already retrying with its own backoff; ServiceNotReady is a topic still being reassigned
-  # between brokers. Both are answers that change on their own.
-  defp retryable?(:disconnected), do: true
-  defp retryable?({:ServiceNotReady, _message}), do: true
-  defp retryable?(_reason), do: false
 
   @impl true
   def handle_info({:broker_message, %Binary.CommandCloseConsumer{}}, state) do
