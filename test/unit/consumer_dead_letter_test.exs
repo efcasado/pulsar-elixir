@@ -26,22 +26,32 @@ defmodule Pulsar.Consumer.DeadLetterTest do
     )
   end
 
-  describe "child_specs/1" do
-    test "a consumer without a dead letter policy owns no producer" do
-      assert DeadLetter.child_specs(opts(dead_letter_policy: nil)) == []
+  defp attach(overrides \\ []), do: DeadLetter.attach(opts(overrides), self())
+
+  describe "attach/2" do
+    test "a consumer without a dead letter policy attaches nothing" do
+      assert {annotated, []} = attach(dead_letter_policy: nil)
+      refute Keyword.has_key?(annotated, :dead_letter_root)
+    end
+
+    test "tells the workers which root owns the producer it attached" do
+      root = self()
+
+      assert {annotated, [_spec]} = DeadLetter.attach(opts(), root)
+      assert Keyword.fetch!(annotated, :dead_letter_root) == root
     end
 
     test "defaults the topic to the base topic and subscription" do
-      assert [%{id: {:dead_letter, @default_dlq}} = spec] = DeadLetter.child_specs(opts())
+      assert {_opts, [%{id: {:dead_letter, @default_dlq}} = spec]} = attach()
       assert {Topology, :start_link, [_worker, _registry, _count_key, producer_opts]} = spec.start
       assert Keyword.fetch!(producer_opts, :topic) == @default_dlq
     end
 
     test "honours an explicit dead letter topic" do
       explicit = "persistent://public/default/parked"
-      specs = DeadLetter.child_specs(opts(dead_letter_policy: [max_redelivery: 3, topic: explicit]))
 
-      assert [%{id: {:dead_letter, ^explicit}}] = specs
+      assert {_opts, [%{id: {:dead_letter, ^explicit}}]} =
+               attach(dead_letter_policy: [max_redelivery: 3, topic: explicit])
     end
 
     # Two subscriptions may be configured to divert into the same topic, and each still gets
@@ -51,27 +61,13 @@ defmodule Pulsar.Consumer.DeadLetterTest do
 
       names =
         for name <- [@consumer_name, "#{@consumer_name}-other"] do
-          [%{start: {_module, _fun, [_worker, _registry, _count_key, producer_opts]}}] =
-            DeadLetter.child_specs(opts(name: name, dead_letter_policy: explicit))
+          {_opts, [%{start: {_module, _fun, [_worker, _registry, _count_key, producer_opts]}}]} =
+            attach(name: name, dead_letter_policy: explicit)
 
           Keyword.fetch!(producer_opts, :name)
         end
 
       assert names == Enum.uniq(names)
-    end
-  end
-
-  describe "annotate/2" do
-    test "tells the workers which root owns their dead letter producer" do
-      root = self()
-
-      assert opts() |> DeadLetter.annotate(root) |> Keyword.fetch!(:dead_letter_root) == root
-    end
-
-    test "leaves a consumer without a dead letter policy alone" do
-      annotated = [dead_letter_policy: nil] |> opts() |> DeadLetter.annotate(self())
-
-      refute Keyword.has_key?(annotated, :dead_letter_root)
     end
   end
 
@@ -131,7 +127,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
              ConsumerWorker,
              registry,
              :consumer_count,
-             opts(overrides),
+             Keyword.put(opts(overrides), :companions, &DeadLetter.attach/2),
              [resolver: fn _topic, _opts -> Process.sleep(:infinity) end]
            ]}
       })

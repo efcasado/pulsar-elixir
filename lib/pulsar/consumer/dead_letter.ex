@@ -16,29 +16,28 @@ defmodule Pulsar.Consumer.DeadLetter do
   @origin_message_id_property "ORIGIN_MESSAGE_ID"
 
   @doc """
-  Tells a consumer's workers where to find the dead letter producer.
+  Attaches a dead letter producer to a consumer's topology. `Pulsar.Topology`'s `:companions`.
 
   Called with the logical consumer's options, before `Pulsar.Topology.Group` rewrites `:name`
-  and `:topic` per partition and per worker, so what every worker inherits describes the whole
-  consumer rather than the one partition it happens to hold.
+  and `:topic` per partition and per worker, so both the producer and what the workers are told
+  about it describe the whole consumer rather than the one partition a worker happens to hold.
 
-  What they inherit is the topology root, not a pid or a registered name. The producer is a
-  child of that root, so resolving through it is what makes a restart of the producer invisible
-  to the workers, and keeps them off a registry owned by a branch that restarts separately.
+  A consumer with no dead letter policy attaches nothing.
   """
-  @spec annotate(keyword(), pid()) :: keyword()
-  def annotate(opts, root) do
+  @spec attach(keyword(), pid()) :: {keyword(), [Supervisor.child_spec()]}
+  def attach(opts, root), do: {annotate(opts, root), child_specs(opts)}
+
+  # What the workers inherit is the topology root, not a pid or a registered name. The producer
+  # is a child of that root, so resolving through it is what makes a restart of the producer
+  # invisible to them, and keeps them off a registry owned by a branch that restarts separately.
+  defp annotate(opts, root) do
     case topic(opts) do
       nil -> opts
       _topic -> Keyword.put(opts, :dead_letter_root, root)
     end
   end
 
-  @doc """
-  The dead letter producer to run under a consumer's topology, or none when it has no policy.
-  """
-  @spec child_specs(keyword()) :: [Supervisor.child_spec()]
-  def child_specs(opts) do
+  defp child_specs(opts) do
     case topic(opts) do
       nil ->
         []

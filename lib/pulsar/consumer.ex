@@ -21,6 +21,7 @@ defmodule Pulsar.Consumer do
   """
 
   alias Pulsar.Client
+  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Consumer.Options
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
@@ -41,9 +42,11 @@ defmodule Pulsar.Consumer do
     client = Keyword.fetch!(opts, :client)
 
     opts =
-      Keyword.put_new_lazy(opts, :name, fn ->
+      opts
+      |> Keyword.put_new_lazy(:name, fn ->
         default_name(topic, Keyword.fetch!(opts, :subscription_name))
       end)
+      |> Keyword.put(:companions, &DeadLetter.attach/2)
 
     Topology.start_link(Worker, Client.registry(:consumers, client), :consumer_count, opts)
   end

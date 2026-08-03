@@ -6,7 +6,6 @@ defmodule Pulsar.Topology do
   @behaviour Supervisor
 
   alias Pulsar.Backoff
-  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Consumer.Worker, as: ConsumerWorker
   alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Topic
@@ -379,7 +378,7 @@ defmodule Pulsar.Topology do
 
   @impl true
   def init({config, controller_opts}) do
-    config = annotate(config, self())
+    {config, companions} = attach_companions(config, self())
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
 
@@ -392,22 +391,27 @@ defmodule Pulsar.Topology do
 
     # Companions start before discovery so a worker never observes the tree without them. They
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
-    children = companion_specs(config) ++ [discovery]
+    children = companions ++ [discovery]
 
     Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
   end
 
-  # A consumer's dead letter producer is scoped to the consumer that diverts into it, so it is
-  # owned here rather than by the client's producer branch. Workers are told this root so they
-  # can resolve it as a child, which survives it restarting under them.
-  defp annotate(%{worker: ConsumerWorker, opts: opts} = config, root) do
-    %{config | opts: DeadLetter.annotate(opts, root)}
+  # A resource that owns another declares it through `:companions`, a function of this root's
+  # options and the root itself. It answers the options its workers inherit, so it can tell them
+  # where to find what it attached, together with the children to run alongside them.
+  #
+  # The function is taken out of the options rather than read from them, since it configures
+  # this root and is not part of what a worker is started with.
+  defp attach_companions(config, root) do
+    case Keyword.pop(config.opts, :companions) do
+      {nil, opts} ->
+        {%{config | opts: opts}, []}
+
+      {attach, opts} ->
+        {opts, specs} = attach.(opts, root)
+        {%{config | opts: opts}, specs}
+    end
   end
-
-  defp annotate(config, _root), do: config
-
-  defp companion_specs(%{worker: ConsumerWorker, opts: opts}), do: DeadLetter.child_specs(opts)
-  defp companion_specs(_config), do: []
 
   defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers
   defp resource_kind_for_config(%{count_key: :producer_count}), do: :producers
