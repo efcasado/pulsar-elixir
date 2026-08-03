@@ -390,9 +390,11 @@ defmodule Pulsar.Consumer.Worker do
     new_state = decrement_permits(new_state, permits_consumed)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
+    redelivery_count = batch_redelivery_count(messages)
+
     new_state =
-      if divert?(new_state, messages) do
-        send_batch_to_dead_letter(new_state, messages)
+      if divert?(new_state, redelivery_count) do
+        send_batch_to_dead_letter(new_state, messages, redelivery_count)
       else
         process_messages_normally(new_state, messages)
       end
@@ -473,23 +475,22 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
+  defp divert?(%__MODULE__{max_redelivery: nil}, _redelivery_count), do: false
+  defp divert?(%__MODULE__{dead_letter_root: nil}, _redelivery_count), do: false
+  defp divert?(state, redelivery_count), do: redelivery_count >= state.max_redelivery
+
   # One delivery diverts as a whole: a batch arrives as a single broker command and a chunked
   # message answers the maximum across its chunks, so every message built from it carries the
   # same redelivery count.
-  defp divert?(%__MODULE__{max_redelivery: nil}, _messages), do: false
-  defp divert?(%__MODULE__{dead_letter_root: nil}, _messages), do: false
-
-  defp divert?(state, messages), do: batch_redelivery_count(messages) >= state.max_redelivery
-
   defp batch_redelivery_count(messages) do
     messages
     |> Enum.map(&Pulsar.Message.redelivery_count/1)
     |> Enum.max(fn -> 0 end)
   end
 
-  defp send_batch_to_dead_letter(state, messages) do
+  defp send_batch_to_dead_letter(state, messages, redelivery_count) do
     Logger.warning(
-      "Redelivery count of #{batch_redelivery_count(messages)} reached max redelivery of " <>
+      "Redelivery count of #{redelivery_count} reached max redelivery of " <>
         "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
@@ -520,7 +521,7 @@ defmodule Pulsar.Consumer.Worker do
         end
       end)
 
-    metadata = dead_letter_metadata(state, producer, batch_redelivery_count(messages))
+    metadata = dead_letter_metadata(state, dead_letter_topic(producer), redelivery_count)
 
     if diverted > 0 do
       :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
@@ -540,13 +541,10 @@ defmodule Pulsar.Consumer.Worker do
   defp divert({:ok, producer, _topic}, message, origin), do: DeadLetter.divert(producer, message, origin)
   defp divert({:error, _reason} = error, _message, _origin), do: error
 
-  defp dead_letter_metadata(state, producer, redelivery_count) do
-    dead_letter_topic =
-      case producer do
-        {:ok, _pid, topic} -> topic
-        {:error, _reason} -> nil
-      end
+  defp dead_letter_topic({:ok, _producer, topic}), do: topic
+  defp dead_letter_topic({:error, _reason}), do: nil
 
+  defp dead_letter_metadata(state, dead_letter_topic, redelivery_count) do
     state
     |> consumer_metadata()
     |> Map.merge(%{dead_letter_topic: dead_letter_topic, redelivery_count: redelivery_count})
@@ -580,7 +578,11 @@ defmodule Pulsar.Consumer.Worker do
   # :trigger_redelivery drains this set and only fires when a redelivery interval is configured,
   # so without one an id is deliberately not tracked rather than left in a set nothing empties.
   defp track_nacked(state, []), do: state
-  defp track_nacked(%{redelivery_interval: nil} = state, _nacked_ids), do: state
+
+  defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
+    Logger.debug("NACKed #{length(nacked_ids)} message(s), but no redelivery_interval configured")
+    state
+  end
 
   defp track_nacked(state, nacked_ids) do
     %{state | nacked_messages: MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))}
@@ -680,11 +682,15 @@ defmodule Pulsar.Consumer.Worker do
     #   from the broker. The DLQ will only trigger on subsequent redeliveries when the message
     #   comes back through handle_message with an updated redelivery_count.
 
-    :telemetry.execute([:pulsar, :consumer, :message, :nacked], %{count: length(message_ids)}, consumer_metadata(state))
+    if message_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :message, :nacked],
+        %{count: length(message_ids)},
+        consumer_metadata(state)
+      )
+    end
 
-    new_nacked_messages = track_nacked(state, message_ids).nacked_messages
-
-    {:reply, :ok, %{state | nacked_messages: new_nacked_messages}}
+    {:reply, :ok, track_nacked(state, message_ids)}
   end
 
   def handle_call(request, from, state) do

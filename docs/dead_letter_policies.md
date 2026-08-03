@@ -252,6 +252,10 @@ per delivery rather than per message — and `%{topic:, subscription_name:, cons
 The two dead letter events add `:dead_letter_topic` and `:redelivery_count`; `:failed` also carries
 `:reason`.
 
+`:nacked` reports that a callback rejected a message, whether or not anything will redeliver it. With no
+`:redelivery_interval` configured you will see it with no `:redelivery, :requested` behind it and nothing
+ever reaching the dead letter topic, which is the shape of the mistake the warning above describes.
+
 `:failed` is the one to alert on. It means messages are neither being processed nor parked, and their
 redelivery counts are climbing with nothing to stop them. A steady `:diverted` rate is the ordinary
 signal that a policy is doing its job; a rising one means something upstream changed.
