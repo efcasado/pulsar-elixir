@@ -44,5 +44,19 @@ defmodule Pulsar.Consumer.CallbackTest do
       assert {:init, 2} in callbacks
       refute {:init, 1} in callbacks
     end
+
+    test "refuses to compile a callback still defining init/1" do
+      assert_raise CompileError, ~r/defines init\/1.*would never be called/s, fn ->
+        Code.compile_string("""
+        defmodule Pulsar.Consumer.CallbackTest.Unmigrated do
+          use Pulsar.Consumer.Callback
+
+          def init(opts), do: {:ok, opts}
+
+          def handle_message(_message, state), do: {:ok, state}
+        end
+        """)
+      end
+    end
   end
 end

@@ -163,9 +163,12 @@ defmodule Pulsar.Consumer.Callback do
   as a per-partition key for metrics or flow accounting, and `:base_topic` where business
   logic cares about the logical topic.
 
-  `:partition` is the index this library fanned out to, so a consumer configured with an
-  already concrete partition topic such as `"orders-partition-2"` reports `nil` for it: the
-  caller did the fanning out, and the topic it gave has no partitions of its own.
+  A consumer configured with an already concrete partition topic such as
+  `"orders-partition-2"` reports `partition: nil`, because that is what the broker reports:
+  metadata for a concrete partition gives a partition count of zero, so the consumer is not a
+  partitioned one. The index is not recovered from the name, since a topic legitimately named
+  `"events-partition-3"` would otherwise be given a partition it does not have. Such a consumer
+  still gets its topic in `:topic`; only the index is unavailable.
 
   Keep whatever you need in your state rather than looking it up per message:
 
@@ -229,10 +232,15 @@ defmodule Pulsar.Consumer.Callback do
   @typedoc """
   The consumer's resolved identity, passed to `c:init/2`.
 
-  `:topic` is the topic this consumer subscribed to, which for a partitioned topic is one
-  concrete partition. `:base_topic` is the topic the consumer was configured with, and equals
-  `:topic` unless the topic is partitioned. `:partition` is the partition index, or `nil` when
-  the topic is not partitioned.
+  - `:topic` - the topic this consumer subscribed to, which for a partitioned topic is one
+    concrete partition
+  - `:base_topic` - the topic the consumer was configured with; equals `:topic` unless the
+    topic is partitioned
+  - `:partition` - the partition index, or `nil` when the topic is not partitioned
+  - `:subscription_name` - the subscription this consumer belongs to
+  - `:subscription_type` - how that subscription is shared
+  - `:consumer_name` - this worker's broker-visible name, which is its group's name suffixed
+    with the worker's position in it, not the `:name` the consumer was configured with
   """
   @type context :: %{
           topic: String.t(),
@@ -290,6 +298,7 @@ defmodule Pulsar.Consumer.Callback do
   defmacro __using__(_opts) do
     quote do
       @behaviour Pulsar.Consumer.Callback
+      @before_compile Pulsar.Consumer.Callback
 
       # Provide default implementations for optional callbacks
       def init(_init_args, _context), do: {:ok, nil}
@@ -332,6 +341,23 @@ defmodule Pulsar.Consumer.Callback do
                      became_active: 1,
                      became_passive: 1,
                      handle_invalid_message: 2
+    end
+  end
+
+  @doc false
+  defmacro __before_compile__(env) do
+    if Module.defines?(env.module, {:init, 1}) do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description: """
+        #{inspect(env.module)} defines init/1, which is no longer a Pulsar.Consumer.Callback \
+        callback and would never be called. Take the consumer's context as a second argument:
+
+            def init(init_args, _context) do
+
+        See Pulsar.Consumer.Callback for what the context contains.\
+        """
     end
   end
 end

@@ -69,7 +69,7 @@ defmodule Pulsar.Consumer.Worker do
           base_topic: String.t(),
           partition: non_neg_integer() | nil,
           subscription_name: String.t(),
-          subscription_type: String.t(),
+          subscription_type: atom(),
           consumer_id: integer(),
           consumer_name: String.t() | nil,
           callback_module: module(),

@@ -122,7 +122,8 @@ defmodule Pulsar.TopologyTest do
     {root, registry}
   end
 
-  defp start_async_topology(resolver, opts \\ [], controller_opts \\ [], worker \\ StubWorker) do
+  defp start_async_topology(resolver, opts \\ [], controller_opts \\ []) do
+    {worker, controller_opts} = Keyword.pop(controller_opts, :worker, StubWorker)
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
@@ -476,7 +477,7 @@ defmodule Pulsar.TopologyTest do
 
   describe "worker options" do
     test "gives a partition worker its own topic alongside the configured one" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 3} end, [], [], OptsWorker)
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 3} end, [], worker: OptsWorker)
       :ok = Topology.await_ready(root, 1_000)
 
       for {index, opts} <- worker_opts(root) do
@@ -487,7 +488,7 @@ defmodule Pulsar.TopologyTest do
     end
 
     test "leaves a non-partitioned worker on the configured topic, with no partition" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], [], OptsWorker)
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], worker: OptsWorker)
       :ok = Topology.await_ready(root, 1_000)
 
       assert [{0, opts}] = worker_opts(root)
