@@ -10,8 +10,8 @@ defmodule Pulsar.Message do
     complete payload.
 
   - `message_id` - What to pass to `Pulsar.Consumer.ack/2` and `Pulsar.Consumer.nack/2`.
-    Treat it as opaque: it carries a batch index for a batched message and covers every
-    chunk of a chunked one.
+    Treat it as opaque rather than pattern matching it: it carries a batch index for a
+    batched message, and for a chunked one it stands for every chunk, so it is a list there.
 
   - `chunk_metadata` - Metadata about chunked messages (`nil` for non-chunked messages).
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
@@ -88,7 +88,7 @@ defmodule Pulsar.Message do
           message_id: term() | [term()],
           chunk_metadata: map() | nil,
           validation_error: atom() | nil,
-          raw: raw()
+          raw: raw() | nil
         }
 
   defstruct [
@@ -203,9 +203,13 @@ defmodule Pulsar.Message do
 
   # A batch entry carries its own key, properties and times; a message delivered on its own
   # carries them in the message metadata. Chunks of one message all repeat the same values.
+  #
+  # An entry that set nothing decodes to whatever proto2 renders for that field kind: nil for
+  # an optional with no default, 0 for one with a numeric default, [] for a repeated field. All
+  # three mean "not set here, ask the message that carried it", as they do in the Java client.
   defp per_message(message, key) do
     case message |> single_metadata() |> field(key) do
-      nil -> message |> metadata() |> field(key)
+      unset when unset in [nil, 0, []] -> message |> metadata() |> field(key)
       value -> value
     end
   end

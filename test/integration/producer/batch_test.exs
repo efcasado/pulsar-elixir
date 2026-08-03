@@ -40,6 +40,49 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert Enum.all?(events, fn %{count: c} -> c == 3 end)
     end
 
+    # A batched message carries its key, properties and event time per entry rather than on the
+    # message that carried them, so this is the shape Pulsar.Message's accessors have to resolve.
+    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    test "each message in a batch keeps its own key, properties and event time" do
+      {consumer_pid, producer_pid} =
+        setup_producer_consumer("per-entry-metadata", batch_size: 3, flush_interval: 30_000)
+
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      producer_name = :sys.get_state(producer).producer_name
+
+      event_time = DateTime.utc_now()
+      event_time_ms = DateTime.to_unix(event_time, :millisecond)
+
+      sends =
+        Enum.map(1..3, fn i ->
+          Task.async(fn ->
+            Pulsar.Producer.send(producer_pid, "entry-#{i}",
+              partition_key: "key-#{i}",
+              properties: %{"entry" => "#{i}"},
+              event_time: event_time
+            )
+          end)
+        end)
+
+      assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
+
+      expected_payloads = Enum.map(1..3, &"entry-#{&1}")
+      assert_messages_received(consumer_pid, expected_payloads)
+
+      # The assertions below only mean anything if these arrived as one batch.
+      assert_batch_telemetry(count: 3, producer_name: producer_name)
+
+      by_payload = Map.new(DummyConsumer.get_messages(consumer_pid), &{&1.payload, &1})
+
+      for i <- 1..3 do
+        message = Map.fetch!(by_payload, "entry-#{i}")
+
+        assert Pulsar.Message.key(message) == "key-#{i}"
+        assert Pulsar.Message.properties(message) == %{"entry" => "#{i}"}
+        assert Pulsar.Message.event_time(message) == event_time_ms
+      end
+    end
+
     @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
     test "flushes single message batch on timer" do
       {consumer_pid, producer_pid} =
