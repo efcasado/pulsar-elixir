@@ -14,6 +14,8 @@ defmodule Pulsar.ClientTest do
 
     @impl true
     def handle_call({:start_child, _child_spec}, _from, reason), do: {:stop, reason, reason}
+
+    def handle_call(:which_children, _from, reason), do: {:stop, reason, reason}
   end
 
   describe "start_link/1 option validation" do
@@ -202,6 +204,30 @@ defmodule Pulsar.ClientTest do
                callback_module: MyApp.Handler,
                client: client
              ) == {:error, :client_not_found}
+    end
+
+    test "resource listings tolerate a branch shutting down during traversal" do
+      client = :shutting_down_resource_listing
+
+      {:ok, _supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.resource_supervisor(:consumers, client),
+          :shutdown
+        )
+
+      assert Client.consumers(client) == []
+    end
+
+    test "resource listings surface unexpected branch exits" do
+      client = :crashing_resource_listing
+
+      {:ok, _supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.resource_supervisor(:producers, client),
+          :unexpected
+        )
+
+      assert catch_exit(Client.producers(client))
     end
   end
 

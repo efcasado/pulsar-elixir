@@ -354,7 +354,11 @@ defmodule Pulsar.Client do
   defp children_of(supervisor) do
     Supervisor.which_children(supervisor)
   catch
-    :exit, _reason -> []
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      []
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      []
   end
 
   defp resource_roots(supervisor) do

@@ -114,6 +114,7 @@ defmodule Pulsar.Topology do
       case status(root, timeout) do
         :initializing -> {:error, :not_ready}
         {:ready, _shape} -> :ok
+        {:error, :timeout} = error -> error
       end
     else
       {:error, :not_found}
@@ -134,31 +135,34 @@ defmodule Pulsar.Topology do
       _not_running -> :initializing
     end
   catch
-    :exit, _reason -> :initializing
+    :exit, {:timeout, {GenServer, :call, _call}} ->
+      {:error, :timeout}
+
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      :initializing
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      :initializing
   end
 
   defp controller(root) do
     root
-    |> Supervisor.which_children()
+    |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
       {{Discovery, _topic}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
       _child -> false
     end)
-  catch
-    :exit, _reason -> {:error, :not_found}
   end
 
   @doc false
   @spec topic(pid()) :: String.t() | {:error, :not_found}
   def topic(root) do
     root
-    |> Supervisor.which_children()
+    |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
       {{Discovery, topic}, _pid, :worker, [Discovery]} -> topic
       _child -> false
     end)
-  catch
-    :exit, _reason -> {:error, :not_found}
   end
 
   # Discovery is also an OTP :worker child, so traversal explicitly allows only resource workers.
@@ -172,7 +176,7 @@ defmodule Pulsar.Topology do
   @spec workers(pid()) :: [pid()]
   def workers(root) do
     root
-    |> Supervisor.which_children()
+    |> supervisor_children()
     |> Enum.flat_map(fn
       {_id, pid, :worker, [module]} when module in @worker_modules ->
         if is_pid(pid), do: [pid], else: []
@@ -183,8 +187,6 @@ defmodule Pulsar.Topology do
       _child ->
         []
     end)
-  catch
-    :exit, _reason -> []
   end
 
   @doc """
@@ -210,12 +212,22 @@ defmodule Pulsar.Topology do
 
   defp topology_groups(root) do
     root
-    |> Supervisor.which_children()
+    |> supervisor_children()
     |> Enum.flat_map(fn
       {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
       {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
     end)
+  end
+
+  defp supervisor_children(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      []
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      []
   end
 
   @doc """

@@ -76,11 +76,11 @@ defmodule Pulsar.TopologyTest do
   defmodule DisappearingSupervisor do
     @moduledoc false
 
-    def start_link(_opts) do
+    def start_link(reason) do
       pid =
         spawn_link(fn ->
           receive do
-            _message -> exit(:gone)
+            _message -> exit(reason)
           end
         end)
 
@@ -477,12 +477,23 @@ defmodule Pulsar.TopologyTest do
     test "leaves out a supervisor that disappears during traversal" do
       child = %{
         id: :disappearing,
-        start: {DisappearingSupervisor, :start_link, [[]]},
+        start: {DisappearingSupervisor, :start_link, [:shutdown]},
         restart: :temporary,
         type: :supervisor
       }
 
       assert Topology.workers(start_supervisor([child])) == []
+    end
+
+    test "surfaces an unexpected supervisor exit during traversal" do
+      child = %{
+        id: :crashing,
+        start: {DisappearingSupervisor, :start_link, [:unexpected]},
+        restart: :temporary,
+        type: :supervisor
+      }
+
+      assert catch_exit(Topology.workers(start_supervisor([child])))
     end
   end
 
