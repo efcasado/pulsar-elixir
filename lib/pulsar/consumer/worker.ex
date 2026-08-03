@@ -413,6 +413,13 @@ defmodule Pulsar.Consumer.Worker do
 
         :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
         Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
+
+        :telemetry.execute(
+          [:pulsar, :consumer, :redelivery, :requested],
+          %{count: length(nacked_list)},
+          consumer_metadata(state)
+        )
+
         %{state | nacked_messages: MapSet.new()}
       else
         state
@@ -491,8 +498,8 @@ defmodule Pulsar.Consumer.Worker do
     producer = DeadLetter.producer(state.dead_letter_root)
     origin = [client: state.client, topic: state.topic]
 
-    nacked_ids =
-      Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
+    {diverted, nacked_ids, reason} =
+      Enum.reduce(messages, {0, [], nil}, fn %Pulsar.Message{} = message, {diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
         case divert(producer, message, origin) do
@@ -505,25 +512,67 @@ defmodule Pulsar.Consumer.Worker do
             }
 
             :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-            nacked_acc
+            {diverted + 1, nacked_acc, reason}
 
           {:error, dlq_reason} ->
             Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            message_ids_list ++ nacked_acc
+            {diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
         end
       end)
+
+    metadata = dead_letter_metadata(state, producer, batch_redelivery_count(messages))
+
+    if diverted > 0 do
+      :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
+    end
+
+    if nacked_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :dead_letter, :failed],
+        %{count: length(nacked_ids)},
+        Map.put(metadata, :reason, reason)
+      )
+    end
 
     track_nacked(state, nacked_ids)
   end
 
-  defp divert({:ok, producer}, message, origin), do: DeadLetter.divert(producer, message, origin)
+  defp divert({:ok, producer, _topic}, message, origin), do: DeadLetter.divert(producer, message, origin)
   defp divert({:error, _reason} = error, _message, _origin), do: error
+
+  defp dead_letter_metadata(state, producer, redelivery_count) do
+    dead_letter_topic =
+      case producer do
+        {:ok, _pid, topic} -> topic
+        {:error, _reason} -> nil
+      end
+
+    state
+    |> consumer_metadata()
+    |> Map.merge(%{dead_letter_topic: dead_letter_topic, redelivery_count: redelivery_count})
+  end
+
+  defp consumer_metadata(state) do
+    %{
+      topic: state.topic,
+      subscription_name: state.subscription_name,
+      consumer_id: state.consumer_id
+    }
+  end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
     {final_callback_state, nacked_ids} =
       Enum.reduce(messages, {state.callback_state, []}, fn message, {callback_state, nacked_acc} ->
         process_single_message(state, message, callback_state, nacked_acc)
       end)
+
+    if nacked_ids != [] do
+      :telemetry.execute(
+        [:pulsar, :consumer, :message, :nacked],
+        %{count: length(nacked_ids)},
+        consumer_metadata(state)
+      )
+    end
 
     %{track_nacked(state, nacked_ids) | callback_state: final_callback_state}
   end
@@ -631,15 +680,9 @@ defmodule Pulsar.Consumer.Worker do
     #   from the broker. The DLQ will only trigger on subsequent redeliveries when the message
     #   comes back through handle_message with an updated redelivery_count.
 
-    new_nacked_messages =
-      if state.redelivery_interval do
-        Enum.reduce(message_ids, state.nacked_messages, fn message_id, acc ->
-          MapSet.put(acc, message_id)
-        end)
-      else
-        Logger.debug("NACKed #{length(message_ids)} message(s), but no redelivery_interval configured")
-        state.nacked_messages
-      end
+    :telemetry.execute([:pulsar, :consumer, :message, :nacked], %{count: length(message_ids)}, consumer_metadata(state))
+
+    new_nacked_messages = track_nacked(state, message_ids).nacked_messages
 
     {:reply, :ok, %{state | nacked_messages: new_nacked_messages}}
   end

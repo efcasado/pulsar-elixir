@@ -55,14 +55,14 @@ defmodule Pulsar.Consumer.DeadLetter do
     end
   end
 
-  @spec producer(pid() | nil) :: {:ok, pid()} | {:error, :no_dead_letter_producer}
+  @spec producer(pid() | nil) :: {:ok, pid(), String.t()} | {:error, :no_dead_letter_producer}
   def producer(nil), do: {:error, :no_dead_letter_producer}
 
   def producer(root) do
     root
     |> Supervisor.which_children()
     |> Enum.find_value({:error, :no_dead_letter_producer}, fn
-      {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> {:ok, pid}
+      {{:dead_letter, topic}, pid, :supervisor, _modules} when is_pid(pid) -> {:ok, pid, topic}
       _child -> false
     end)
   catch

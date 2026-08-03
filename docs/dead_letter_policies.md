@@ -239,7 +239,22 @@ started by hand, and exits once every odd number has been parked.
 
 ## Telemetry Events
 
-There are no dead-letter-specific events. The dead letter producer is an ordinary producer, so it emits the
-`[:pulsar, :producer, …]` events — `:opened`, `:message, :published`, `:closed` and the rest — and its
-`producer_name` metadata is `"<consumer name>-dead-letter-producer"`, which is how to tell it apart from the
-producers you started yourself.
+The consumer reports each stage of giving up on a message. All four carry `%{count: n}` — one event
+per delivery rather than per message — and `%{topic:, subscription_name:, consumer_id:}`:
+
+| Event | When |
+| --- | --- |
+| `[:pulsar, :consumer, :message, :nacked]` | A callback returned `{:error, …}`, or `Pulsar.Consumer.nack/2` was called |
+| `[:pulsar, :consumer, :redelivery, :requested]` | The redelivery interval asked the broker for the nacked messages back |
+| `[:pulsar, :consumer, :dead_letter, :diverted]` | Messages reached the threshold and were published to the dead letter topic |
+| `[:pulsar, :consumer, :dead_letter, :failed]` | Publishing to the dead letter topic failed, so the messages stay nacked |
+
+The two dead letter events add `:dead_letter_topic` and `:redelivery_count`; `:failed` also carries
+`:reason`.
+
+`:failed` is the one to alert on. It means messages are neither being processed nor parked, and their
+redelivery counts are climbing with nothing to stop them. A steady `:diverted` rate is the ordinary
+signal that a policy is doing its job; a rising one means something upstream changed.
+
+The dead letter producer is otherwise an ordinary producer, so the `[:pulsar, :producer, …]` events
+fire for it too, with `producer_name` set to `"<consumer name>-dead-letter-producer"`.
