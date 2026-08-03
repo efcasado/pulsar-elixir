@@ -8,6 +8,18 @@ defmodule Pulsar.Client.BootstrapTest do
 
   @host "pulsar://127.0.0.1:1"
 
+  test "starts declared roots during initialization" do
+    client = :bootstrap_synchronous_declaration
+    opts = [topic: "declared", name: :declared, client: client]
+
+    start_supervised!({Client, name: client, host: @host})
+
+    assert {:ok, %{pending: [], backoff: 0}} =
+             Bootstrap.init({:producers, client_opts(client, opts)})
+
+    assert [_producer] = Client.producers(client)
+  end
+
   test "accepts an already-started resource owned by the current resource supervisor" do
     client = :bootstrap_owned_resource
     opts = [topic: "owned", name: :owned, client: client]

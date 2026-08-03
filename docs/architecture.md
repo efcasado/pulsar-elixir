@@ -106,9 +106,9 @@ infrastructure itself must be rebuilt, the resource subtree is later in the depe
 chain and is rebuilt as well. An individual broker connection loss normally affects the
 workers using that connection rather than restarting every resource branch.
 
-Each branch also has a <code>Pulsar.Client.Bootstrap</code> process. It starts resources declared on
-the client after the client tree is available and recreates those declarations when the
-branch starts again.
+Each branch also has a <code>Pulsar.Client.Bootstrap</code> process. It registers declared resource
+roots before branch startup completes and recreates those declarations when the branch starts
+again. Topic discovery and worker initialization remain asynchronous.
 
 ## Logical Resources and Stable Roots
 

@@ -55,12 +55,13 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
 
     assert [{_id, client_pid, :supervisor, _modules}] = Supervisor.which_children(supervisor)
 
-    # Declared resources are started off the client's boot, so these waits also cover the
-    # interval before Bootstrap has registered their names.
-    assert :ok = Pulsar.Producer.await_ready(:supervision_tree_producer, client: client_pid)
-    assert :ok = Pulsar.Consumer.await_ready(:supervision_tree_consumer, client: client)
+    # Declared roots are registered before client startup completes; only their metadata and
+    # workers remain asynchronous.
     assert [_producer] = Client.producers(client)
     assert [_consumer] = Client.consumers(client)
+
+    assert :ok = Pulsar.Producer.await_ready(:supervision_tree_producer, client: client_pid)
+    assert :ok = Pulsar.Consumer.await_ready(:supervision_tree_consumer, client: client)
 
     {:ok, _message_id} =
       Utils.wait_for(

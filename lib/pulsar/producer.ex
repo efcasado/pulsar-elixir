@@ -77,8 +77,7 @@ defmodule Pulsar.Producer do
   Waits for a producer and all its configured workers to be ready.
 
   Takes the stable root returned by `start/1` or its registered name. A named producer is
-  resolved repeatedly, so this can be called immediately after starting a client whose
-  resources are declared asynchronously.
+  resolved repeatedly, so the wait also tolerates its client or resource branch restarting.
 
   Readiness means initial topic discovery and topology construction have completed, and every
   configured worker has registered with its broker. A worker that repeatedly fails registration

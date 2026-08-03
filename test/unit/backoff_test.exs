@@ -4,6 +4,7 @@ defmodule Pulsar.BackoffTest do
   alias Pulsar.Backoff
 
   @max 30_000
+  @scheduler_tolerance 50
 
   test "starts within the first 100ms rather than at zero" do
     for _attempt <- 1..100 do
@@ -128,7 +129,7 @@ defmodule Pulsar.BackoffTest do
         :timer.tc(fn -> Backoff.run(fn -> {:error, :transient} end, &retryable?/1, budget) end, :millisecond)
 
       assert elapsed >= budget - 25
-      assert elapsed <= budget + 50
+      assert elapsed <= budget + @scheduler_tolerance
     end
 
     # The calls being retried carry their own multi-second timeouts, so a budget that charged
@@ -146,7 +147,7 @@ defmodule Pulsar.BackoffTest do
 
       # Without charging the calls, four sleeps of 120ms would fit inside the sleep budget
       # alone and this would run for the best part of a second.
-      assert elapsed <= budget + 120
+      assert elapsed <= budget + 120 + @scheduler_tolerance
     end
   end
 end

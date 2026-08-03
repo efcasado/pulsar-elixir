@@ -19,12 +19,7 @@ defmodule Pulsar.Client.Bootstrap do
 
     state = %{client: client, kind: kind, pending: pending, declared: length(pending), backoff: 0}
 
-    {:ok, state, {:continue, :start_declared}}
-  end
-
-  @impl true
-  def handle_continue(:start_declared, state) do
-    {:noreply, attempt(state)}
+    {:ok, attempt(state)}
   end
 
   @impl true
