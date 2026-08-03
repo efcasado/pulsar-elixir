@@ -302,16 +302,14 @@ defmodule Pulsar.Topology do
     children = Supervisor.which_children(root)
 
     case restart_stopped_groups(root, children) do
-      :ok -> reconcile_children(root, desired, config)
+      :ok -> reconcile_children(root, children, desired, config)
       {:error, _reason} = error -> error
     end
   catch
     :exit, reason -> {:error, reason}
   end
 
-  defp reconcile_children(root, desired, config) do
-    children = Supervisor.which_children(root)
-
+  defp reconcile_children(root, children, desired, config) do
     topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
 
     partitions =
