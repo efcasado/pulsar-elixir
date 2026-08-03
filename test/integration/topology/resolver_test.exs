@@ -29,7 +29,7 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
 
   setup [:telemetry_listen]
 
-  @tag telemetry_listen: [[:pulsar, :service_discovery, :lookup_topic, :stop]]
+  @tag telemetry_listen: [[:pulsar, :topology, :resolver, :lookup_topic, :stop]]
   test "topic lookup retrieves broker PID" do
     assert {:ok, broker_pid} = Resolver.lookup_topic(@topic, client: @client)
     assert Process.alive?(broker_pid)
@@ -38,7 +38,7 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
     assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
   end
 
-  @tag telemetry_listen: [[:pulsar, :service_discovery, :lookup_topic, :stop]]
+  @tag telemetry_listen: [[:pulsar, :topology, :resolver, :lookup_topic, :stop]]
   test "topic lookup fails for non-existing topics" do
     result1 = Resolver.lookup_topic("persistent://fake/fake/fake", client: @client)
     assert {:error, _reason} = result1

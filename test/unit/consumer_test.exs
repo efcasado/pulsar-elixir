@@ -7,11 +7,11 @@ defmodule Pulsar.ConsumerTest do
   describe "await_ready/2" do
     test "reports a missing named consumer after the wait" do
       assert Consumer.await_ready(:missing, client: :consumer_missing_client, timeout: 0) ==
-               {:error, :consumer_not_found}
+               {:error, :not_found}
     end
 
     test "reports a stale consumer pid" do
-      assert Consumer.await_ready(dead_pid(), timeout: 25) == {:error, :consumer_not_found}
+      assert Consumer.await_ready(dead_pid(), timeout: 25) == {:error, :not_found}
     end
 
     test "validates its options" do
@@ -37,8 +37,8 @@ defmodule Pulsar.ConsumerTest do
     test "reports a missing name consistently with stop/2" do
       opts = [client: :consumer_missing_client]
 
-      assert Consumer.send_flow(:missing, 1, opts) == {:error, :consumer_not_found}
-      assert Consumer.stop(:missing, opts) == {:error, :consumer_not_found}
+      assert Consumer.send_flow(:missing, 1, opts) == {:error, :not_found}
+      assert Consumer.stop(:missing, opts) == {:error, :not_found}
     end
 
     test "requires a positive permit count for pids and names" do

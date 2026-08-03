@@ -95,12 +95,7 @@ defmodule Pulsar.TopologyTest do
     resolver = fn _topic, _opts -> {:ok, partitions} end
     {root, registry} = start_async_topology(resolver)
 
-    expected_status =
-      if partitions == 0,
-        do: {:ready, :non_partitioned},
-        else: {:ready, {:partitioned, partitions}}
-
-    :ok = Utils.wait_for(fn -> Topology.status(root) == expected_status end, 100, 10)
+    :ok = Topology.await_ready(root, 1_000)
 
     {root, registry}
   end
@@ -154,7 +149,7 @@ defmodule Pulsar.TopologyTest do
       send(discovery, :resolve)
 
       assert Task.await(waiter) == :ok
-      assert Topology.status(root) == {:ready, {:partitioned, 2}}
+      assert length(Topology.groups(root)) == 2
     end
 
     test "await_ready/2 rejects a stale pid" do
@@ -185,8 +180,7 @@ defmodule Pulsar.TopologyTest do
 
       send(resolver_pid, :resolve)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
-      assert Topology.status(root) == {:ready, {:partitioned, 2}}
+      :ok = Topology.await_ready(root, 1_000)
       assert length(Topology.groups(root)) == 2
     end
 
@@ -200,7 +194,7 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver, count_key: 2)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 3}} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert Agent.get(attempts, & &1) >= 2
       assert length(Topology.groups(root)) == 3
     end
@@ -215,10 +209,9 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert_receive :resolved
       refute_receive :resolved, 150
-      assert Topology.status(root) == {:ready, :non_partitioned}
       assert [{0, group}] = Topology.groups(root)
       assert is_pid(group)
     end
@@ -243,7 +236,7 @@ defmodule Pulsar.TopologyTest do
           reconciliation_interval_ms: 250
         )
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, :non_partitioned} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolved, ^topic}
 
       assert_receive {:telemetry_event,
@@ -293,6 +286,7 @@ defmodule Pulsar.TopologyTest do
       refute_receive {:resolved, ^topic}, 300
     end
 
+    @tag telemetry_listen: [[:pulsar, :topology, :reconciliation, :stop]]
     test "periodically reconciles partitions added after initialization" do
       test_pid = self()
       responses = start_supervised!({Agent, fn -> [2, 4, 2] end})
@@ -311,12 +305,20 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
 
       assert_receive {:resolved, 2}
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolved, 4}
       :ok = Utils.wait_for(fn -> length(Topology.groups(root)) == 4 end, 100, 10)
       assert_receive {:resolved, 2}
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 4}} end, 100, 10)
-      assert Topology.status(root) == {:ready, {:partitioned, 4}}
+
+      assert_receive {:telemetry_event,
+                      %{
+                        metadata: %{
+                          desired_partition_count: 2,
+                          partition_count: 4,
+                          success: true
+                        }
+                      }}
+
       assert length(Topology.groups(root)) == 4
     end
 
@@ -340,7 +342,7 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 1}} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolution_started, discovery}, 1_000
 
       operations =
@@ -385,7 +387,7 @@ defmodule Pulsar.TopologyTest do
 
       {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 100)
 
-      :ok = Utils.wait_for(fn -> Topology.status(root) == {:ready, {:partitioned, 2}} end, 100, 10)
+      :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolution_started, discovery}, 1_000
 
       old_groups = Map.new(Topology.groups(root))

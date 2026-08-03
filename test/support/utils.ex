@@ -86,7 +86,7 @@ defmodule Pulsar.Test.Support.Utils do
   def collect_lookup_stats(opts \\ []) do
     client = Keyword.get(opts, :client, :default)
 
-    [:pulsar, :service_discovery, :lookup_topic, :stop]
+    [:pulsar, :topology, :resolver, :lookup_topic, :stop]
     |> collect_events()
     |> filter_by_client(client)
     |> aggregate_success_stats()

@@ -30,7 +30,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
   setup [:telemetry_listen]
 
   test "send returns error when producer not found" do
-    assert {:error, :producer_not_found} =
+    assert {:error, :not_found} =
              Pulsar.Producer.send("non-existent-producer-group", "message", client: @client)
   end
 

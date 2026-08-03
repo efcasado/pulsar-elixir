@@ -162,7 +162,7 @@ The public `start` call returns after step 2. This keeps broker availability and
 lookups out of the host application's startup path, but it means operations can observe the
 resource between registration and readiness.
 
-For example, publishing by name can return `{:error, :producer_not_found}` before a declared
+For example, publishing by name can return `{:error, :not_found}` before a declared
 producer has been registered, and `{:error, :not_ready}` while its topology is initializing.
 Applications that publish during startup or from a consumer callback should handle both.
 `Pulsar.Consumer.await_ready/2` and `Pulsar.Producer.await_ready/2` provide a bounded wait for
@@ -270,6 +270,12 @@ metadata or reconciliation stage at warning level. The
 `[:pulsar, :topology, :discovery, ...]` and
 `[:pulsar, :topology, :reconciliation, ...]` telemetry spans carry the topic, client, partition
 counts, changed group indexes, and outcome for programmatic monitoring.
+
+Broker metadata operations emit
+`[:pulsar, :topology, :resolver, :partition_count, ...]` and
+`[:pulsar, :topology, :resolver, :lookup_topic, ...]` spans. These identify the lower-level
+resolution work used by discovery and worker startup, separately from reconciliation of the
+local supervision tree.
 
 ### Traversing a Topology
 

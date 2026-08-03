@@ -89,10 +89,8 @@ defmodule Pulsar.Producer do
   - `:client` - client name or pid used to resolve a producer name; defaults to `:default`
   """
   @spec await_ready(pid() | String.t() | atom(), keyword()) ::
-          :ok | {:error, :producer_not_found | :timeout}
-  def await_ready(producer, opts \\ []) do
-    producer |> Topology.await_ready(:producers, opts) |> await_result()
-  end
+          :ok | {:error, :not_found | :timeout}
+  def await_ready(producer, opts \\ []), do: Topology.await_ready(producer, :producers, opts)
 
   @doc """
   Publishes a message, given a producer's pid or name.
@@ -122,7 +120,7 @@ defmodule Pulsar.Producer do
   def send(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
     case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
       {:ok, pid} -> publish(pid, message, opts)
-      {:error, :not_found} -> {:error, :producer_not_found}
+      {:error, :not_found} = error -> error
     end
   end
 
@@ -132,7 +130,7 @@ defmodule Pulsar.Producer do
   A producer in a supervision tree will be restarted by its supervisor; stop those by
   removing them from the tree.
   """
-  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :producer_not_found}
+  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
   def stop(producer, opts) when is_pid(producer) do
@@ -143,7 +141,7 @@ defmodule Pulsar.Producer do
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
       {:ok, producer} -> stop(producer, opts)
-      {:error, :not_found} -> {:error, :producer_not_found}
+      {:error, :not_found} = error -> error
     end
   end
 
@@ -190,9 +188,6 @@ defmodule Pulsar.Producer do
   defp send_to_worker([worker | _rest], message, opts) do
     Worker.send_message(worker, message, opts)
   end
-
-  defp await_result({:error, :not_found}), do: {:error, :producer_not_found}
-  defp await_result(result), do: result
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.

@@ -6,7 +6,7 @@ defmodule Pulsar.ProducerTest do
   describe "await_ready/2" do
     test "reports a missing named producer after the wait" do
       assert Producer.await_ready(:missing, client: :producer_missing_client, timeout: 0) ==
-               {:error, :producer_not_found}
+               {:error, :not_found}
     end
 
     test "reports a stale producer pid" do
@@ -14,7 +14,7 @@ defmodule Pulsar.ProducerTest do
       ref = Process.monitor(producer)
       assert_receive {:DOWN, ^ref, :process, ^producer, _reason}
 
-      assert Producer.await_ready(producer, timeout: 25) == {:error, :producer_not_found}
+      assert Producer.await_ready(producer, timeout: 25) == {:error, :not_found}
     end
   end
 
@@ -22,9 +22,9 @@ defmodule Pulsar.ProducerTest do
     test "accepts atom and string names" do
       opts = [client: :producer_send_missing_client]
 
-      assert Producer.send(:missing, "payload", opts) == {:error, :producer_not_found}
-      assert Producer.send("missing", "payload", opts) == {:error, :producer_not_found}
-      assert Producer.stop(:missing, opts) == {:error, :producer_not_found}
+      assert Producer.send(:missing, "payload", opts) == {:error, :not_found}
+      assert Producer.send("missing", "payload", opts) == {:error, :not_found}
+      assert Producer.stop(:missing, opts) == {:error, :not_found}
     end
 
     test "rejects unsupported target types" do

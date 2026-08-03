@@ -97,10 +97,8 @@ defmodule Pulsar.Consumer do
   - `:client` - client name or pid used to resolve a consumer name; defaults to `:default`
   """
   @spec await_ready(pid() | String.t() | atom(), keyword()) ::
-          :ok | {:error, :consumer_not_found | :timeout}
-  def await_ready(consumer, opts \\ []) do
-    consumer |> Topology.await_ready(:consumers, opts) |> await_result()
-  end
+          :ok | {:error, :not_found | :timeout}
+  def await_ready(consumer, opts \\ []), do: Topology.await_ready(consumer, :consumers, opts)
 
   @doc """
   Stops a consumer, given its pid or its name.
@@ -108,7 +106,7 @@ defmodule Pulsar.Consumer do
   A consumer in a supervision tree will be restarted by its supervisor; stop those by
   removing them from the tree.
   """
-  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :consumer_not_found}
+  @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
   def stop(consumer, opts) when is_pid(consumer) do
@@ -119,7 +117,7 @@ defmodule Pulsar.Consumer do
   def stop(name, opts) when is_binary(name) or is_atom(name) do
     case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
       {:ok, consumer} -> stop(consumer, opts)
-      {:error, :not_found} -> {:error, :consumer_not_found}
+      {:error, :not_found} = error -> error
     end
   end
 
@@ -200,7 +198,7 @@ defmodule Pulsar.Consumer do
   def send_flow(name, permits, opts) when (is_binary(name) or is_atom(name)) and is_integer(permits) and permits > 0 do
     case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
       {:ok, consumer} -> send_flow(consumer, permits, opts)
-      {:error, :not_found} -> {:error, :consumer_not_found}
+      {:error, :not_found} = error -> error
     end
   end
 
@@ -279,9 +277,6 @@ defmodule Pulsar.Consumer do
       [] -> {:error, :not_found}
     end
   end
-
-  defp await_result({:error, :not_found}), do: {:error, :consumer_not_found}
-  defp await_result(result), do: result
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows
   # the same default as the consumer's name.

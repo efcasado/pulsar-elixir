@@ -86,7 +86,7 @@ defmodule Pulsar.Client do
               options. Their `:client` is set to this one.
 
               Consumers and producers initialize independently, so callbacks that publish
-              during startup must handle `{:error, :producer_not_found}` and
+              during startup must handle `{:error, :not_found}` and
               `{:error, :not_ready}`.
               """
             ]

@@ -21,8 +21,6 @@ defmodule Pulsar.Topology do
   # default as the final escalation boundary.
   @max_restarts 100
   @max_seconds 60
-  @status_timeout 5_000
-
   @await_options_schema [
     client: [type: {:or, [:atom, :pid]}, default: :default],
     timeout: [type: :timeout, default: 5_000]
@@ -62,14 +60,6 @@ defmodule Pulsar.Topology do
   @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}
 
   @doc false
-  @spec status(pid()) :: status()
-  def status(root), do: status(root, @status_timeout)
-
-  @doc false
-  @spec await_options!(keyword()) :: keyword()
-  def await_options!(opts), do: NimbleOptions.validate!(opts, @await_options_schema)
-
-  @doc false
   @spec await_ready(pid() | (-> {:ok, pid()} | {:error, :not_found}), timeout()) ::
           :ok | {:error, :not_found | :timeout}
   def await_ready(root, timeout) when is_pid(root) do
@@ -100,6 +90,8 @@ defmodule Pulsar.Topology do
         await_ready(resolve, timeout)
     end
   end
+
+  defp await_options!(opts), do: NimbleOptions.validate!(opts, @await_options_schema)
 
   defp await(resolve, timeout, retryable?) do
     deadline = deadline(timeout)

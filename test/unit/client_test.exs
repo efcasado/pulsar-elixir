@@ -163,9 +163,9 @@ defmodule Pulsar.ClientTest do
     end
 
     test "send and stop keep their contracts" do
-      assert Pulsar.Producer.send(:absent, "payload", client: :never_started) == {:error, :producer_not_found}
-      assert Pulsar.Producer.stop(:absent, client: :never_started) == {:error, :producer_not_found}
-      assert Pulsar.Consumer.stop("absent", client: :never_started) == {:error, :consumer_not_found}
+      assert Pulsar.Producer.send(:absent, "payload", client: :never_started) == {:error, :not_found}
+      assert Pulsar.Producer.stop(:absent, client: :never_started) == {:error, :not_found}
+      assert Pulsar.Consumer.stop("absent", client: :never_started) == {:error, :not_found}
     end
 
     test "resource starts report the missing client rather than exiting" do

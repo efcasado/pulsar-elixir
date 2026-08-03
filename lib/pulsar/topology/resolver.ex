@@ -19,7 +19,7 @@ defmodule Pulsar.Topology.Resolver do
     client = Keyword.get(opts, :client, :default)
 
     :telemetry.span(
-      [:pulsar, :service_discovery, :partition_count],
+      [:pulsar, :topology, :resolver, :partition_count],
       %{topic: topic, client: client},
       fn ->
         result = do_partition_count(Pulsar.Client.random_broker(client), topic)
@@ -58,12 +58,12 @@ defmodule Pulsar.Topology.Resolver do
     client = Keyword.get(opts, :client, :default)
 
     :telemetry.span(
-      [:pulsar, :service_discovery, :lookup_topic],
-      %{},
+      [:pulsar, :topology, :resolver, :lookup_topic],
+      %{topic: topic, client: client},
       fn ->
         result = lookup_topic(Pulsar.Client.random_broker(client), topic, false, client)
 
-        metadata = %{success: match?({:ok, _}, result), client: client}
+        metadata = %{success: match?({:ok, _}, result), topic: topic, client: client}
         {result, metadata}
       end
     )
