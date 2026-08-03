@@ -62,7 +62,7 @@ defmodule Pulsar.Consumer.Callback do
 
       def handle_message(%Pulsar.Message{} = message, state) do
         payload = message.payload
-        message_id = message.message_id_to_ack
+        producer = Pulsar.Message.producer_name(message)
         {:ok, state}
       end
 
@@ -205,17 +205,14 @@ defmodule Pulsar.Consumer.Callback do
 
   Example with manual ACK:
 
-      def handle_message(%Pulsar.Message{payload: payload, message_id_to_ack: message_id_to_ack}, state) do
-        # Use message_id_to_ack (not command.message_id) for manual ACK/NACK
-        # This ensures batch messages are ACKed with the correct batch_index
-
+      def handle_message(%Pulsar.Message{payload: payload, message_id: message_id}, state) do
         consumer = self()
 
         # Send to async processor
         Task.start(fn ->
           case process_async(payload) do
-            :ok -> Pulsar.Consumer.ack(consumer, message_id_to_ack)
-            {:error, _} -> Pulsar.Consumer.nack(consumer, message_id_to_ack)
+            :ok -> Pulsar.Consumer.ack(consumer, message_id)
+            {:error, _} -> Pulsar.Consumer.nack(consumer, message_id)
           end
         end)
 

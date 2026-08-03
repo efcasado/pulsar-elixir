@@ -58,7 +58,7 @@ defmodule Pulsar.Integration.Reader.PartitionedTopicTest do
 
     partitions =
       result
-      |> Enum.map(& &1.message_id_to_ack.partition)
+      |> Enum.map(& &1.message_id.partition)
       |> Enum.uniq()
       |> Enum.sort()
 

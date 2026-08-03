@@ -502,8 +502,7 @@ defmodule Pulsar.Consumer.Worker do
 
     nacked_ids =
       Enum.reduce(messages, [], fn %Pulsar.Message{} = message, nacked_acc ->
-        message_ids_list =
-          if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
+        message_ids_list = List.wrap(message.message_id)
 
         case send_to_dead_letter(state, message.payload, List.first(message_ids_list)) do
           :ok ->
@@ -565,8 +564,7 @@ defmodule Pulsar.Consumer.Worker do
         state.callback_module.handle_invalid_message(message, callback_state)
       end
 
-    message_ids_list =
-      if is_list(message.message_id_to_ack), do: message.message_id_to_ack, else: [message.message_id_to_ack]
+    message_ids_list = List.wrap(message.message_id)
 
     case result do
       {:ok, new_callback_state} ->
@@ -900,7 +898,7 @@ defmodule Pulsar.Consumer.Worker do
     unwrapped_messages
     |> Enum.with_index()
     |> Enum.map(fn {{single_metadata, payload}, index} ->
-      message_id_to_ack =
+      message_id =
         if single_metadata == nil do
           base_message_id
         else
@@ -908,13 +906,15 @@ defmodule Pulsar.Consumer.Worker do
         end
 
       %Pulsar.Message{
-        command: command,
-        metadata: metadata,
         payload: payload,
-        single_metadata: single_metadata,
-        broker_metadata: broker_metadata,
-        message_id_to_ack: message_id_to_ack,
-        chunk_metadata: nil
+        message_id: message_id,
+        chunk_metadata: nil,
+        raw: %{
+          command: command,
+          metadata: metadata,
+          single_metadata: single_metadata,
+          broker_metadata: broker_metadata
+        }
       }
     end)
   end
@@ -930,26 +930,25 @@ defmodule Pulsar.Consumer.Worker do
   # cannot be tied back to its siblings; those expire as an incomplete message.
   defp build_invalid_message(command, bytes, validation_error) do
     %Pulsar.Message{
-      command: command,
-      metadata: nil,
       payload: bytes,
-      single_metadata: nil,
-      broker_metadata: nil,
-      message_id_to_ack: command.message_id,
+      message_id: command.message_id,
       chunk_metadata: nil,
-      validation_error: validation_error
+      validation_error: validation_error,
+      raw: %{command: command, metadata: nil, single_metadata: nil, broker_metadata: nil}
     }
   end
 
   defp build_message_from_chunk(chunk_metadata, payload) do
     %Pulsar.Message{
-      command: Map.get(chunk_metadata, :commands, []),
-      metadata: Map.get(chunk_metadata, :metadatas, []),
       payload: payload,
-      single_metadata: [],
-      broker_metadata: Map.get(chunk_metadata, :broker_metadatas, []),
-      message_id_to_ack: Map.get(chunk_metadata, :message_ids, []),
-      chunk_metadata: chunk_metadata
+      message_id: Map.get(chunk_metadata, :message_ids, []),
+      chunk_metadata: chunk_metadata,
+      raw: %{
+        command: Map.get(chunk_metadata, :commands, []),
+        metadata: Map.get(chunk_metadata, :metadatas, []),
+        single_metadata: [],
+        broker_metadata: Map.get(chunk_metadata, :broker_metadatas, [])
+      }
     }
   end
 

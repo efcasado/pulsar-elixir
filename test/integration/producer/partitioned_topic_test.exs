@@ -102,13 +102,13 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     # All messages should have the same partition_key
     assert [^partition_key] =
              our_messages
-             |> Enum.map(fn msg -> msg.metadata.partition_key end)
+             |> Enum.map(fn msg -> Pulsar.Message.key(msg) end)
              |> Enum.uniq()
 
     # All messages should have been routed to the same partition
     assert [_single_partition] =
              our_messages
-             |> Enum.map(fn msg -> msg.command.message_id.partition end)
+             |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
              |> Enum.uniq()
 
     :ok = Pulsar.Producer.stop(producer_pid)
@@ -162,7 +162,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
       consumers
       |> Enum.flat_map(&DummyConsumer.get_messages/1)
       |> Enum.filter(fn msg -> msg.payload in messages end)
-      |> Enum.map(fn msg -> msg.command.message_id.partition end)
+      |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
 
     # With 30 messages and 3 partitions, random distribution should hit all partitions
     assert partitions |> Enum.uniq() |> Enum.count() == 3

@@ -6,98 +6,176 @@ defmodule Pulsar.Message do
 
   ## Fields
 
-  - `command` - For non-chunked messages: single command struct. For chunked messages: list of
-    commands from all chunks.
-    Type: `struct() | [struct()]`
+  - `payload` - The message payload as a binary. For a chunked message, the assembled
+    complete payload.
 
-  - `metadata` - For non-chunked messages: single metadata struct. For chunked messages: list of
-    metadata from all chunks. `nil` for invalid messages, whose metadata is either
-    unreadable or not trustworthy.
-    Type: `struct() | [struct()] | nil`
+  - `message_id` - What to pass to `Pulsar.Consumer.ack/2` and `Pulsar.Consumer.nack/2`.
+    Treat it as opaque: it carries a batch index for a batched message and covers every
+    chunk of a chunked one.
 
-  - `payload` - The actual message payload as a binary. For chunked messages, this is the
-    assembled complete payload.
-
-  - `single_metadata` - For non-batch messages: nil. For batched messages: single message metadata.
-    For chunked messages: list of metadata from all chunks.
-    Type: `nil | struct() | [struct()]`
-
-  - `broker_metadata` - For non-chunked messages: single broker metadata. For chunked messages:
-    list of broker metadata from all chunks.
-    Type: `term() | [term()]`
-
-  - `message_id_to_ack` - For non-chunked messages: single message ID. For batch messages: message
-    ID with batch_index. For chunked messages: list of all chunk message IDs.
-    Type: `term() | [term()]`
-
-  - `chunk_metadata` - Metadata about chunked messages (nil for non-chunked messages).
+  - `chunk_metadata` - Metadata about chunked messages (`nil` for non-chunked messages).
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
     For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
 
   - `validation_error` - `nil` for messages that arrived intact. Otherwise why the
-    frame could not be trusted, in which case `payload` holds unverified bytes and
-    `metadata` is `nil`. See `valid?/1`.
-    Type: `atom() | nil`
+    frame could not be trusted, in which case `payload` holds unverified bytes. See `valid?/1`.
+
+  - `raw` - The underlying protocol structs, as a map of `:command`, `:metadata`,
+    `:single_metadata` and `:broker_metadata`. **Unstable**: its shape follows the wire
+    protocol and changes with how the broker delivered the message. Use the accessors below
+    instead; reach for `raw` only for protocol details they do not cover.
+
+  ## Reading a message
+
+  Everything a callback normally needs has an accessor that answers the same way whether the
+  message arrived on its own, inside a batch, or split across chunks:
+
+  | Accessor | Returns |
+  | --- | --- |
+  | `producer_name/1` | The producer that published it |
+  | `publish_time/1` | Broker publish timestamp, in milliseconds |
+  | `event_time/1` | Application-set event time, or `nil` when unset |
+  | `key/1` | The partition key, or `nil` |
+  | `ordering_key/1` | The ordering key, or `nil` |
+  | `properties/1` | User properties as a map |
+  | `redelivery_count/1` | How many times the broker has redelivered it |
+
+  This matters because the same datum lives in different places depending on delivery: a
+  batched message carries its key and properties per message, a non-batched one carries them
+  in the message metadata, and a chunked one has a list of both. The accessors resolve that;
+  reading `raw` does not.
 
   ## Usage
 
-  Messages are received in the `handle_message/2` callback:
-
-      def handle_message(%Pulsar.Message{} = message, state) do
-        # Access fields directly
-        payload = message.payload
-
-        {:ok, state}
-      end
-
-  ## Pattern Matching Examples
-
-      # Match only the payload
       def handle_message(%Pulsar.Message{payload: payload}, state) do
         process(payload)
         {:ok, state}
       end
 
-      # Access all fields via the struct (non-chunked)
-      def handle_message(%Pulsar.Message{} = msg, state) do
-        redelivery_count = Pulsar.Message.redelivery_count(msg)
-        producer = msg.metadata.producer_name
+      def handle_message(%Pulsar.Message{} = message, state) do
+        Logger.info("from \#{Pulsar.Message.producer_name(message)}, key \#{Pulsar.Message.key(message)}")
         {:ok, state}
       end
 
-      # Manual acknowledgment using message_id_to_ack
-      def handle_message(%Pulsar.Message{message_id_to_ack: ack_id} = msg, state) do
+  Manual acknowledgement, where the id is captured for use after the callback returns:
+
+      def handle_message(%Pulsar.Message{message_id: message_id} = message, state) do
+        consumer = self()
+
         spawn(fn ->
-          case process_async(msg) do
-            :ok -> Pulsar.Consumer.ack(self(), ack_id)
-            {:error, _} -> Pulsar.Consumer.nack(self(), ack_id)
+          case process_async(message) do
+            :ok -> Pulsar.Consumer.ack(consumer, message_id)
+            {:error, _reason} -> Pulsar.Consumer.nack(consumer, message_id)
           end
         end)
+
         {:noreply, state}
       end
   """
 
-  @type t :: %__MODULE__{
+  @typedoc """
+  The protocol structs a message was built from. Unstable; see the `:raw` field.
+  """
+  @type raw :: %{
           command: struct() | [struct()],
           metadata: struct() | [struct()] | nil,
+          single_metadata: struct() | [struct()] | nil,
+          broker_metadata: term() | [term()]
+        }
+
+  @type t :: %__MODULE__{
           payload: binary(),
-          single_metadata: struct() | nil | [struct()],
-          broker_metadata: term() | [term()],
-          message_id_to_ack: term() | [term()],
+          message_id: term() | [term()],
           chunk_metadata: map() | nil,
-          validation_error: atom() | nil
+          validation_error: atom() | nil,
+          raw: raw()
         }
 
   defstruct [
-    :command,
-    :metadata,
     :payload,
-    :single_metadata,
-    :broker_metadata,
-    :message_id_to_ack,
+    :message_id,
     :chunk_metadata,
-    :validation_error
+    :validation_error,
+    :raw
   ]
+
+  @doc """
+  Returns the name of the producer that published the message.
+
+  ## Examples
+
+      iex> raw = %{metadata: %{producer_name: "orders-api"}}
+      iex> Pulsar.Message.producer_name(%Pulsar.Message{raw: raw})
+      "orders-api"
+  """
+  @spec producer_name(t()) :: String.t() | nil
+  def producer_name(%__MODULE__{} = message), do: message |> metadata() |> field(:producer_name)
+
+  @doc """
+  Returns the time the broker published the message, in milliseconds since the epoch.
+  """
+  @spec publish_time(t()) :: non_neg_integer() | nil
+  def publish_time(%__MODULE__{} = message), do: message |> metadata() |> field(:publish_time)
+
+  @doc """
+  Returns the event time the publishing application set, or `nil` when it set none.
+
+  Pulsar represents an unset event time as `0`, which this reports as `nil`.
+
+  ## Examples
+
+      iex> raw = %{metadata: %{event_time: 0}}
+      iex> Pulsar.Message.event_time(%Pulsar.Message{raw: raw})
+      nil
+  """
+  @spec event_time(t()) :: non_neg_integer() | nil
+  def event_time(%__MODULE__{} = message) do
+    case per_message(message, :event_time) do
+      0 -> nil
+      event_time -> event_time
+    end
+  end
+
+  @doc """
+  Returns the message's partition key, or `nil` when it has none.
+
+  A batched message carries its own key, so this reads the batch entry's key and falls back
+  to the key of the message that carried it.
+
+  ## Examples
+
+      iex> raw = %{metadata: %{partition_key: "batch"}, single_metadata: %{partition_key: "entry"}}
+      iex> Pulsar.Message.key(%Pulsar.Message{raw: raw})
+      "entry"
+  """
+  @spec key(t()) :: String.t() | nil
+  def key(%__MODULE__{} = message), do: per_message(message, :partition_key)
+
+  @doc """
+  Returns the message's ordering key, or `nil` when it has none.
+  """
+  @spec ordering_key(t()) :: binary() | nil
+  def ordering_key(%__MODULE__{} = message), do: per_message(message, :ordering_key)
+
+  @doc """
+  Returns the user properties published with the message, as a map.
+
+  ## Examples
+
+      iex> raw = %{metadata: %{properties: [%{key: "trace-id", value: "abc"}]}}
+      iex> Pulsar.Message.properties(%Pulsar.Message{raw: raw})
+      %{"trace-id" => "abc"}
+
+      iex> Pulsar.Message.properties(%Pulsar.Message{raw: %{metadata: nil}})
+      %{}
+  """
+  @spec properties(t()) :: %{String.t() => String.t()}
+  def properties(%__MODULE__{} = message) do
+    message
+    |> per_message(:properties)
+    |> List.wrap()
+    |> Map.new(&{&1.key, &1.value})
+  end
 
   @doc """
   Returns the maximum redelivery count across all commands.
@@ -107,23 +185,42 @@ defmodule Pulsar.Message do
 
   ## Examples
 
-      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{command: %{redelivery_count: 3}})
+      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{raw: %{command: %{redelivery_count: 3}}})
       3
 
       iex> chunks = [%{redelivery_count: 1}, %{redelivery_count: 3}]
-      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{command: chunks})
+      iex> Pulsar.Message.redelivery_count(%Pulsar.Message{raw: %{command: chunks}})
       3
   """
   @spec redelivery_count(t()) :: non_neg_integer()
-  def redelivery_count(%__MODULE__{command: command}) when is_list(command) do
+  def redelivery_count(%__MODULE__{raw: %{command: command}}) when is_list(command) do
     command
     |> Enum.map(& &1.redelivery_count)
     |> Enum.max(fn -> 0 end)
   end
 
-  def redelivery_count(%__MODULE__{command: command}) do
-    command.redelivery_count
+  def redelivery_count(%__MODULE__{raw: %{command: command}}), do: command.redelivery_count
+
+  # A batch entry carries its own key, properties and times; a message delivered on its own
+  # carries them in the message metadata. Chunks of one message all repeat the same values.
+  defp per_message(message, key) do
+    case message |> single_metadata() |> field(key) do
+      nil -> message |> metadata() |> field(key)
+      value -> value
+    end
   end
+
+  defp metadata(%__MODULE__{raw: %{metadata: metadata}}), do: first(metadata)
+  defp metadata(%__MODULE__{}), do: nil
+
+  defp single_metadata(%__MODULE__{raw: %{single_metadata: single_metadata}}), do: first(single_metadata)
+  defp single_metadata(%__MODULE__{}), do: nil
+
+  defp first(values) when is_list(values), do: List.first(values)
+  defp first(value), do: value
+
+  defp field(nil, _key), do: nil
+  defp field(metadata, key), do: Map.get(metadata, key)
 
   @doc """
   Returns the number of broker messages (permits) consumed.

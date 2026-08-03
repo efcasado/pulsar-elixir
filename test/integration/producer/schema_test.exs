@@ -128,7 +128,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
     [message] = DummyConsumer.get_messages(consumer_pid)
-    assert message.metadata.schema_version
+    assert message.raw.metadata.schema_version
   end
 
   test "incompatible schema types are rejected on same topic" do
