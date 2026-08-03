@@ -1,0 +1,245 @@
+# Dead Letter Policies
+
+## What is a Dead Letter Policy?
+
+A [dead letter topic](https://pulsar.apache.org/docs/next/concepts-messaging/#dead-letter-topic) is where
+messages go when a subscription has tried and failed to process them enough times. Without one, a message
+your callback keeps rejecting is redelivered forever: it consumes flow permits on every attempt, and on an
+ordered subscription it holds up everything behind it.
+
+A dead letter policy sets the point at which the consumer stops retrying, publishes the message to another
+topic, and acknowledges it. The subscription moves on, and the message is still there to inspect or replay.
+
+## How Dead Lettering Works
+
+### Consumer Side
+
+Every delivery carries a redelivery count from the broker. When it reaches `:max_redelivery`, that delivery
+is diverted to the dead letter topic instead of being handed to your callback:
+
+```elixir
+{:ok, consumer} = Pulsar.Consumer.start(
+  "orders",
+  "billing",
+  MyConsumer,
+  redelivery_interval: 5_000,
+  dead_letter_policy: [max_redelivery: 3]
+)
+```
+
+With `max_redelivery: 3`, a message your callback keeps rejecting is delivered three times. The fourth
+delivery is diverted, and the callback never sees it:
+
+1. **Deliveries 1 to 3**: `handle_message/2` runs and returns `{:error, reason, state}`, so the message is
+   negatively acknowledged and redelivered
+2. **Delivery 4**: the count has reached the threshold, so the message is published to the dead letter topic
+3. **Acknowledged**: once the publish succeeds, the message is acknowledged and leaves the subscription
+
+Diverting replaces delivery rather than accompanying it, so neither `handle_message/2` nor
+`handle_invalid_message/2` runs for a message that reaches the threshold.
+
+### The Dead Letter Producer
+
+Publishing needs a producer, and the consumer owns it:
+
+- It is created with the consumer, whether or not a message ever fails
+- It does not need the dead letter topic to be reachable at startup; discovery retries in the background
+- A partitioned consumer has **one** producer for the whole subscription, not one per partition
+- It is not registered, so it cannot be reached with `Pulsar.Producer.send/3` or stopped by name
+
+## Configuration Options
+
+> #### Warning {: .warning}
+>
+> A dead letter policy needs `:redelivery_interval` to be set. It is absent by default, and without it the
+> library never asks the broker to redeliver a negatively acknowledged message. The redelivery count never
+> grows, the threshold is never reached, and nothing is ever diverted.
+
+### Consumer Configuration
+
+```elixir
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ consumers: [
+   [topic: "orders",
+    subscription_name: "billing",
+    callback_module: MyConsumer,
+
+    redelivery_interval: 5_000,        # Required for a dead letter policy to ever trigger
+
+    dead_letter_policy: [
+      max_redelivery: 3,               # Deliveries to attempt before diverting
+      topic: "orders-parked"           # Optional; defaults to "<topic>-<subscription>-DLQ"
+    ]
+   ]
+ ]}
+```
+
+#### Configuration Details
+
+- **`max_redelivery`**: Required, a positive integer. How many times the callback sees a message before the
+  next delivery is diverted. It is the point at which diverting starts, not a cap on how many times a message
+  can be delivered — see [When the Dead Letter Topic Is Unavailable](#when-the-dead-letter-topic-is-unavailable).
+
+- **`topic`**: Where to divert to. Defaults to `"<topic>-<subscription>-DLQ"`, so two subscriptions on the
+  same topic get their own dead letter topics. Point several subscriptions at one topic by setting it
+  explicitly; each still publishes through its own producer.
+
+- **`redelivery_interval`**: Not part of the policy, but a policy does nothing without it. Milliseconds
+  between redelivery requests for negatively acknowledged messages.
+
+- **`producer`**: Options for the producer that publishes to the dead letter topic — `:compression`,
+  `:batch_enabled`, `:schema` and the rest of `Pulsar.Producer`'s options. It takes their defaults
+  otherwise. Its `:topic`, `:client` and `:name` come from the consumer and are rejected here.
+
+```elixir
+dead_letter_policy: [
+  max_redelivery: 3,
+  producer: [compression: :lz4, batch_enabled: false]
+]
+```
+
+## What a Diverted Message Carries
+
+A diverted message is republished rather than moved, so it is a new message on a new topic. What identifies
+it is carried across:
+
+| | Value |
+| --- | --- |
+| Payload | Unchanged |
+| Key and ordering key | The origin's, so a `:key_shared` dead letter consumer partitions as the origin did |
+| Properties | The origin's, plus the two below |
+| Event time | The origin's |
+| `REAL_TOPIC` | The topic the message was consumed from, spelled as the consumer was configured; the partition for a partitioned consumer |
+| `ORIGIN_MESSAGE_ID` | The origin's id, as `Pulsar.Message.message_id_string/1` prints it |
+
+The two property names are the ones the Java client uses, so a dead letter topic can be consumed by either
+client and read the same way.
+
+Reading them back:
+
+```elixir
+def handle_message(%Pulsar.Message{} = message, state) do
+  properties = Pulsar.Message.properties(message)
+
+  Logger.warning(
+    "parked message from #{properties["REAL_TOPIC"]} " <>
+      "(origin id #{properties["ORIGIN_MESSAGE_ID"]})"
+  )
+
+  {:ok, state}
+end
+```
+
+## Creating the Dead Letter Topic
+
+A consumer can ask the broker to create its topic on subscribe — that is what `:force_create_topic`
+does, and it defaults to `true`. **A producer cannot.** `CommandProducer` has no equivalent field, so
+the asymmetry is in the Pulsar protocol rather than in this library.
+
+The dead letter producer therefore relies on the broker's `allowTopicAutoCreation`, which is enabled by
+default. Where it has been turned off, create the dead letter topic before diverting into it, either with
+`pulsar-admin topics create` or by starting the consumer that reads it — subscribing creates it.
+
+## Partitioned Topics
+
+A partitioned consumer runs one worker per partition, but the dead letter topic belongs to the subscription
+rather than the partition. Every partition of `orders` diverts into the same `orders-billing-DLQ`, and
+`REAL_TOPIC` records which partition a message actually came from.
+
+The dead letter topic may itself be partitioned. It is discovered like any other topic, and messages are
+routed across its partitions honouring the key carried over from the origin.
+
+## When the Dead Letter Topic Is Unavailable
+
+A dead letter topic that cannot be published to — it does not exist and auto-creation is off, the broker is
+unreachable, the payload exceeds its maximum message size — does not disturb the subscription:
+
+- The message is left negatively acknowledged and retried on the next redelivery
+- The consumer stays subscribed; a failed publish is logged, not fatal
+- Its redelivery count keeps climbing past `:max_redelivery`, since the threshold decides when diverting
+  starts and nothing acknowledges the message until it lands
+
+This is deliberate. Dropping the message or acknowledging it without it arriving anywhere both lose data, so
+the consumer keeps trying. Watch for `Failed to send message to dead letter topic` in the logs; a message
+whose redelivery count climbs without bound is the symptom.
+
+## Example: Complete Dead Letter Flow
+
+Odd numbers are rejected and end up on the dead letter topic; even numbers are processed normally.
+Runs as-is against a broker on `localhost:6650`:
+
+```elixir
+Mix.install([:pulsar])
+
+defmodule Orders do
+  use Pulsar.Consumer.Callback
+
+  # Odd payloads never succeed, so they exhaust the policy and are parked.
+  def handle_message(%Pulsar.Message{payload: payload}, state) do
+    case String.to_integer(payload) do
+      n when rem(n, 2) == 0 ->
+        IO.puts("processed #{n}")
+        {:ok, state}
+
+      n ->
+        {:error, {:odd, n}, state}
+    end
+  end
+end
+
+defmodule Parked do
+  use Pulsar.Consumer.Callback
+
+  def handle_message(%Pulsar.Message{payload: payload} = message, state) do
+    properties = Pulsar.Message.properties(message)
+
+    IO.puts("parked #{payload} from #{properties["REAL_TOPIC"]} (#{properties["ORIGIN_MESSAGE_ID"]})")
+
+    {:ok, state}
+  end
+end
+
+{:ok, _client} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+
+# Subscribing creates the dead letter topic, so the producer never races the broker for it.
+{:ok, parked} =
+  Pulsar.Consumer.start("numbers-billing-DLQ", "inspection", Parked, initial_position: :earliest)
+
+{:ok, orders} =
+  Pulsar.Consumer.start("numbers", "billing", Orders,
+    redelivery_interval: 500,
+    dead_letter_policy: [max_redelivery: 3]
+  )
+
+:ok = Pulsar.Consumer.await_ready(orders)
+:ok = Pulsar.Consumer.await_ready(parked)
+
+{:ok, producer} = Pulsar.Producer.start("numbers")
+:ok = Pulsar.Producer.await_ready(producer)
+
+for n <- 1..6, do: {:ok, _id} = Pulsar.Producer.send(producer, Integer.to_string(n))
+
+Process.sleep(5_000)
+```
+
+Each odd number is delivered to `handle_message/2` three times, then diverted on the fourth:
+
+```
+processed 2
+processed 4
+processed 6
+parked 1 from numbers (3:0:-1)
+parked 3 from numbers (3:2:-1)
+parked 5 from numbers (3:4:-1)
+```
+
+`examples/odds_even_dlq.exs` in the repository is the same flow declared on the client rather than
+started by hand, and exits once every odd number has been parked.
+
+## Telemetry Events
+
+There are no dead-letter-specific events. The dead letter producer is an ordinary producer, so it emits the
+`[:pulsar, :producer, …]` events — `:opened`, `:message, :published`, `:closed` and the rest — and its
+`producer_name` metadata is `"<consumer name>-dead-letter-producer"`, which is how to tell it apart from the
+producers you started yourself.

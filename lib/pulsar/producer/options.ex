@@ -100,4 +100,7 @@ defmodule Pulsar.Producer.Options do
   """
   @spec validate!(keyword()) :: keyword()
   def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
+
+  @spec validate(keyword()) :: {:ok, keyword()} | {:error, NimbleOptions.ValidationError.t()}
+  def validate(opts), do: NimbleOptions.validate(opts, @schema)
 end

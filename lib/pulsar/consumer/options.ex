@@ -110,6 +110,14 @@ defmodule Pulsar.Consumer.Options do
         topic: [
           type: :string,
           doc: "Topic to divert to. Defaults to `\"<topic>-<subscription>-DLQ\"`."
+        ],
+        producer: [
+          type: {:custom, Pulsar.Consumer.DeadLetter, :validate_producer_options, []},
+          doc: """
+          Options for the producer that publishes to the dead letter topic, such as
+          `:compression` or `:batch_enabled`. Takes `Pulsar.Producer`'s defaults otherwise.
+          Its `:topic`, `:client` and `:name` come from the consumer and cannot be set here.
+          """
         ]
       ],
       doc: """
@@ -123,8 +131,10 @@ defmodule Pulsar.Consumer.Options do
       A diverted message keeps its key, ordering key, properties and event time, and gains
       `REAL_TOPIC` and `ORIGIN_MESSAGE_ID` properties naming where it came from.
 
-      Diverting replaces delivery rather than accompanying it, so neither `c:handle_message/2`
-      nor `c:handle_invalid_message/2` is called for a message that reaches the threshold.
+      Diverting replaces delivery rather than accompanying it, so neither
+      `c:Pulsar.Consumer.Callback.handle_message/2` nor
+      `c:Pulsar.Consumer.Callback.handle_invalid_message/2` is called for a message that
+      reaches the threshold.
       """
     ],
     max_pending_chunked_messages: [

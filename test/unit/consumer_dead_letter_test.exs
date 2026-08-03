@@ -56,6 +56,23 @@ defmodule Pulsar.Consumer.DeadLetterTest do
                attach(dead_letter_policy: [max_redelivery: 3, topic: explicit])
     end
 
+    test "passes producer options through to the producer it attaches" do
+      policy = [max_redelivery: 3, producer: [compression: :lz4, batch_enabled: false]]
+
+      assert {_opts, [%{start: {_module, _fun, [producer_opts]}}]} = attach(dead_letter_policy: policy)
+      assert Keyword.fetch!(producer_opts, :compression) == :lz4
+      assert Keyword.fetch!(producer_opts, :batch_enabled) == false
+    end
+
+    test "the consumer still decides the topic, client and name" do
+      policy = [max_redelivery: 3, producer: [compression: :lz4]]
+
+      assert {_opts, [%{start: {_module, _fun, [producer_opts]}}]} = attach(dead_letter_policy: policy)
+      assert Keyword.fetch!(producer_opts, :topic) == @default_dlq
+      assert Keyword.fetch!(producer_opts, :client) == :test
+      assert Keyword.fetch!(producer_opts, :name) == "#{@consumer_name}-dead-letter-producer"
+    end
+
     # Two subscriptions may be configured to divert into the same topic, and each still gets
     # its own producer with its own identity.
     test "names the producer after the consumer rather than the dead letter topic" do

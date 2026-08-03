@@ -95,4 +95,34 @@ defmodule Pulsar.Consumer.OptionsTest do
       end
     end
   end
+
+  describe "validate!/1 with dead letter producer options" do
+    defp policy(producer), do: [dead_letter_policy: [max_redelivery: 3, producer: producer]]
+
+    test "accepts producer options" do
+      assert validate!(policy(compression: :lz4))[:dead_letter_policy][:producer] == [compression: :lz4]
+    end
+
+    test "rejects an option no producer has" do
+      assert_raise NimbleOptions.ValidationError, ~r/nonsense/, fn ->
+        validate!(policy(nonsense: true))
+      end
+    end
+
+    test "rejects an option with the wrong value, naming what it accepts" do
+      assert_raise NimbleOptions.ValidationError, ~r/compression/, fn ->
+        validate!(policy(compression: :LZ4))
+      end
+    end
+
+    # These come from the consumer that owns the producer, so accepting them would silently
+    # either be overridden or detach the producer from its consumer.
+    for managed <- [:topic, :client, :name] do
+      test "rejects #{managed}, which the consumer decides" do
+        assert_raise NimbleOptions.ValidationError, ~r/belongs to the consumer/, fn ->
+          validate!(policy([{unquote(managed), "nope"}]))
+        end
+      end
+    end
+  end
 end

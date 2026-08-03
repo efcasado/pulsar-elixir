@@ -6,6 +6,9 @@ defmodule Pulsar.Consumer.DeadLetter do
 
   alias Pulsar.Message
   alias Pulsar.Producer
+  alias Pulsar.Producer.Options, as: ProducerOptions
+
+  @managed_producer_options [:topic, :client, :name]
 
   # The Java client's names, so both ends of a dead letter topic agree on them.
   @real_topic_property "REAL_TOPIC"
@@ -35,7 +38,11 @@ defmodule Pulsar.Consumer.DeadLetter do
         []
 
       topic ->
-        producer_opts = [topic: topic, client: Keyword.fetch!(opts, :client), name: producer_name(opts)]
+        producer_opts =
+          opts
+          |> policy()
+          |> Keyword.get(:producer, [])
+          |> Keyword.merge(topic: topic, client: Keyword.fetch!(opts, :client), name: producer_name(opts))
 
         [
           %{
@@ -104,10 +111,32 @@ defmodule Pulsar.Consumer.DeadLetter do
     end
   end
 
+  @doc false
+  @spec validate_producer_options(term()) :: {:ok, keyword()} | {:error, String.t()}
+  def validate_producer_options(opts) when is_list(opts) do
+    case Enum.filter(@managed_producer_options, &Keyword.has_key?(opts, &1)) do
+      [] -> validate_against_producer_schema(opts)
+      managed -> {:error, "#{inspect(managed)} belongs to the consumer and cannot be set here"}
+    end
+  end
+
+  def validate_producer_options(other), do: {:error, "expected a keyword list, got: #{inspect(other)}"}
+
+  # :topic is required of a producer and supplied by the consumer, so it stands in here only to
+  # let the rest be checked while the caller is still holding the consumer's options.
+  defp validate_against_producer_schema(opts) do
+    case ProducerOptions.validate(Keyword.put(opts, :topic, "validation")) do
+      {:ok, _validated} -> {:ok, opts}
+      {:error, error} -> {:error, Exception.message(error)}
+    end
+  end
+
+  defp policy(opts), do: Keyword.get(opts, :dead_letter_policy)
+
   # Defaults to the base topic rather than the partition a worker happens to hold, so every
   # partition of a partitioned consumer diverts into one dead letter topic.
   defp topic(opts) do
-    case Keyword.get(opts, :dead_letter_policy) do
+    case policy(opts) do
       nil ->
         nil
 
