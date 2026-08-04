@@ -307,6 +307,18 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
+  # The keys `context/1` gives a callback, so chunk events group like every other signal.
+  defp chunk_context(state, uuid) do
+    %{
+      uuid: uuid,
+      consumer_id: state.consumer_id,
+      topic: state.topic,
+      base_topic: state.base_topic,
+      partition: state.partition,
+      subscription_name: state.subscription_name
+    }
+  end
+
   defp context(state) do
     %{
       topic: state.topic,
@@ -1006,7 +1018,7 @@ defmodule Pulsar.Consumer.Worker do
     :telemetry.execute(
       [:pulsar, :consumer, :chunk, :received],
       %{chunk_id: chunk_id, num_chunks: num_chunks},
-      %{uuid: uuid, consumer_id: state.consumer_id, topic: state.topic, subscription: state.subscription_name}
+      chunk_context(state, uuid)
     )
 
     chunk_data = %{
@@ -1087,7 +1099,7 @@ defmodule Pulsar.Consumer.Worker do
         total_size: byte_size(complete_payload),
         age_ms: ChunkedMessageContext.age_ms(ctx)
       },
-      %{uuid: uuid, consumer_id: state.consumer_id, topic: state.topic, subscription: state.subscription_name}
+      chunk_context(state, uuid)
     )
 
     final_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
@@ -1117,13 +1129,7 @@ defmodule Pulsar.Consumer.Worker do
         :telemetry.execute(
           [:pulsar, :consumer, :chunk, :discarded],
           %{received_chunks: oldest_ctx.received_chunks, num_chunks: oldest_ctx.num_chunks_from_msg},
-          %{
-            uuid: oldest_uuid,
-            consumer_id: state.consumer_id,
-            topic: state.topic,
-            subscription: state.subscription_name,
-            reason: :queue_full
-          }
+          Map.put(chunk_context(state, oldest_uuid), :reason, :queue_full)
         )
 
         partial_payload = ChunkedMessageContext.assemble_payload(oldest_ctx)
@@ -1171,13 +1177,7 @@ defmodule Pulsar.Consumer.Worker do
             received_chunks: ctx.received_chunks,
             num_chunks: ctx.num_chunks_from_msg
           },
-          %{
-            uuid: uuid,
-            consumer_id: state.consumer_id,
-            topic: state.topic,
-            subscription: state.subscription_name,
-            reason: :expired
-          }
+          Map.put(chunk_context(state, uuid), :reason, :expired)
         )
 
         partial_payload = ChunkedMessageContext.assemble_payload(ctx)

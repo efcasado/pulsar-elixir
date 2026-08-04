@@ -29,9 +29,15 @@ defmodule Pulsar.Producer.Worker do
   # chunk counters once their real values are known.
   @chunk_framing_overhead 64
 
+  # Stands in while the budget is measured, so a message that turns out not to need chunking
+  # never generates a uuid. Every uuid4 encodes to this length.
+  @uuid_placeholder String.duplicate("0", 36)
+
   defstruct [
     :client,
     :topic,
+    :base_topic,
+    :partition,
     :producer_id,
     :producer_name,
     :broker_pid,
@@ -58,6 +64,8 @@ defmodule Pulsar.Producer.Worker do
 
   @type t :: %__MODULE__{
           topic: String.t(),
+          base_topic: String.t(),
+          partition: non_neg_integer() | nil,
           producer_id: integer(),
           producer_name: String.t() | nil,
           broker_pid: pid(),
@@ -279,7 +287,7 @@ defmodule Pulsar.Producer.Worker do
             {:cont, {:ok, new_state}}
 
           {:error, reason} ->
-            {:halt, {:error, reason}}
+            {:halt, {:error, reason, acc_state}}
         end
       end)
 
@@ -287,8 +295,11 @@ defmodule Pulsar.Producer.Worker do
       {:ok, new_state} ->
         {:noreply, new_state}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      # Rolling the counter back would reissue sequence ids still in flight, which the
+      # broker's deduplication reads as repeats. The pending entries do go: a message missing
+      # chunks can never complete, and its caller already has an error.
+      {:error, reason, acc_state} ->
+        {:reply, {:error, reason}, %{acc_state | pending_sends: state.pending_sends}}
     end
   end
 
@@ -515,7 +526,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :complete],
       %{num_chunks: num_chunks},
-      %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
+      chunk_context(state, uuid)
     )
 
     chunked_msg_id = %{
@@ -607,6 +618,16 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
+  defp chunk_context(state, uuid) do
+    %{
+      uuid: uuid,
+      producer_id: state.producer_id,
+      topic: state.topic,
+      base_topic: state.base_topic,
+      partition: state.partition
+    }
+  end
+
   defp broker_max_message_size(broker_pid) do
     case Pulsar.Broker.get_max_message_size(broker_pid) do
       size when is_integer(size) and size > 0 -> size
@@ -683,7 +704,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :sent],
       %{chunk_id: chunk_id, chunk_size: byte_size(chunk_payload)},
-      %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id, topic: state.topic}
+      Map.put(chunk_context(state, uuid), :sequence_id, sequence_id)
     )
   end
 
@@ -737,16 +758,15 @@ defmodule Pulsar.Producer.Worker do
 
   defp maybe_chunk(payload, base_metadata, %{chunking_enabled: true} = state) do
     payload_size = byte_size(payload)
-    uuid = Uniq.UUID.uuid4()
 
-    case chunk_payload_budget(base_metadata, uuid, payload_size, state) do
+    case chunk_payload_budget(base_metadata, payload_size, state) do
       # The metadata on its own fills the broker's limit, and smaller chunks would only
       # repeat it, so no split can rescue this message.
       chunk_size when chunk_size < 1 ->
         {:error, :metadata_too_large}
 
       chunk_size when payload_size > chunk_size ->
-        {:ok, split_into_chunks(payload, payload_size, uuid, chunk_size, state)}
+        {:ok, split_into_chunks(payload, payload_size, chunk_size, state)}
 
       _ ->
         {:ok, [{payload, nil}]}
@@ -755,7 +775,8 @@ defmodule Pulsar.Producer.Worker do
 
   defp maybe_chunk(payload, _base_metadata, _state), do: {:ok, [{payload, nil}]}
 
-  defp split_into_chunks(payload, payload_size, uuid, chunk_size, state) do
+  defp split_into_chunks(payload, payload_size, chunk_size, state) do
+    uuid = Uniq.UUID.uuid4()
     num_chunks = div(payload_size + chunk_size - 1, chunk_size)
 
     Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
@@ -763,7 +784,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :start],
       %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
-      %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
+      chunk_context(state, uuid)
     )
 
     Enum.map(0..(num_chunks - 1), fn chunk_id ->
@@ -784,12 +805,12 @@ defmodule Pulsar.Producer.Worker do
   # The broker's limit covers the metadata each chunk repeats as well as its payload.
   # :max_message_size counts payload bytes only, so the deduction applies to the broker's
   # limit alone.
-  defp chunk_payload_budget(base_metadata, uuid, total_size, state) do
+  defp chunk_payload_budget(base_metadata, total_size, state) do
     case state.broker_max_message_size do
       broker_limit when is_integer(broker_limit) and broker_limit > 0 ->
         metadata = %{
           base_metadata
-          | uuid: uuid,
+          | uuid: @uuid_placeholder,
             chunk_id: 0,
             num_chunks_from_msg: 0,
             total_chunk_msg_size: total_size

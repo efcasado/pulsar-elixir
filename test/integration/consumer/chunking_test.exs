@@ -372,6 +372,37 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert Pulsar.Message.properties(received_msg) == bulky_properties
   end
 
+  test "sizes a chunk so a full one still clears the broker's own limit" do
+    # Chunks budgeted right up to :max_message_size, which defaults to the broker's limit.
+    # The producer's deduction and the broker's check on the whole frame are separate
+    # calculations, and this is where they have to agree.
+    topic = isolated_topic("budget-boundary")
+    message = String.duplicate("x", 5_242_880 * 2)
+
+    {:ok, producer} =
+      Pulsar.Producer.start(
+        topic,
+        client: @client,
+        name: :chunking_budget_boundary_producer,
+        chunking_enabled: true
+      )
+
+    {:ok, _consumer_group} =
+      Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback,
+        client: @client,
+        init_args: [notify_pid: self()]
+      )
+
+    [consumer] = Utils.wait_for_consumer_ready(1)
+
+    assert {:ok, _msg_id} = Pulsar.Producer.send(producer, message)
+
+    Utils.wait_for(fn -> @consumer_callback.count_messages(consumer) == 1 end)
+
+    [received_msg] = @consumer_callback.get_messages(consumer)
+    assert received_msg.payload == message
+  end
+
   test "refuses a message whose metadata alone exceeds the broker's limit" do
     # Has to fail in the producer: reaching the broker with this costs the whole connection.
     oversized_properties = %{"padding" => String.duplicate("p", 6_291_456)}
@@ -598,7 +629,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   # These tests run async against one broker, and a subscription starting at :latest would
-  # otherwise pick up whatever the others happen to be publishing at the time. The broker
-  # creates the topic on first use, so this stays a name rather than an admin call.
+  # otherwise pick up whatever the others are publishing. Naming a topic is enough while the
+  # cluster has allowAutoTopicCreation on; without it this needs System.create_topic/1.
   defp isolated_topic(suffix), do: @topic <> "-" <> suffix
 end

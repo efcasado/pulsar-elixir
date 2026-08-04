@@ -260,16 +260,21 @@ The consumer emits telemetry events for chunk lifecycle:
 | `[:pulsar, :consumer, :chunk, :discarded]` | `received_chunks`, `num_chunks` | A chunked message is evicted |
 | `[:pulsar, :consumer, :chunk, :expired]` | `age_ms`, `received_chunks`, `num_chunks` | A chunked message times out |
 
-Every consumer event carries `uuid`, `consumer_id`, `topic` and `subscription` as metadata, and
-the two that give up on a message also carry `reason`. `received_chunks` against `num_chunks`
-says how much of the message had arrived before it was dropped, and `age_ms` on `:complete` is
-how long assembly took, which is what `:expire_incomplete_chunked_message_after` should be set
-against.
+Every consumer event carries `uuid`, `consumer_id`, `topic`, `base_topic`, `partition` and
+`subscription_name` as metadata, and the two that give up on a message also carry `reason`.
+`received_chunks` against `num_chunks` says how much of the message had arrived before it was
+dropped, and `age_ms` on `:complete` is how long assembly took, which is what
+`:expire_incomplete_chunked_message_after` should be set against.
 
 The producer emits `[:pulsar, :producer, :chunk, :start]`, `:sent` and `:complete`, all carrying
-`uuid`, `producer_id` and `topic`. Their `total_size` and `chunk_size` count the bytes actually
-sent, so with `:compression` set they describe the compressed message rather than the payload
-handed to `Pulsar.Producer.send/3`. On the consumer side `:complete`'s `total_size` is the
-reassembled message after decompression, so the two do not line up when compression is on.
+`uuid`, `producer_id`, `topic`, `base_topic` and `partition`. Their `total_size` and
+`chunk_size` count the bytes actually sent, so with `:compression` set they describe the
+compressed message rather than the payload handed to `Pulsar.Producer.send/3`. On the consumer
+side `:complete`'s `total_size` is the reassembled message after decompression, so the two do
+not line up when compression is on.
+
+`:topic` names a single partition and `:base_topic` the topic it belongs to, so one set of
+events both aggregates over a partitioned topic and breaks down by partition. They are equal,
+and `:partition` is `nil`, when the topic is not partitioned.
 
 See the Telemetry documentation for more details on monitoring chunked messages.
