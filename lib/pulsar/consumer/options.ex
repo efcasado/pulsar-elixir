@@ -92,6 +92,20 @@ defmodule Pulsar.Consumer.Options do
       default: true,
       doc: "Create the topic if it does not exist."
     ],
+    batch_index_ack_enabled: [
+      type: :boolean,
+      default: false,
+      doc: """
+      Tell the broker which messages of a batch an ack was for, so that a nack redelivers only
+      the rest of the entry instead of all of it. Costs one ack command per message rather
+      than one per entry.
+
+      **Requires `acknowledgmentAtBatchIndexLevelEnabled=true` on the broker.** Without it the
+      broker ignores the set and acknowledges the whole entry, losing the messages batched
+      alongside the acked one. Nothing in the protocol reports the setting, so this cannot be
+      detected: Pulsar's shipped `broker.conf` enables it, `standalone.conf` does not.
+      """
+    ],
     redelivery_interval: [
       type: :pos_integer,
       doc: """

@@ -153,6 +153,16 @@ defmodule Pulsar.Consumer do
   that process and not the callback: every callback function runs inside its worker, so
   `ack(self(), ...)` is a `GenServer` call a process makes to itself, which exits with
   `:calling_self` and takes the consumer down.
+
+  ## Batched messages
+
+  The broker acknowledges entries, not the messages inside them, so acking a batched message
+  only counts it off: its entry is acknowledged once every message in it has been acked. The
+  call is unchanged, but a message left unacked holds the ones batched with it, and a nack
+  brings the whole entry back — including messages already acked from it.
+
+  `:batch_index_ack_enabled` narrows that to just the unacked messages, on brokers configured
+  for it.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
