@@ -582,6 +582,7 @@ defmodule Pulsar.Producer.Worker do
               |> Map.put(:topic_epoch, response.topic_epoch)
               |> Map.put(:schema_version, response.schema_version)
               |> Map.put(:broker_max_message_size, broker_max_message_size(broker_pid))
+              |> Map.put(:sequence_id, max(state.sequence_id, response.last_sequence_id))
 
             {:ok, state}
           else
