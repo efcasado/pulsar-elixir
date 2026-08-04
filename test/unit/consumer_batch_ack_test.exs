@@ -24,6 +24,29 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  # Stands in for the dead letter producer. `Pulsar.Producer.send/3` routes a bare pid through
+  # `Topology.kind/1`, which calls anything that is not a topology or group supervisor a worker,
+  # so answering `{:send_message, ...}` is all it takes to be one.
+  defmodule DeadLetterProducer do
+    @moduledoc false
+    use GenServer
+
+    def start_link({refuse, notify_pid}), do: GenServer.start_link(__MODULE__, {refuse, notify_pid})
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call({:send_message, payload, _opts}, _from, {refuse, notify_pid} = state) do
+      if payload in refuse do
+        {:reply, {:error, :message_too_large}, state}
+      else
+        send(notify_pid, {:diverted, payload})
+        {:reply, {:ok, %Binary.MessageIdData{ledgerId: 9, entryId: 1, partition: -1}}, state}
+      end
+    end
+  end
+
   @topic "persistent://public/default/orders"
   @ledger 7
   @entry 42
@@ -215,7 +238,112 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "reporting the ledger" do
+    test "counts the entries it is holding when it asks for more permits" do
+      handler = "held-entries-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:pulsar, :consumer, :flow_control, :stop],
+        fn _event, _measurements, metadata, pid -> send(pid, {:flow_control, metadata}) end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The threshold is high enough that this delivery triggers a refill on its way out.
+      state = %{
+        worker_state(%{"b" => :defer})
+        | flow_initial: 100,
+          flow_threshold: 100,
+          flow_refill: 50,
+          flow_outstanding_permits: 100
+      }
+
+      deliver(state, ["a", "b", "c"])
+
+      assert_received {:flow_control, %{held_entries: 1}}
+    end
+
+    test "counts nothing once the entries it was holding complete" do
+      handler = "held-entries-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:pulsar, :consumer, :flow_control, :stop],
+        fn _event, _measurements, metadata, pid -> send(pid, {:flow_control, metadata}) end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      state = %{
+        worker_state(%{})
+        | flow_initial: 100,
+          flow_threshold: 100,
+          flow_refill: 50,
+          flow_outstanding_permits: 100
+      }
+
+      deliver(state, ["a", "b", "c"])
+
+      assert_received {:flow_control, %{held_entries: 0}}
+    end
+  end
+
+  describe "diverting a batch to the dead letter topic" do
+    test "does not acknowledge the entry when one message of it fails to divert" do
+      state = diverting_state(refuse: ["b"])
+
+      state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
+
+      # "a" and "c" reached the dead letter topic, but "b" did not, so the entry is still owed.
+      assert diverted_payloads() == ["a", "c"]
+      assert [] == acks()
+
+      # Its tally goes too: the entry comes back whole, and "a" and "c" divert a second time.
+      assert state.acks.acked == %{}
+    end
+
+    test "acknowledges the entry once every message of it has been diverted" do
+      state = diverting_state(refuse: [])
+
+      state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
+
+      assert diverted_payloads() == ["a", "b", "c"]
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+  end
+
   ## Helpers
+
+  # A consumer whose dead letter producer is the stub above, past its redelivery limit.
+  # DeadLetter.producer/1 looks for a `{:dead_letter, topic}` child reported as a supervisor.
+  defp diverting_state(opts) do
+    child = %{
+      id: {:dead_letter, "dlq"},
+      start: {DeadLetterProducer, :start_link, [{Keyword.fetch!(opts, :refuse), self()}]},
+      type: :supervisor
+    }
+
+    root =
+      start_supervised!(%{
+        id: :dead_letter_root,
+        start: {Supervisor, :start_link, [[child], [strategy: :one_for_one]]}
+      })
+
+    %{worker_state(%{}) | dead_letter_root: root, dead_letter_topic: "dlq", max_redelivery: 1}
+  end
+
+  defp diverted_payloads(acc \\ []) do
+    receive do
+      {:diverted, payload} -> diverted_payloads([payload | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
 
   defp worker_state(answers, opts \\ []) do
     {batch_index_ack_enabled, opts} = Keyword.pop(opts, :batch_index_ack_enabled, false)
@@ -242,7 +370,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     command = %Binary.CommandMessage{
       consumer_id: 1,
       message_id: message_id(),
-      redelivery_count: 0,
+      redelivery_count: Keyword.get(opts, :redelivery_count, 0),
       ack_set: Keyword.get(opts, :ack_set, [])
     }
 
@@ -291,7 +419,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     %{message_id() | batch_index: index, batch_size: 3}
   end
 
-  defp encode_single_message(payload, compacted_out \\ false) do
+  defp encode_single_message(payload, compacted_out) do
     metadata =
       Binary.SingleMessageMetadata.encode(%Binary.SingleMessageMetadata{
         payload_size: byte_size(payload),

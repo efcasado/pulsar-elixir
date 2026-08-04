@@ -811,7 +811,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp send_initial_flow(broker_pid, consumer_id, permits) do
-    send_flow_command(broker_pid, consumer_id, permits, 0)
+    send_flow_command(broker_pid, consumer_id, permits, 0, 0)
   end
 
   defp check_and_refill_permits(%{flow_initial: 0} = state) do
@@ -847,7 +847,7 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits, held_entries \\ 0) do
+  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits, held_entries) do
     flow_command = %Binary.CommandFlow{
       consumer_id: consumer_id,
       messagePermits: permits

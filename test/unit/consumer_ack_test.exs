@@ -20,6 +20,42 @@ defmodule Pulsar.Consumer.AckTest do
     end
   end
 
+  describe "forget/2" do
+    test "drops what an entry had counted off, so a redelivery starts again" do
+      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
+      {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+
+      ack = Ack.forget(ack, [batch_id(1, 3)])
+      assert ack.acked == %{}
+
+      # Counting on from the first delivery would acknowledge the entry an ack early.
+      assert {[], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+      assert {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      assert {[_entry], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+    end
+
+    test "leaves entries the ids do not belong to alone" do
+      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
+
+      ack = Ack.forget(ack, [batch_id(0, 3, entry: 43), id()])
+
+      assert map_size(ack.acked) == 1
+    end
+  end
+
+  describe "entry_id/1" do
+    test "leaves an id that names no batch untouched" do
+      assert Ack.entry_id(id()) == id()
+    end
+
+    test "drops what an ack of the whole entry must not carry" do
+      entry = Ack.entry_id(%{batch_id(2, 3) | ack_set: [0b101]})
+
+      assert {entry.batch_index, entry.batch_size, entry.ack_set} == {-1, nil, []}
+      assert {entry.ledgerId, entry.entryId} == {7, 42}
+    end
+  end
+
   describe "ack sets" do
     test "round trip through the wire encoding, including the sign bit" do
       for size <- [2, 63, 64, 65, 100, 129] do
