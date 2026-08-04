@@ -116,9 +116,8 @@ defmodule Pulsar.HashTest do
       end
     end
 
-    # Encoding is deliberately not checked here. murmur3 and phash2 hash bytes, so validating
-    # UTF-8 would cost a scan of the key on every send to reject something the send rejects
-    # anyway at partition_key's string field.
+    # murmur3 and phash2 hash bytes, so checking UTF-8 would cost a scan per send to reject
+    # what partition_key's string field rejects anyway.
     test "routes a key that is not valid UTF-8 under the byte-oriented schemes" do
       for scheme <- [:murmur3_32, :phash2_legacy] do
         assert Hash.partition(scheme, <<0xFF, 0xFE>>, 8) in 0..7

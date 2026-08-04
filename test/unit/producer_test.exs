@@ -123,6 +123,15 @@ defmodule Pulsar.ProducerTest do
                  {:ok, :erlang.phash2(key, 8)}
       end
     end
+
+    test "raises on a non-binary key rather than reporting it as a dead producer" do
+      root = start_routing_topology()
+      start_partitions(root, 8)
+
+      assert_raise ArgumentError, ~r/:partition_key must be a binary/, fn ->
+        Producer.send(root, "payload", partition_key: :tenant_a)
+      end
+    end
   end
 
   defp send_message(module, producer, message), do: module.send(producer, message, [])

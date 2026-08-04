@@ -113,7 +113,7 @@ defmodule Pulsar.Producer do
 
   - `:partition_key` - decides the partition of a partitioned topic, hashed under the
     producer's `:hashing_scheme`, and is carried with the message so a `:key_shared`
-    subscription can use it
+    subscription can use it. Must be a binary; before 3.0 any term was accepted here
   - `:properties` - a map of user properties carried with the message
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery

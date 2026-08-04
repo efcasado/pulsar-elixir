@@ -52,10 +52,9 @@ defmodule Pulsar.Hash do
   on it: the Pulsar ones take Pulsar's signSafeMod over a sign-masked hash, while `phash2`
   takes its range directly and does not give the same answer as a `rem/2` over `phash2/1`.
 
-  Raises unless the key is a binary, which every scheme needs and which `:erlang.phash2/2`
-  accepted anything in place of. Encoding is not checked: `:murmur3_32` hashes bytes, and a
-  key that is not valid UTF-8 fails the send at `partition_key`'s string field regardless of
-  whether routing looked at it.
+  Raises unless the key is a binary, which `:erlang.phash2/2` accepted anything in place of.
+  Encoding is not checked: `:murmur3_32` hashes bytes, and a key that is not valid UTF-8 fails
+  the send at `partition_key`'s string field either way.
   """
   @spec partition(scheme() | nil, term(), pos_integer()) :: non_neg_integer()
   def partition(scheme, key, partitions) when is_binary(key) do

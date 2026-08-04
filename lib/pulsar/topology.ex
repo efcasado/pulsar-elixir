@@ -283,8 +283,7 @@ defmodule Pulsar.Topology do
   # to route a keyed message and would otherwise pay a second call per send.
   #
   # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root, and answers a
-  # group or a worker as though it had no groups. Pulsar.Producer resolves the kind before
-  # calling, and anything else should use groups/1.
+  # group or a worker as though it had no groups. Use groups/1 for anything else.
   @doc false
   @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
   def routing(root) do
