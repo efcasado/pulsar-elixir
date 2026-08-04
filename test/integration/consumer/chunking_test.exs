@@ -129,6 +129,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert p2_large_message in payloads
   end
 
+  @tag telemetry_listen: [[:pulsar, :producer, :message, :published]]
   test "handles mix of chunked and non-chunked messages" do
     topic = isolated_topic("mixed")
     small_message = "Small message"
@@ -168,6 +169,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     payloads = Enum.map(messages, & &1.payload)
     assert Enum.count(payloads, &(&1 == small_message)) == 2
     assert large_message in payloads
+
+    # An unchunked send groups by the same keys a chunked one does.
+    assert_receive {:telemetry_event, %{event: [:pulsar, :producer, :message, :published], metadata: metadata}}
+    assert metadata.topic == topic
+    assert metadata.base_topic == topic
+    assert metadata.partition == nil
   end
 
   test "producer with chunking disabled cannot send 5MB messages" do

@@ -260,14 +260,16 @@ The consumer emits telemetry events for chunk lifecycle:
 | `[:pulsar, :consumer, :chunk, :discarded]` | `received_chunks`, `num_chunks` | A chunked message is evicted |
 | `[:pulsar, :consumer, :chunk, :expired]` | `age_ms`, `received_chunks`, `num_chunks` | A chunked message times out |
 
-Every consumer event carries `uuid`, `consumer_id`, `topic`, `base_topic`, `partition` and
-`subscription_name` as metadata, and the two that give up on a message also carry `reason`.
+Each of these carries `uuid` alongside the `topic`, `base_topic`, `partition`,
+`subscription_name` and `consumer_id` that every consumer event carries, and the two that give
+up on a message also carry `reason`.
 `received_chunks` against `num_chunks` says how much of the message had arrived before it was
 dropped, and `age_ms` on `:complete` is how long assembly took, which is what
 `:expire_incomplete_chunked_message_after` should be set against.
 
 The producer emits `[:pulsar, :producer, :chunk, :start]`, `:sent` and `:complete`, all carrying
-`uuid`, `producer_id`, `topic`, `base_topic` and `partition`. Their `total_size` and
+`uuid` alongside the `topic`, `base_topic`, `partition`, `producer_id` and `producer_name` that
+every producer event carries. Their `total_size` and
 `chunk_size` count the bytes actually sent, so with `:compression` set they describe the
 compressed message rather than the payload handed to `Pulsar.Producer.send/3`. On the consumer
 side `:complete`'s `total_size` is the reassembled message after decompression, so the two do

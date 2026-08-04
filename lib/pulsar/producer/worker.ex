@@ -30,8 +30,8 @@ defmodule Pulsar.Producer.Worker do
   @chunk_framing_overhead 64
 
   # Stands in while the budget is measured, so a message that turns out not to need chunking
-  # never generates a uuid. Itself a uuid, so it encodes to the length the chunks will use.
-  @uuid_placeholder Uniq.UUID.uuid4()
+  # never generates a uuid. Only its encoded length matters here.
+  @uuid_placeholder "00000000-0000-0000-0000-000000000000"
 
   defstruct [
     :client,
@@ -479,12 +479,7 @@ defmodule Pulsar.Producer.Worker do
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
           %{count: messages_count},
-          %{
-            topic: state.topic,
-            producer_name: state.producer_name,
-            producer_id: state.producer_id,
-            sequence_id: sequence_id
-          }
+          Map.put(producer_metadata(state), :sequence_id, sequence_id)
         )
 
         new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
@@ -526,7 +521,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :complete],
       %{num_chunks: num_chunks},
-      chunk_context(state, uuid)
+      Map.put(producer_metadata(state), :uuid, uuid)
     )
 
     chunked_msg_id = %{
@@ -618,13 +613,14 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
-  defp chunk_context(state, uuid) do
+  # Shared by every event this producer emits, so they all group the same way.
+  defp producer_metadata(state) do
     %{
-      uuid: uuid,
-      producer_id: state.producer_id,
       topic: state.topic,
       base_topic: state.base_topic,
-      partition: state.partition
+      partition: state.partition,
+      producer_id: state.producer_id,
+      producer_name: state.producer_name
     }
   end
 
@@ -704,7 +700,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :sent],
       %{chunk_id: chunk_id, chunk_size: byte_size(chunk_payload)},
-      Map.put(chunk_context(state, uuid), :sequence_id, sequence_id)
+      Map.merge(producer_metadata(state), %{uuid: uuid, sequence_id: sequence_id})
     )
   end
 
@@ -712,12 +708,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :message, :published],
       %{count: 1},
-      %{
-        topic: state.topic,
-        producer_name: state.producer_name,
-        producer_id: state.producer_id,
-        sequence_id: sequence_id
-      }
+      Map.put(producer_metadata(state), :sequence_id, sequence_id)
     )
   end
 
@@ -784,7 +775,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :start],
       %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
-      chunk_context(state, uuid)
+      Map.put(producer_metadata(state), :uuid, uuid)
     )
 
     Enum.map(0..(num_chunks - 1), fn chunk_id ->
