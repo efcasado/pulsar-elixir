@@ -33,10 +33,25 @@ When a producer is configured with chunking enabled:
 ```
 
 Large messages are automatically:
-1. Split into chunks of `max_message_size` bytes
-2. Each chunk is assigned a unique UUID and sequence number
-3. Chunks are sent to the broker individually
-4. Each chunk consumes one flow control permit
+1. Compressed as a whole, when `:compression` is set
+2. Split into chunks of `max_message_size` bytes, capped so that a chunk plus the metadata
+   travelling with it stays inside the limit the broker advertised at connect time
+3. Each chunk is assigned a unique UUID and sequence number
+4. Chunks are sent to the broker individually
+5. Each chunk consumes one flow control permit
+
+Compression runs before the split, so a chunk carries a slice of the compressed message rather
+than being compressed on its own. This is how the Java client frames chunks, so a compressed
+chunked message can cross between the two. It also means a payload that compresses to under
+`max_message_size` is sent whole and never chunked.
+
+> #### `is_chunk` is not visible to consumers {: .info}
+>
+> The producer sets `is_chunk` on the `CommandSend` that carries each chunk, which tells the
+> broker the entry is part of a larger message. It is a field of `CommandSend` only: the broker
+> does not relay it, and the `CommandMessage` a consumer receives has no equivalent. A consumer
+> recognises a chunk from the message metadata instead — a `uuid` together with a `chunk_id` —
+> which is what `Pulsar.Message.chunked?/1` reports.
 
 ### Consumer Side
 
@@ -90,7 +105,10 @@ holding a list of protocol structs per chunk rather than a single one.
 
 > #### Warning {: .warning}
 >
-> Batching and chunking cannot be enabled simultaneously on a producer. When `chunking_enabled: true` is set, batching is automatically disabled. These features are mutually exclusive because they represent different strategies for message transmission.
+> Batching and chunking cannot be enabled simultaneously on a producer: a batch is one entry
+> holding many messages, and a chunked message is one message spread over many entries. Starting
+> a producer with both `batch_enabled: true` and `chunking_enabled: true` raises a validation
+> error rather than silently picking one.
 
 ### Producer Configuration
 
@@ -139,7 +157,10 @@ Chunks may not complete for several reasons:
 1. **Expiration**: Not all chunks arrived within the timeout period
 2. **Queue overflow**: Too many concurrent chunked messages
 
-Incomplete chunks are delivered to your callback with `complete: false`:
+Incomplete chunks are delivered to your callback with `complete: false`. Their `payload` is
+whatever chunks did arrive, concatenated, and under `:compression` those are still compressed:
+a message only decompresses once all of its chunks are back together, so a partial one cannot
+be decompressed at all. Treat the payload of an incomplete message as opaque.
 
 ```elixir
 def handle_message(%Pulsar.Message{chunk_metadata: %{complete: false, error: reason, received_chunks: n}}, state) do
@@ -232,9 +253,30 @@ end
 
 The consumer emits telemetry events for chunk lifecycle:
 
-- `[:pulsar, :consumer, :chunk, :received]` - When a chunk is received
-- `[:pulsar, :consumer, :chunk, :complete]` - When all chunks are assembled
-- `[:pulsar, :consumer, :chunk, :discarded]` - When a chunked message is discarded
-- `[:pulsar, :consumer, :chunk, :expired]` - When a chunked message expires
+| Event | Measurements | When |
+| --- | --- | --- |
+| `[:pulsar, :consumer, :chunk, :received]` | `chunk_id`, `num_chunks` | A chunk arrives |
+| `[:pulsar, :consumer, :chunk, :complete]` | `num_chunks`, `total_size`, `age_ms` | All chunks are assembled |
+| `[:pulsar, :consumer, :chunk, :discarded]` | `received_chunks`, `num_chunks` | A chunked message is evicted |
+| `[:pulsar, :consumer, :chunk, :expired]` | `age_ms`, `received_chunks`, `num_chunks` | A chunked message times out |
+
+Each of these carries `uuid` alongside the `topic`, `base_topic`, `partition`,
+`subscription_name` and `consumer_id` that every consumer event carries, and the two that give
+up on a message also carry `reason`.
+`received_chunks` against `num_chunks` says how much of the message had arrived before it was
+dropped, and `age_ms` on `:complete` is how long assembly took, which is what
+`:expire_incomplete_chunked_message_after` should be set against.
+
+The producer emits `[:pulsar, :producer, :chunk, :start]`, `:sent` and `:complete`, all carrying
+`uuid` alongside the `topic`, `base_topic`, `partition`, `producer_id` and `producer_name` that
+every producer event carries. Their `total_size` and
+`chunk_size` count the bytes actually sent, so with `:compression` set they describe the
+compressed message rather than the payload handed to `Pulsar.Producer.send/3`. On the consumer
+side `:complete`'s `total_size` is the reassembled message after decompression, so the two do
+not line up when compression is on.
+
+`:topic` names a single partition and `:base_topic` the topic it belongs to, so one set of
+events both aggregates over a partitioned topic and breaks down by partition. They are equal,
+and `:partition` is `nil`, when the topic is not partitioned.
 
 See the Telemetry documentation for more details on monitoring chunked messages.

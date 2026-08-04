@@ -25,9 +25,19 @@ defmodule Pulsar.Producer.Worker do
     :UnsupportedVersionError
   ]
 
+  # Checksum and size prefixes around the metadata, the CommandSend framing, and slack for the
+  # chunk counters once their real values are known.
+  @chunk_framing_overhead 64
+
+  # Stands in while the budget is measured, so a message that turns out not to need chunking
+  # never generates a uuid. Only its encoded length matters here.
+  @uuid_placeholder "00000000-0000-0000-0000-000000000000"
+
   defstruct [
     :client,
     :topic,
+    :base_topic,
+    :partition,
     :producer_id,
     :producer_name,
     :broker_pid,
@@ -41,6 +51,7 @@ defmodule Pulsar.Producer.Worker do
     :topic_epoch,
     :chunking_enabled,
     :max_message_size,
+    :broker_max_message_size,
     :batch_enabled,
     {:batch, []},
     {:batched, 0},
@@ -53,12 +64,14 @@ defmodule Pulsar.Producer.Worker do
 
   @type t :: %__MODULE__{
           topic: String.t(),
+          base_topic: String.t(),
+          partition: non_neg_integer() | nil,
           producer_id: integer(),
           producer_name: String.t() | nil,
           broker_pid: pid(),
           broker_monitor: reference(),
           sequence_id: integer(),
-          pending_sends: %{integer() => {GenServer.from(), map()}},
+          pending_sends: %{integer() => {GenServer.from(), map() | nil}},
           access_mode: atom(),
           compression: :none | :lz4 | :zlib | :snappy | :zstd,
           ready: boolean(),
@@ -66,6 +79,7 @@ defmodule Pulsar.Producer.Worker do
           topic_epoch: integer() | nil,
           chunking_enabled: boolean(),
           max_message_size: non_neg_integer(),
+          broker_max_message_size: pos_integer() | nil,
           batch_enabled: boolean(),
           batch: list({map(), GenServer.from()}),
           batched: non_neg_integer(),
@@ -239,34 +253,30 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def handle_call({:send_message, payload, opts}, from, state) do
-    messages = maybe_chunk(payload, opts, state)
+    # Compression covers the whole message and the split comes after it, so a chunk is a slice
+    # of compressed bytes rather than compressed on its own.
+    base_metadata = build_message_metadata(payload, opts, state)
+    compressed_payload = maybe_compress(base_metadata, payload)
 
+    case maybe_chunk(compressed_payload, base_metadata, state) do
+      {:ok, messages} -> publish_messages(messages, base_metadata, from, state)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp publish_messages(messages, base_metadata, from, state) do
     result =
       Enum.reduce_while(messages, {:ok, state}, fn {chunk_payload, chunk_metadata}, {:ok, acc_state} ->
         sequence_id = acc_state.sequence_id + 1
-        command_send = %Binary.CommandSend{producer_id: acc_state.producer_id, sequence_id: sequence_id}
 
-        message_metadata = %Binary.MessageMetadata{
-          producer_name: acc_state.producer_name,
+        command_send = %Binary.CommandSend{
+          producer_id: acc_state.producer_id,
           sequence_id: sequence_id,
-          publish_time: System.system_time(:millisecond),
-          uncompressed_size: byte_size(chunk_payload),
-          compression: Protocol.to_compression(acc_state.compression),
-          partition_key: Keyword.get(opts, :partition_key),
-          ordering_key: Keyword.get(opts, :ordering_key),
-          properties: Protocol.to_key_value_list(Keyword.get(opts, :properties)),
-          event_time: to_timestamp(Keyword.get(opts, :event_time)),
-          deliver_at_time: resolve_deliver_at_time(opts),
-          uuid: Map.get(chunk_metadata, :uuid),
-          chunk_id: Map.get(chunk_metadata, :chunk_id),
-          num_chunks_from_msg: Map.get(chunk_metadata, :num_chunks),
-          total_chunk_msg_size: Map.get(chunk_metadata, :total_chunk_msg_size),
-          schema_version: acc_state.schema_version
+          is_chunk: not is_nil(chunk_metadata)
         }
 
-        compressed_payload = maybe_compress(message_metadata, chunk_payload)
-
-        encoded_message = Protocol.encode(command_send, message_metadata, compressed_payload)
+        message_metadata = apply_chunk_metadata(base_metadata, sequence_id, chunk_metadata)
+        encoded_message = Protocol.encode(command_send, message_metadata, chunk_payload)
 
         case Pulsar.Broker.publish_message(acc_state.broker_pid, encoded_message) do
           :ok ->
@@ -277,7 +287,7 @@ defmodule Pulsar.Producer.Worker do
             {:cont, {:ok, new_state}}
 
           {:error, reason} ->
-            {:halt, {:error, reason}}
+            {:halt, {:error, reason, acc_state}}
         end
       end)
 
@@ -285,8 +295,11 @@ defmodule Pulsar.Producer.Worker do
       {:ok, new_state} ->
         {:noreply, new_state}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      # Rolling the counter back would reissue sequence ids still in flight, which the
+      # broker's deduplication reads as repeats. The pending entries do go: a message missing
+      # chunks can never complete, and its caller already has an error.
+      {:error, reason, acc_state} ->
+        {:reply, {:error, reason}, %{acc_state | pending_sends: state.pending_sends}}
     end
   end
 
@@ -327,7 +340,7 @@ defmodule Pulsar.Producer.Worker do
           %{state | pending_sends: new_pending}
 
         # Chunked message case
-        {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) and map_size(chunk_metadata) > 0 ->
+        {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) ->
           handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state)
 
         # Single message case
@@ -466,12 +479,7 @@ defmodule Pulsar.Producer.Worker do
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
           %{count: messages_count},
-          %{
-            topic: state.topic,
-            producer_name: state.producer_name,
-            producer_id: state.producer_id,
-            sequence_id: sequence_id
-          }
+          Map.put(producer_metadata(state), :sequence_id, sequence_id)
         )
 
         new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
@@ -513,7 +521,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :complete],
       %{num_chunks: num_chunks},
-      %{uuid: uuid, producer_id: state.producer_id}
+      Map.put(producer_metadata(state), :uuid, uuid)
     )
 
     chunked_msg_id = %{
@@ -566,6 +574,7 @@ defmodule Pulsar.Producer.Worker do
               |> Map.put(:ready, Map.get(response, :producer_ready, true))
               |> Map.put(:topic_epoch, response.topic_epoch)
               |> Map.put(:schema_version, response.schema_version)
+              |> Map.put(:broker_max_message_size, broker_max_message_size(broker_pid))
 
             {:ok, state}
           else
@@ -602,6 +611,24 @@ defmodule Pulsar.Producer.Worker do
         {result, stop_metadata}
       end
     )
+  end
+
+  # Shared by every event this producer emits, so they all group the same way.
+  defp producer_metadata(state) do
+    %{
+      topic: state.topic,
+      base_topic: state.base_topic,
+      partition: state.partition,
+      producer_id: state.producer_id,
+      producer_name: state.producer_name
+    }
+  end
+
+  defp broker_max_message_size(broker_pid) do
+    case Pulsar.Broker.get_max_message_size(broker_pid) do
+      size when is_integer(size) and size > 0 -> size
+      _ -> nil
+    end
   end
 
   defp create_producer(broker_pid, state) do
@@ -673,7 +700,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :sent],
       %{chunk_id: chunk_id, chunk_size: byte_size(chunk_payload)},
-      %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id}
+      Map.merge(producer_metadata(state), %{uuid: uuid, sequence_id: sequence_id})
     )
   end
 
@@ -681,48 +708,110 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :message, :published],
       %{count: 1},
-      %{
-        topic: state.topic,
-        producer_name: state.producer_name,
-        producer_id: state.producer_id,
-        sequence_id: sequence_id
-      }
+      Map.put(producer_metadata(state), :sequence_id, sequence_id)
     )
   end
 
-  defp maybe_chunk(payload, _opts, state) do
+  defp apply_chunk_metadata(base_metadata, sequence_id, nil) do
+    %{base_metadata | sequence_id: sequence_id}
+  end
+
+  defp apply_chunk_metadata(base_metadata, sequence_id, chunk_metadata) do
+    %{uuid: uuid, chunk_id: chunk_id, num_chunks: num_chunks, total_chunk_msg_size: total} = chunk_metadata
+
+    %{
+      base_metadata
+      | sequence_id: sequence_id,
+        uuid: uuid,
+        chunk_id: chunk_id,
+        num_chunks_from_msg: num_chunks,
+        total_chunk_msg_size: total
+    }
+  end
+
+  defp build_message_metadata(payload, opts, state) do
+    %Binary.MessageMetadata{
+      producer_name: state.producer_name,
+      # Replaced per chunk, but not left nil: the budget below encodes this to measure it,
+      # and proto2 rejects a nil on a required field.
+      sequence_id: 0,
+      publish_time: System.system_time(:millisecond),
+      uncompressed_size: byte_size(payload),
+      compression: Protocol.to_compression(state.compression),
+      partition_key: Keyword.get(opts, :partition_key),
+      ordering_key: Keyword.get(opts, :ordering_key),
+      properties: Protocol.to_key_value_list(Keyword.get(opts, :properties)),
+      event_time: to_timestamp(Keyword.get(opts, :event_time)),
+      deliver_at_time: resolve_deliver_at_time(opts),
+      schema_version: state.schema_version
+    }
+  end
+
+  defp maybe_chunk(payload, base_metadata, %{chunking_enabled: true} = state) do
     payload_size = byte_size(payload)
 
-    if state.chunking_enabled and payload_size > state.max_message_size do
-      uuid = Uniq.UUID.uuid4()
-      chunk_size = state.max_message_size
-      num_chunks = div(payload_size + chunk_size - 1, chunk_size)
+    case chunk_payload_budget(base_metadata, payload_size, state) do
+      # The metadata on its own fills the broker's limit, and smaller chunks would only
+      # repeat it, so no split can rescue this message.
+      chunk_size when chunk_size < 1 ->
+        {:error, :metadata_too_large}
 
-      Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
+      chunk_size when payload_size > chunk_size ->
+        {:ok, split_into_chunks(payload, payload_size, chunk_size, state)}
 
-      :telemetry.execute(
-        [:pulsar, :producer, :chunk, :start],
-        %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
-        %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
-      )
+      _ ->
+        {:ok, [{payload, nil}]}
+    end
+  end
 
-      Enum.map(0..(num_chunks - 1), fn chunk_id ->
-        offset = chunk_id * chunk_size
-        remaining = payload_size - offset
-        current_chunk_size = min(remaining, chunk_size)
-        <<_skip::binary-size(^offset), chunk_data::binary-size(^current_chunk_size), _rest::binary>> = payload
+  defp maybe_chunk(payload, _base_metadata, _state), do: {:ok, [{payload, nil}]}
 
-        chunk_metadata = %{
-          uuid: uuid,
-          chunk_id: chunk_id,
-          num_chunks: num_chunks,
-          total_chunk_msg_size: payload_size
+  defp split_into_chunks(payload, payload_size, chunk_size, state) do
+    uuid = Uniq.UUID.uuid4()
+    num_chunks = div(payload_size + chunk_size - 1, chunk_size)
+
+    Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
+
+    :telemetry.execute(
+      [:pulsar, :producer, :chunk, :start],
+      %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
+      Map.put(producer_metadata(state), :uuid, uuid)
+    )
+
+    Enum.map(0..(num_chunks - 1), fn chunk_id ->
+      offset = chunk_id * chunk_size
+      chunk_data = binary_part(payload, offset, min(payload_size - offset, chunk_size))
+
+      chunk_metadata = %{
+        uuid: uuid,
+        chunk_id: chunk_id,
+        num_chunks: num_chunks,
+        total_chunk_msg_size: payload_size
+      }
+
+      {chunk_data, chunk_metadata}
+    end)
+  end
+
+  # The broker's limit covers the metadata each chunk repeats as well as its payload.
+  # :max_message_size counts payload bytes only, so the deduction applies to the broker's
+  # limit alone.
+  defp chunk_payload_budget(base_metadata, total_size, state) do
+    case state.broker_max_message_size do
+      broker_limit when is_integer(broker_limit) and broker_limit > 0 ->
+        metadata = %{
+          base_metadata
+          | uuid: @uuid_placeholder,
+            chunk_id: 0,
+            num_chunks_from_msg: 0,
+            total_chunk_msg_size: total_size
         }
 
-        {chunk_data, chunk_metadata}
-      end)
-    else
-      [{payload, %{}}]
+        overhead = byte_size(Binary.MessageMetadata.encode(metadata)) + @chunk_framing_overhead
+        min(state.max_message_size, broker_limit - overhead)
+
+      _ ->
+        state.max_message_size
     end
   end
 

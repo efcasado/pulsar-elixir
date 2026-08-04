@@ -72,12 +72,19 @@ defmodule Pulsar.Producer.Options do
     chunking_enabled: [
       type: :boolean,
       default: false,
-      doc: "Split payloads larger than `:max_message_size` across several messages."
+      doc: """
+      Split payloads larger than `:max_message_size` across several messages. Cannot be
+      combined with `:batch_enabled`. A payload is compressed before it is measured, so
+      one that compresses below the limit is sent whole.
+      """
     ],
     max_message_size: [
       type: :pos_integer,
       default: 5_242_880,
-      doc: "Largest chunk to send, in bytes. Only used when chunking."
+      doc: """
+      Largest chunk payload to send, in bytes. Only used when chunking. Capped by the limit
+      the broker advertises when the producer connects, minus the metadata each chunk carries.
+      """
     ],
     schema: [
       type: :keyword_list,
@@ -118,8 +125,32 @@ defmodule Pulsar.Producer.Options do
   Validates producer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
+  def validate!(opts) do
+    case opts |> NimbleOptions.validate!(@schema) |> validate_chunking() do
+      {:ok, opts} -> opts
+      {:error, error} -> raise error
+    end
+  end
 
   @spec validate(keyword()) :: {:ok, keyword()} | {:error, NimbleOptions.ValidationError.t()}
-  def validate(opts), do: NimbleOptions.validate(opts, @schema)
+  def validate(opts) do
+    with {:ok, opts} <- NimbleOptions.validate(opts, @schema) do
+      validate_chunking(opts)
+    end
+  end
+
+  # A batch is one entry holding many messages and a chunked message is one message spread
+  # over many entries, so a producer cannot do both at once.
+  defp validate_chunking(opts) do
+    if opts[:batch_enabled] and opts[:chunking_enabled] do
+      {:error,
+       %NimbleOptions.ValidationError{
+         key: :chunking_enabled,
+         value: true,
+         message: "invalid value for :chunking_enabled option: cannot be enabled together with :batch_enabled"
+       }}
+    else
+      {:ok, opts}
+    end
+  end
 end

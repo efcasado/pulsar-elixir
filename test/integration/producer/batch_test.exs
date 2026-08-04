@@ -112,6 +112,19 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert [] = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [state.producer_name])
     end
+
+    test "refuses a batch the broker would reject, and keeps the connection" do
+      {_consumer_pid, producer_pid} =
+        setup_producer_consumer("oversized-batch", batch_size: 2, flush_interval: 30_000)
+
+      half_of_an_oversized_batch = String.duplicate("x", 3 * 1024 * 1024)
+
+      assert [{:error, :message_too_large}, {:error, :message_too_large}] =
+               send_concurrently(producer_pid, [half_of_an_oversized_batch, half_of_an_oversized_batch])
+
+      # Reaching the broker with this would have closed the connection.
+      assert [{:ok, _}, {:ok, _}] = send_concurrently(producer_pid, ["a", "b"])
+    end
   end
 
   # Helpers
@@ -146,9 +159,16 @@ defmodule Pulsar.Integration.Producer.BatchTest do
   end
 
   defp send_messages(producer_pid, messages) do
-    tasks = Enum.map(messages, fn msg -> Task.async(fn -> Pulsar.Producer.send(producer_pid, msg) end) end)
-    results = Task.await_many(tasks, 10_000)
+    results = send_concurrently(producer_pid, messages)
     assert Enum.all?(results, &match?({:ok, _}, &1))
+  end
+
+  # A batch only flushes once :batch_size messages are in, so its callers have to be waiting
+  # at the same time.
+  defp send_concurrently(producer_pid, messages) do
+    messages
+    |> Enum.map(fn msg -> Task.async(fn -> Pulsar.Producer.send(producer_pid, msg) end) end)
+    |> Task.await_many(10_000)
   end
 
   defp assert_messages_received(consumer_pid, expected_payloads) do

@@ -25,6 +25,7 @@ defmodule Pulsar.Broker do
     :conn_timeout,
     :auth,
     :max_frame_size,
+    :max_message_size,
     :ping_interval,
     :cleanup_interval,
     :request_timeout,
@@ -47,6 +48,7 @@ defmodule Pulsar.Broker do
           conn_timeout: timeout(),
           auth: list(),
           max_frame_size: pos_integer(),
+          max_message_size: pos_integer() | nil,
           ping_interval: timeout(),
           cleanup_interval: timeout(),
           request_timeout: timeout(),
@@ -64,7 +66,8 @@ defmodule Pulsar.Broker do
     buffer: <<>>,
     requests: %{},
     consumers: %{},
-    producers: %{}
+    producers: %{},
+    max_message_size: nil
   }
 
   @client_version "Pulsar Elixir Client"
@@ -172,6 +175,15 @@ defmodule Pulsar.Broker do
   """
   @spec get_producers(GenServer.server()) :: %{integer() => pid()}
   def get_producers(broker), do: :gen_statem.call(broker, :get_producers)
+
+  @doc """
+  Gets the largest message this broker accepts, as advertised in `CommandConnected`.
+
+  `nil` until the handshake completes, and again after a reconnection until the new
+  connection has handshaken.
+  """
+  @spec get_max_message_size(GenServer.server()) :: pos_integer() | nil
+  def get_max_message_size(broker), do: :gen_statem.call(broker, :get_max_message_size)
 
   @doc """
   Gracefully stops the broker by closing all consumers/producers first.
@@ -545,6 +557,13 @@ defmodule Pulsar.Broker do
     end
   end
 
+  # An oversized frame is answered by closing the connection, which would take down every
+  # consumer and producer registered here.
+  def connected({:call, from}, {:publish_message, encoded_message}, %__MODULE__{max_message_size: limit} = broker)
+      when is_integer(limit) and byte_size(encoded_message) > limit do
+    {:keep_state, broker, [{:reply, from, {:error, :message_too_large}}]}
+  end
+
   def connected({:call, from}, {:publish_message, encoded_message}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 
@@ -647,6 +666,11 @@ defmodule Pulsar.Broker do
     {:keep_state, broker, actions}
   end
 
+  def connected({:call, from}, :get_max_message_size, broker) do
+    actions = [{:reply, from, broker.max_message_size}]
+    {:keep_state, broker, actions}
+  end
+
   def connected({:call, from}, request, broker) do
     Logger.debug("Handling request #{inspect(request)}")
     actions = [{:reply, from, {:ok, :handled}}]
@@ -668,12 +692,12 @@ defmodule Pulsar.Broker do
     :keep_state_and_data
   end
 
-  defp handle_command(%Binary.CommandConnected{} = cmd, _broker) do
+  defp handle_command(%Binary.CommandConnected{} = cmd, broker) do
     Logger.info(
       "Successfully connected to broker: protocol_version=#{cmd.protocol_version}, server_version=#{cmd.server_version}"
     )
 
-    :keep_state_and_data
+    {:keep_state, %{broker | max_message_size: cmd.max_message_size}}
   end
 
   defp handle_command(%Binary.CommandLookupTopicResponse{request_id: request_id} = command, broker) do
