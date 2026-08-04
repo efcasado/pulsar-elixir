@@ -72,8 +72,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.num_chunks == 2
 
     # Workers pick these up from their options by name, so a rename empties every event.
-    assert_receive {:telemetry_event, %{event: [:pulsar, :producer, :chunk, :start], metadata: metadata}}
-    assert metadata.topic == topic
+    assert_receive {:telemetry_event,
+                    %{event: [:pulsar, :producer, :chunk, :start], metadata: %{topic: ^topic} = metadata}}
+
     assert metadata.base_topic == topic
     assert metadata.partition == nil
   end
@@ -171,8 +172,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert large_message in payloads
 
     # An unchunked send groups by the same keys a chunked one does.
-    assert_receive {:telemetry_event, %{event: [:pulsar, :producer, :message, :published], metadata: metadata}}
-    assert metadata.topic == topic
+    assert_receive {:telemetry_event,
+                    %{event: [:pulsar, :producer, :message, :published], metadata: %{topic: ^topic} = metadata}}
+
     assert metadata.base_topic == topic
     assert metadata.partition == nil
   end
@@ -502,11 +504,10 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
                     %{
                       event: [:pulsar, :consumer, :chunk, :expired],
                       measurements: measurements,
-                      metadata: metadata
+                      metadata: %{uuid: "test-uuid-expired"}
                     }}
 
     assert measurements.received_chunks == 2
-    assert metadata.uuid == "test-uuid-expired"
 
     updated_state = :sys.get_state(consumer)
     refute Map.has_key?(updated_state.chunked_message_contexts, "test-uuid-expired")
@@ -623,7 +624,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
                     %{
                       event: [:pulsar, :consumer, :chunk, :discarded],
                       measurements: measurements,
-                      metadata: metadata
+                      metadata: %{uuid: "fake-uuid-oldest"} = metadata
                     }},
                    2000
 
