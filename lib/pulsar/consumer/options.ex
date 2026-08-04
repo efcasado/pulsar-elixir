@@ -145,6 +145,10 @@ defmodule Pulsar.Consumer.Options do
       A diverted message keeps its key, ordering key, properties and event time, and gains
       `REAL_TOPIC` and `ORIGIN_MESSAGE_ID` properties naming where it came from.
 
+      A batch diverts as one entry, so if any message in it fails to publish the entry is
+      redelivered and the rest are diverted a second time. Deduplicate on `ORIGIN_MESSAGE_ID`
+      if that matters.
+
       Diverting replaces delivery rather than accompanying it, so neither
       `c:Pulsar.Consumer.Callback.handle_message/2` nor
       `c:Pulsar.Consumer.Callback.handle_invalid_message/2` is called for a message that

@@ -163,6 +163,9 @@ defmodule Pulsar.Consumer do
 
   `:batch_index_ack_enabled` narrows that to just the unacked messages, on brokers configured
   for it.
+
+  Every message must be acked or nacked eventually. One that is neither holds its entry's
+  bookkeeping for the life of the consumer.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)

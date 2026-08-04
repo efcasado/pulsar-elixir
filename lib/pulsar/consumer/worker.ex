@@ -406,26 +406,13 @@ defmodule Pulsar.Consumer.Worker do
   @impl true
   def handle_info(:trigger_redelivery, state) do
     new_state =
-      if Ack.nacked_count(state.acks) > 0 do
-        {nacked_list, acks} = Ack.take_nacked(state.acks)
+      case Ack.take_nacked(state.acks) do
+        {[], _acks} ->
+          state
 
-        redeliver_command = %Binary.CommandRedeliverUnacknowledgedMessages{
-          consumer_id: state.consumer_id,
-          message_ids: nacked_list
-        }
-
-        :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
-        Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
-
-        :telemetry.execute(
-          [:pulsar, :consumer, :redelivery, :requested],
-          %{count: length(nacked_list)},
-          consumer_metadata(state)
-        )
-
-        %{state | acks: acks}
-      else
-        state
+        {entry_ids, acks} ->
+          request_redelivery(state, entry_ids)
+          %{state | acks: acks}
       end
 
     schedule_redelivery(state.redelivery_interval)
@@ -510,7 +497,7 @@ defmodule Pulsar.Consumer.Worker do
                                                     {acc_state, diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
-        case publish_to_dead_letter(producer, message, state.topic) do
+        case publish_to_dead_letter(producer, message, acc_state.topic) do
           :ok ->
             acked_state = ack_message_ids(acc_state, message_ids_list, validation_error(message))
             {acked_state, diverted + 1, nacked_acc, reason}
@@ -578,8 +565,24 @@ defmodule Pulsar.Consumer.Worker do
     track_nacked(new_state, nacked_ids)
   end
 
-  # :trigger_redelivery drains this set and only fires when a redelivery interval is configured,
-  # so without one an id is deliberately not tracked rather than left in a set nothing empties.
+  defp request_redelivery(state, entry_ids) do
+    redeliver_command = %Binary.CommandRedeliverUnacknowledgedMessages{
+      consumer_id: state.consumer_id,
+      message_ids: entry_ids
+    }
+
+    :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
+    Logger.warning("Requested redelivery of #{length(entry_ids)} NACKed messages")
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :redelivery, :requested],
+      %{count: length(entry_ids)},
+      consumer_metadata(state)
+    )
+  end
+
+  # :trigger_redelivery only fires when a redelivery interval is configured, so without one an
+  # id is deliberately not recorded.
   defp track_nacked(state, []), do: state
 
   defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
@@ -903,7 +906,7 @@ defmodule Pulsar.Consumer.Worker do
     messages =
       unwrapped_messages
       |> Enum.with_index()
-      |> Enum.reject(fn {_unwrapped, index} -> Ack.acknowledged?(outstanding, index) end)
+      |> Enum.filter(fn {_unwrapped, index} -> Ack.deliverable?(outstanding, index) end)
       |> Enum.map(fn {{single_metadata, payload}, index} ->
         # The width travels on the id so a deferred ack, arriving with nothing else, can still
         # tell when its entry is complete.

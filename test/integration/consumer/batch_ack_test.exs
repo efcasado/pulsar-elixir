@@ -68,6 +68,25 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
     refute_receive {:received, "msg-1"}, 2_000
   end
 
+  # The second consumer never acks msg-1, so every ack it sends re-asserts msg-1 as outstanding.
+  # The entry only clears if the broker ands those sets into what it has already deleted.
+  test "batch index acks clear the entry once every message has been acked, across consumers" do
+    topic = @topic <> "-index-complete"
+    subscription = "index-complete-sub"
+    :ok = produce_one_batch(topic, "index-complete")
+
+    consumer = start_consumer(topic, subscription, [ack: ["msg-1"]], batch_index_ack_enabled: true)
+    for payload <- @batch, do: assert_receive({:received, ^payload}, 10_000)
+    :ok = Pulsar.Consumer.stop(consumer, client: @client)
+
+    consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
+    for payload <- tl(@batch), do: assert_receive({:received, ^payload}, 10_000)
+    :ok = Pulsar.Consumer.stop(consumer, client: @client)
+
+    _consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
+    refute_receive {:received, _payload}, 3_000
+  end
+
   test "acking every message of a batch acknowledges its entry" do
     topic = @topic <> "-complete"
     subscription = "complete-sub"

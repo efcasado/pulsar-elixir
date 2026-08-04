@@ -23,30 +23,34 @@ defmodule Pulsar.Consumer.AckTest do
   describe "ack sets" do
     test "round trip through the wire encoding, including the sign bit" do
       for size <- [2, 63, 64, 65, 100, 129] do
-        outstanding = MapSet.new(Enum.take_every(0..(size - 1), 3))
+        owed = Enum.take_every(0..(size - 1), 3)
+        decoded = Ack.outstanding(encode(owed, size))
 
-        assert Ack.outstanding(encode(outstanding, size)) == outstanding
+        for index <- 0..(size - 1) do
+          assert Ack.deliverable?(decoded, index) == index in owed
+        end
       end
     end
 
     test "writes a word with its top bit set as a negative int64" do
       # Bits 1..63 outstanding of a 64-message entry.
-      assert [word] = encode(MapSet.new(1..63), 64)
+      assert [word] = encode(1..63, 64)
       assert word == -2
       assert word >= -0x8000_0000_0000_0000
     end
 
     test "survives a protobuf round trip, so the broker sees what was meant" do
-      outstanding = MapSet.new([0, 63, 64, 99])
+      owed = [0, 63, 64, 99]
 
-      message_id = %{id() | batch_index: -1, batch_size: 100, ack_set: encode(outstanding, 100)}
+      message_id = %{id() | batch_index: -1, batch_size: 100, ack_set: encode(owed, 100)}
       decoded = Binary.MessageIdData.decode(Binary.MessageIdData.encode(message_id))
 
-      assert Ack.outstanding(decoded.ack_set) == outstanding
+      assert Ack.outstanding(decoded.ack_set) == Ack.outstanding(encode(owed, 100))
+      for index <- owed, do: assert(Ack.deliverable?(Ack.outstanding(decoded.ack_set), index))
     end
 
-    test "treats every message as outstanding when the entry carries no set" do
-      refute Ack.acknowledged?(nil, 7)
+    test "treats every message as deliverable when the entry carries no set" do
+      assert Ack.deliverable?(nil, 7)
     end
   end
 
@@ -57,15 +61,15 @@ defmodule Pulsar.Consumer.AckTest do
 
       assert ack.acked == %{}
       assert {[%{batch_index: -1, entryId: 42}], ack} = Ack.take_nacked(ack)
-      assert Ack.nacked_count(ack) == 0
+      assert {[], _ack} = Ack.take_nacked(ack)
     end
   end
 
   ## Helpers
 
-  # The set the broker would be sent once everything outside `outstanding` has been acked.
-  defp encode(outstanding, size) do
-    acked = Enum.reject(0..(size - 1), &MapSet.member?(outstanding, &1))
+  # The set the broker would be sent once everything outside `owed` has been acked.
+  defp encode(owed, size) do
+    acked = Enum.reject(0..(size - 1), &(&1 in owed))
 
     {ids, _ack} =
       Enum.reduce(acked, {[], Ack.new(true)}, fn index, {ids, ack} ->

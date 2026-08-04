@@ -15,18 +15,22 @@ defmodule Pulsar.Consumer.Ack do
 
   defstruct [{:acked, %{}}, {:nacked, MapSet.new()}, {:batch_index_ack_enabled, false}]
 
-  @type entry_key :: {non_neg_integer(), non_neg_integer(), integer()}
+  @type entry_key :: {non_neg_integer(), non_neg_integer()}
+
+  @typedoc "Messages of an entry, one bit per batch index."
+  @type bitset :: non_neg_integer()
+
   @type message_id :: Binary.MessageIdData.t()
 
   @type t :: %__MODULE__{
-          acked: %{optional(entry_key()) => MapSet.t(non_neg_integer())},
+          acked: %{optional(entry_key()) => bitset()},
           nacked: MapSet.t(message_id()),
           batch_index_ack_enabled: boolean()
         }
 
   @spec new(boolean()) :: t()
   def new(batch_index_ack_enabled \\ false) do
-    %__MODULE__{batch_index_ack_enabled: !!batch_index_ack_enabled}
+    %__MODULE__{batch_index_ack_enabled: batch_index_ack_enabled}
   end
 
   @doc """
@@ -95,7 +99,8 @@ defmodule Pulsar.Consumer.Ack do
       ...>   %MessageIdData{ledgerId: 7, entryId: 42, batch_index: index, batch_size: 3}
       ...> end
       iex> acks = Ack.record_nack(Ack.new(), [in_batch.(0), in_batch.(2)])
-      iex> Ack.nacked_count(acks)
+      iex> {ids, _acks} = Ack.take_nacked(acks)
+      iex> length(ids)
       1
   """
   @spec record_nack(t(), [message_id()]) :: t()
@@ -121,9 +126,6 @@ defmodule Pulsar.Consumer.Ack do
     %{ack | acked: Map.drop(ack.acked, keys)}
   end
 
-  @spec nacked_count(t()) :: non_neg_integer()
-  def nacked_count(%__MODULE__{nacked: nacked}), do: MapSet.size(nacked)
-
   @spec take_nacked(t()) :: {[message_id()], t()}
   def take_nacked(%__MODULE__{nacked: nacked} = ack) do
     {MapSet.to_list(nacked), %{ack | nacked: MapSet.new()}}
@@ -140,40 +142,43 @@ defmodule Pulsar.Consumer.Ack do
       {-1, nil}
   """
   @spec entry_id(message_id()) :: message_id()
-  def entry_id(%{batch_index: index} = message_id) when is_integer(index) and index >= 0 do
+  def entry_id(%Binary.MessageIdData{batch_index: index} = message_id) when is_integer(index) and index >= 0 do
     %{message_id | batch_index: -1, batch_size: nil, ack_set: []}
   end
 
   def entry_id(message_id), do: message_id
 
   @doc """
-  The messages still owed in a redelivered entry, or `nil` when it carries no set and every
+  The messages still owed in a redelivered entry, or `nil` when it carries none and every
   message in it is to be delivered.
 
-  Set bits are the messages outstanding, so a three-message entry with only its middle
-  message left owed arrives as `0b010`:
+  A partly acknowledged entry is redelivered whole, so pair this with `deliverable?/2` to skip
+  the messages that have already been acked:
 
-      iex> Pulsar.Consumer.Ack.outstanding([0b010])
-      MapSet.new([1])
+      iex> alias Pulsar.Consumer.Ack
+      iex> owed = Ack.outstanding([0b010])
+      iex> {Ack.deliverable?(owed, 0), Ack.deliverable?(owed, 1)}
+      {false, true}
 
-      iex> Pulsar.Consumer.Ack.outstanding([])
-      nil
+      iex> alias Pulsar.Consumer.Ack
+      iex> Ack.deliverable?(Ack.outstanding([]), 7)
+      true
   """
-  @spec outstanding([integer()] | nil) :: MapSet.t(non_neg_integer()) | nil
+  @spec outstanding([integer()] | nil) :: bitset() | nil
   def outstanding(ack_set) when ack_set in [nil, []], do: nil
-  def outstanding(ack_set), do: decode_ack_set(ack_set)
+  def outstanding(words), do: decode_ack_set(words)
 
-  @spec acknowledged?(MapSet.t(non_neg_integer()) | nil, non_neg_integer()) :: boolean()
-  def acknowledged?(nil, _index), do: false
-  def acknowledged?(outstanding, index), do: not MapSet.member?(outstanding, index)
+  @spec deliverable?(bitset() | nil, non_neg_integer()) :: boolean()
+  def deliverable?(nil, _index), do: true
+  def deliverable?(outstanding, index), do: Bitwise.band(outstanding, Bitwise.bsl(1, index)) != 0
 
   ## Private
 
   defp count_off(ack, {key, index, size}, message_id, ackable) do
-    acked = ack.acked |> Map.get(key, MapSet.new()) |> MapSet.put(index)
+    acked = Bitwise.bor(Map.get(ack.acked, key, 0), Bitwise.bsl(1, index))
 
     cond do
-      MapSet.size(acked) == size ->
+      acked == every_message(size) ->
         {[entry_id(message_id) | ackable], %{ack | acked: Map.delete(ack.acked, key)}}
 
       ack.batch_index_ack_enabled ->
@@ -185,9 +190,9 @@ defmodule Pulsar.Consumer.Ack do
   end
 
   # A batch of one needs no tally: its entry is complete on the single ack it takes.
-  defp batch_entry(%{batch_index: index, batch_size: size} = message_id)
+  defp batch_entry(%Binary.MessageIdData{batch_index: index, batch_size: size} = message_id)
        when is_integer(index) and index >= 0 and is_integer(size) and size > 1 do
-    {{message_id.ledgerId, message_id.entryId, message_id.partition}, index, size}
+    {{message_id.ledgerId, message_id.entryId}, index, size}
   end
 
   defp batch_entry(_message_id), do: nil
@@ -200,56 +205,20 @@ defmodule Pulsar.Consumer.Ack do
   # Set bits are the messages still outstanding, not the acked ones: the broker starts an entry
   # with every bit set and deletes it once nothing is left.
   defp encode_ack_set(acked, size) do
-    words = div(size - 1, @word_bits) + 1
+    outstanding = Bitwise.band(Bitwise.bnot(acked), every_message(size))
+    bits = word_count(size) * @word_bits
 
-    0..(words - 1)
-    |> Enum.map(&ack_set_word(acked, &1, size))
-    |> trim_trailing_zeroes()
+    for <<(word::little-signed-size(@word_bits) <- <<outstanding::little-size(bits)>>)>>, do: word
   end
 
-  defp ack_set_word(acked, word, size) do
-    base = word * @word_bits
-
-    bits =
-      Enum.reduce(0..(@word_bits - 1), 0, fn bit, acc ->
-        index = base + bit
-
-        if index < size and not MapSet.member?(acked, index) do
-          Bitwise.bor(acc, Bitwise.bsl(1, bit))
-        else
-          acc
-        end
-      end)
-
-    to_signed(bits)
+  defp decode_ack_set(ack_set) do
+    binary = for word <- ack_set, into: <<>>, do: <<word::little-signed-size(@word_bits)>>
+    bits = bit_size(binary)
+    <<outstanding::little-size(^bits)>> = binary
+    outstanding
   end
 
-  defp decode_ack_set(words) do
-    words
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {word, word_index} ->
-      unsigned = to_unsigned(word)
-      base = word_index * @word_bits
+  defp every_message(size), do: Bitwise.bsl(1, size) - 1
 
-      for bit <- 0..(@word_bits - 1), Bitwise.band(unsigned, Bitwise.bsl(1, bit)) != 0, do: base + bit
-    end)
-    |> MapSet.new()
-  end
-
-  defp to_signed(word) do
-    <<signed::signed-size(@word_bits)>> = <<word::size(@word_bits)>>
-    signed
-  end
-
-  defp to_unsigned(word) do
-    <<unsigned::size(@word_bits)>> = <<word::signed-size(@word_bits)>>
-    unsigned
-  end
-
-  defp trim_trailing_zeroes(words) do
-    words
-    |> Enum.reverse()
-    |> Enum.drop_while(&(&1 == 0))
-    |> Enum.reverse()
-  end
+  defp word_count(size), do: div(size - 1, @word_bits) + 1
 end
