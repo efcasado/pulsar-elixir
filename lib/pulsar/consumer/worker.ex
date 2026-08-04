@@ -365,8 +365,8 @@ defmodule Pulsar.Consumer.Worker do
         {command, metadata, payload, broker_metadata} ->
           {state_after, msgs} =
             if chunked_message?(metadata) do
-              # A chunk is a slice of the compressed message, so it only decompresses once
-              # its siblings have been put back around it.
+              # A chunk is a slice of the compressed message, so it cannot be decompressed
+              # before the rest of the slices are back around it.
               maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
             else
               payload = maybe_uncompress(metadata, payload)
@@ -1075,8 +1075,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp complete_chunked_message(state, uuid, ctx, num_chunks) do
-    # Every chunk repeats the metadata of the message it came from, so any of them describes
-    # how the reassembled payload was compressed.
+    # Every chunk repeats the metadata of the message it came from, so any of them says how
+    # the reassembled payload was compressed.
     assembled_payload = ChunkedMessageContext.assemble_payload(ctx)
     complete_payload = maybe_uncompress(hd(ctx.metadatas), assembled_payload)
 

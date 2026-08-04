@@ -33,17 +33,17 @@ When a producer is configured with chunking enabled:
 ```
 
 Large messages are automatically:
-1. Compressed as a whole, if `:compression` is set, and then split — so a chunk is a slice of
-   the compressed message rather than a separately compressed slice, which is what every other
-   Pulsar client expects on the wire
-2. Split into chunks of `max_message_size` bytes, capped so that a chunk plus the message
-   metadata that travels with it stays inside the limit the broker advertised at connect time
+1. Compressed as a whole, when `:compression` is set
+2. Split into chunks of `max_message_size` bytes, capped so that a chunk plus the metadata
+   travelling with it stays inside the limit the broker advertised at connect time
 3. Each chunk is assigned a unique UUID and sequence number
 4. Chunks are sent to the broker individually
 5. Each chunk consumes one flow control permit
 
-Because the split happens after compression, a payload that compresses to under
-`max_message_size` is sent as a single message and is never chunked at all.
+Compression runs before the split, so a chunk carries a slice of the compressed message rather
+than being compressed on its own. This is how the Java client frames chunks, so a compressed
+chunked message can cross between the two. It also means a payload that compresses to under
+`max_message_size` is sent whole and never chunked.
 
 ### Consumer Side
 

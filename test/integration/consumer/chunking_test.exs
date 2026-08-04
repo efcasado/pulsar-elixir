@@ -257,8 +257,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       assert received_msg.chunk_metadata.complete == true
       assert received_msg.chunk_metadata.num_chunks > 1
 
-      # Every chunk describes the message it belongs to, not the slice it carries, which is
-      # what lets a consumer size the buffer before the last chunk arrives.
+      # Every chunk describes the message it belongs to, not the slice it carries.
       for metadata <- received_msg.raw.metadata do
         assert metadata.uncompressed_size == byte_size(large_message)
         assert metadata.total_chunk_msg_size == hd(received_msg.raw.metadata).total_chunk_msg_size
@@ -267,8 +266,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "compresses before deciding whether to chunk" do
-    # Compresses to far under :max_message_size, so splitting the compressed bytes leaves
-    # nothing to split. Splitting first would have sent 64 chunks.
+    # Compresses to well under :max_message_size, so there is nothing left to split.
+    # Splitting first would have sent 64 chunks.
     compressible_message = String.duplicate("a", 65_536)
 
     {:ok, producer} =

@@ -180,7 +180,7 @@ defmodule Pulsar.Broker do
   Gets the largest message this broker accepts, as advertised in `CommandConnected`.
 
   `nil` until the handshake completes, and again after a reconnection until the new
-  connection has been handshaken.
+  connection has handshaken.
   """
   @spec get_max_message_size(GenServer.server()) :: pos_integer() | nil
   def get_max_message_size(broker), do: :gen_statem.call(broker, :get_max_message_size)

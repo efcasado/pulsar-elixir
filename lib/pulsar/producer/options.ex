@@ -140,7 +140,7 @@ defmodule Pulsar.Producer.Options do
   end
 
   # A batch is one entry holding many messages and a chunked message is one message spread
-  # over many entries, so a producer cannot do both at once. Java refuses the pair as well.
+  # over many entries, so a producer cannot do both at once.
   defp validate_chunking(opts) do
     if opts[:batch_enabled] and opts[:chunking_enabled] do
       {:error,

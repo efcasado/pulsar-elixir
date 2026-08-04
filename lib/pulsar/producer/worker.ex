@@ -25,8 +25,8 @@ defmodule Pulsar.Producer.Worker do
     :UnsupportedVersionError
   ]
 
-  # Checksum and size prefixes around the metadata, the CommandSend framing, and room for the
-  # chunk counters to grow a byte or two once their real values are known.
+  # Checksum and size prefixes around the metadata, the CommandSend framing, and slack for the
+  # chunk counters once their real values are known.
   @chunk_framing_overhead 64
 
   defstruct [
@@ -245,9 +245,8 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def handle_call({:send_message, payload, opts}, from, state) do
-    # Pulsar compresses the whole message and splits the compressed bytes, so a chunk is a
-    # slice of a compressed stream rather than a compressed slice. Every chunk repeats the
-    # metadata of the message it belongs to, which the consumer needs to put it back together.
+    # Compression covers the whole message and the split comes after it, so a chunk is a slice
+    # of compressed bytes rather than compressed on its own.
     base_metadata = build_message_metadata(payload, opts, state)
     compressed_payload = maybe_compress(base_metadata, payload)
     messages = maybe_chunk(compressed_payload, base_metadata, state)
@@ -757,9 +756,9 @@ defmodule Pulsar.Producer.Worker do
 
   defp maybe_chunk(payload, _base_metadata, _state), do: [{payload, %{}}]
 
-  # A chunk travels with a full copy of the message metadata, and the broker's limit covers
-  # both. :max_message_size stays a budget for payload bytes, so only the broker's own limit
-  # has the metadata and framing taken out of it.
+  # The broker's limit covers the metadata each chunk repeats as well as its payload.
+  # :max_message_size counts payload bytes only, so the deduction applies to the broker's
+  # limit alone.
   defp chunk_payload_budget(base_metadata, uuid, total_size, state) do
     case state.broker_max_message_size do
       broker_limit when is_integer(broker_limit) and broker_limit > 0 ->
