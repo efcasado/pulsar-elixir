@@ -83,6 +83,32 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       end
     end
 
+    # A batch spends one sequence id per message it carries, so the next batch has to start
+    # past the whole range. Starting at the previous batch's first id repeats the ids consumers
+    # see and understates the high-water mark the broker reports back on reconnect.
+    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    test "consecutive batches claim sequence id ranges that do not overlap" do
+      {consumer_pid, producer_pid} =
+        setup_producer_consumer("sequence-ids", batch_size: 3, flush_interval: 30_000)
+
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+
+      messages = Enum.map(1..9, &"seq-#{&1}")
+      send_messages(producer_pid, messages)
+
+      assert_messages_received(consumer_pid, messages)
+
+      assert :sys.get_state(producer).sequence_id == 9
+
+      sequence_ids =
+        consumer_pid
+        |> DummyConsumer.get_messages()
+        |> Enum.map(& &1.raw.single_metadata.sequence_id)
+        |> Enum.sort()
+
+      assert sequence_ids == Enum.to_list(1..9)
+    end
+
     @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
     test "flushes single message batch on timer" do
       {consumer_pid, producer_pid} =
