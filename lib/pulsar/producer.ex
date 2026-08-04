@@ -109,6 +109,13 @@ defmodule Pulsar.Producer do
 
   Returns `{:error, :not_ready}` while its topic topology is being discovered.
 
+  A message the broker would reject for its size is refused here instead, because the broker
+  answers an oversized frame by closing a connection every producer and consumer on that
+  broker shares. Without `:chunking_enabled` that is `{:error, :message_too_large}`, and a
+  batch too big to flush answers the same to each of its callers. With `:chunking_enabled` the
+  payload is split to fit, but `{:error, :metadata_too_large}` still comes back when
+  `:properties` and the rest of the metadata leave no room for a payload at all.
+
   ## Options
 
   - `:partition_key` - decides the partition of a partitioned topic, hashed under the

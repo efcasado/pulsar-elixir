@@ -173,7 +173,14 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert byte_size(very_large_message) == 6_291_456
 
-    assert {:error, _reason} = Pulsar.Producer.send(producer, very_large_message)
+    Utils.wait_for(
+      fn -> Pulsar.Producer.send(producer, very_large_message) end,
+      until: &(&1 == {:error, :message_too_large}),
+      description: "the producer to refuse the oversized message"
+    )
+
+    # Reaching the broker with this would have closed the connection.
+    assert {:ok, _msg_id} = Pulsar.Producer.send(producer, "still connected")
   end
 
   test "producer with chunking enabled can send and receive messages larger than 5MB" do
@@ -336,6 +343,25 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     [received_msg] = @consumer_callback.get_messages(consumer)
     assert received_msg.payload == very_large_message
     assert Pulsar.Message.properties(received_msg) == bulky_properties
+  end
+
+  test "refuses a message whose metadata alone exceeds the broker's limit" do
+    # Has to fail in the producer: reaching the broker with this costs the whole connection.
+    oversized_properties = %{"padding" => String.duplicate("p", 6_291_456)}
+
+    {:ok, producer} =
+      Pulsar.Producer.start(
+        @topic,
+        client: @client,
+        name: :chunking_oversized_metadata_producer,
+        chunking_enabled: true
+      )
+
+    Utils.wait_for(
+      fn -> Pulsar.Producer.send(producer, "small payload", properties: oversized_properties) end,
+      until: &(&1 == {:error, :metadata_too_large}),
+      description: "the producer to refuse the oversized metadata"
+    )
   end
 
   @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :expired]]

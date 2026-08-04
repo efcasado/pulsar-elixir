@@ -249,8 +249,14 @@ defmodule Pulsar.Producer.Worker do
     # of compressed bytes rather than compressed on its own.
     base_metadata = build_message_metadata(payload, opts, state)
     compressed_payload = maybe_compress(base_metadata, payload)
-    messages = maybe_chunk(compressed_payload, base_metadata, state)
 
+    case maybe_chunk(compressed_payload, base_metadata, state) do
+      {:ok, messages} -> publish_messages(messages, base_metadata, from, state)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp publish_messages(messages, base_metadata, from, state) do
     result =
       Enum.reduce_while(messages, {:ok, state}, fn {chunk_payload, chunk_metadata}, {:ok, acc_state} ->
         sequence_id = acc_state.sequence_id + 1
@@ -272,7 +278,7 @@ defmodule Pulsar.Producer.Worker do
 
         encoded_message = Protocol.encode(command_send, message_metadata, chunk_payload)
 
-        case Pulsar.Broker.publish_message(acc_state.broker_pid, encoded_message) do
+        case publish_frame(acc_state, encoded_message) do
           :ok ->
             emit_message_sent(chunk_metadata, chunk_payload, sequence_id, acc_state)
 
@@ -465,7 +471,7 @@ defmodule Pulsar.Producer.Worker do
 
     encoded_frame = Protocol.encode(command_send, message_metadata, compressed_payload)
 
-    case Pulsar.Broker.publish_message(state.broker_pid, encoded_frame) do
+    case publish_frame(state, encoded_frame) do
       :ok ->
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
@@ -609,6 +615,18 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
+  # An oversized frame is answered by closing the connection rather than by refusing the send,
+  # and that connection carries every other producer and consumer on this broker.
+  defp publish_frame(state, encoded_frame) do
+    case state.broker_max_message_size do
+      limit when is_integer(limit) and byte_size(encoded_frame) > limit ->
+        {:error, :message_too_large}
+
+      _ ->
+        Pulsar.Broker.publish_message(state.broker_pid, encoded_frame)
+    end
+  end
+
   defp broker_max_message_size(broker_pid) do
     case Pulsar.Broker.get_max_message_size(broker_pid) do
       size when is_integer(size) and size > 0 -> size
@@ -721,40 +739,50 @@ defmodule Pulsar.Producer.Worker do
   defp maybe_chunk(payload, base_metadata, %{chunking_enabled: true} = state) do
     payload_size = byte_size(payload)
     uuid = Uniq.UUID.uuid4()
-    chunk_size = chunk_payload_budget(base_metadata, uuid, payload_size, state)
 
-    if payload_size > chunk_size do
-      num_chunks = div(payload_size + chunk_size - 1, chunk_size)
+    case chunk_payload_budget(base_metadata, uuid, payload_size, state) do
+      # The metadata on its own fills the broker's limit, and smaller chunks would only
+      # repeat it, so no split can rescue this message.
+      chunk_size when chunk_size < 1 ->
+        {:error, :metadata_too_large}
 
-      Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
+      chunk_size when payload_size > chunk_size ->
+        {:ok, split_into_chunks(payload, payload_size, uuid, chunk_size, state)}
 
-      :telemetry.execute(
-        [:pulsar, :producer, :chunk, :start],
-        %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
-        %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
-      )
-
-      Enum.map(0..(num_chunks - 1), fn chunk_id ->
-        offset = chunk_id * chunk_size
-        remaining = payload_size - offset
-        current_chunk_size = min(remaining, chunk_size)
-        <<_skip::binary-size(^offset), chunk_data::binary-size(^current_chunk_size), _rest::binary>> = payload
-
-        chunk_metadata = %{
-          uuid: uuid,
-          chunk_id: chunk_id,
-          num_chunks: num_chunks,
-          total_chunk_msg_size: payload_size
-        }
-
-        {chunk_data, chunk_metadata}
-      end)
-    else
-      [{payload, %{}}]
+      _ ->
+        {:ok, [{payload, %{}}]}
     end
   end
 
-  defp maybe_chunk(payload, _base_metadata, _state), do: [{payload, %{}}]
+  defp maybe_chunk(payload, _base_metadata, _state), do: {:ok, [{payload, %{}}]}
+
+  defp split_into_chunks(payload, payload_size, uuid, chunk_size, state) do
+    num_chunks = div(payload_size + chunk_size - 1, chunk_size)
+
+    Logger.debug("Chunking message: #{payload_size} bytes into #{num_chunks} chunks (max: #{chunk_size} bytes each)")
+
+    :telemetry.execute(
+      [:pulsar, :producer, :chunk, :start],
+      %{total_size: payload_size, num_chunks: num_chunks, chunk_size: chunk_size},
+      %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
+    )
+
+    Enum.map(0..(num_chunks - 1), fn chunk_id ->
+      offset = chunk_id * chunk_size
+      remaining = payload_size - offset
+      current_chunk_size = min(remaining, chunk_size)
+      <<_skip::binary-size(^offset), chunk_data::binary-size(^current_chunk_size), _rest::binary>> = payload
+
+      chunk_metadata = %{
+        uuid: uuid,
+        chunk_id: chunk_id,
+        num_chunks: num_chunks,
+        total_chunk_msg_size: payload_size
+      }
+
+      {chunk_data, chunk_metadata}
+    end)
+  end
 
   # The broker's limit covers the metadata each chunk repeats as well as its payload.
   # :max_message_size counts payload bytes only, so the deduction applies to the broker's
@@ -771,7 +799,7 @@ defmodule Pulsar.Producer.Worker do
         }
 
         overhead = byte_size(Binary.MessageMetadata.encode(metadata)) + @chunk_framing_overhead
-        min(state.max_message_size, max(broker_limit - overhead, 1))
+        min(state.max_message_size, broker_limit - overhead)
 
       _ ->
         state.max_message_size
