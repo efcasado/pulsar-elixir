@@ -107,6 +107,23 @@ defmodule Pulsar.HashTest do
         assert Hash.partition(scheme, key, partitions) in 0..(partitions - 1)
       end
     end
+
+    # A key that routes under one scheme must route under all of them, or changing the option
+    # would change which keys are publishable, and :phash2_legacy would accept keys that stop
+    # working on the switch to :murmur3_32 it exists to migrate towards.
+    test "rejects a non-binary key under every scheme" do
+      for scheme <- Hash.schemes(), key <- [:tenant_a, 123, {:a, 1}, nil] do
+        assert_raise ArgumentError, ~r/:partition_key/, fn -> Hash.partition(scheme, key, 8) end
+      end
+    end
+
+    test "rejects a key that is not valid UTF-8 under every scheme" do
+      for scheme <- Hash.schemes() do
+        assert_raise ArgumentError, ~r/:partition_key/, fn ->
+          Hash.partition(scheme, <<0xFF, 0xFE>>, 8)
+        end
+      end
+    end
   end
 
   describe "partition/3 with :phash2_legacy" do

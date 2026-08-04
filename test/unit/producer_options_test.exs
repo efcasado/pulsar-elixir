@@ -16,6 +16,19 @@ defmodule Pulsar.Producer.OptionsTest do
       assert opts[:access_mode] == :shared
       assert opts[:compression] == :none
       assert opts[:batch_enabled] == false
+      assert opts[:hashing_scheme] == :murmur3_32
+    end
+
+    test "accepts every hashing scheme" do
+      for scheme <- Pulsar.Hash.schemes() do
+        assert validate!(hashing_scheme: scheme)[:hashing_scheme] == scheme
+      end
+    end
+
+    test "rejects an unknown hashing scheme rather than falling back to the default" do
+      assert_raise NimbleOptions.ValidationError, ~r/:hashing_scheme/, fn ->
+        validate!(hashing_scheme: :murmur2)
+      end
     end
 
     test "defaults the startup delays and partition discovery" do

@@ -279,14 +279,13 @@ defmodule Pulsar.Topology do
     end
   end
 
-  @doc """
-  Returns a topology root's groups together with the hashing scheme its resource was configured
-  with, from a single traversal of its children.
-
-  For a producer, which needs both to route a keyed message and would otherwise pay a second
-  call per send. Takes a root; `groups/1` covers the other levels. The scheme is `nil` for a
-  resource that does not route on a key.
-  """
+  # Groups and the configured hashing scheme from one traversal, for a producer that needs both
+  # to route a keyed message and would otherwise pay a second call per send.
+  #
+  # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root, and answers a
+  # group or a worker as though it had no groups. Pulsar.Producer resolves the kind before
+  # calling, and anything else should use groups/1.
+  @doc false
   @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
   def routing(root) do
     children = supervisor_children(root)
@@ -434,9 +433,14 @@ defmodule Pulsar.Topology do
   defp resource_kind_for_config(_config), do: :unknown
 
   # Carried on the child id so routing reads it from the same which_children the groups come
-  # from, keeping a send to one call.
+  # from, keeping a send to one call. The registry value would be the usual place for this, but
+  # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
+  # and a producer started with start_link_unregistered/1 has none.
+  #
+  # nil where a resource does not route on a key, and for a producer whose options have not been
+  # through Producer.Options; Hash.partition/3 resolves it to the default.
   defp hashing_scheme_for_config(%{count_key: :producer_count, opts: opts}) do
-    Keyword.get(opts, :hashing_scheme, Hash.default_scheme())
+    Keyword.get(opts, :hashing_scheme)
   end
 
   defp hashing_scheme_for_config(_config), do: nil

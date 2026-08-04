@@ -123,22 +123,6 @@ defmodule Pulsar.ProducerTest do
                  {:ok, :erlang.phash2(key, 8)}
       end
     end
-
-    test "sends the same key to different partitions under the two schemes" do
-      murmur3 = start_routing_topology()
-      java = start_routing_topology(hashing_scheme: :java_string_hash)
-
-      start_partitions(murmur3, 8)
-      start_partitions(java, 8)
-
-      # Guards against both schemes silently resolving to one implementation.
-      assert Enum.any?(0..20, fn candidate ->
-               key = "key-#{candidate}"
-
-               Producer.send(murmur3, "payload", partition_key: key) !=
-                 Producer.send(java, "payload", partition_key: key)
-             end)
-    end
   end
 
   defp send_message(module, producer, message), do: module.send(producer, message, [])

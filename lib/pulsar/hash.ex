@@ -51,12 +51,32 @@ defmodule Pulsar.Hash do
   Reducing the hash belongs here rather than in the caller because the schemes do not agree
   on it: the Pulsar ones take Pulsar's signSafeMod over a sign-masked hash, while `phash2`
   takes its range directly and does not give the same answer as a `rem/2` over `phash2/1`.
+
+  Raises unless the key is a valid UTF-8 binary. The key is validated once here rather than
+  per scheme so that changing `:hashing_scheme` never changes which keys are routable.
   """
   @spec partition(scheme() | nil, binary(), pos_integer()) :: non_neg_integer()
-  def partition(nil, key, partitions), do: partition(@default_scheme, key, partitions)
-  def partition(:murmur3_32, key, partitions), do: rem(murmur3_32(key), partitions)
-  def partition(:java_string_hash, key, partitions), do: rem(java_string_hash(key), partitions)
-  def partition(:phash2_legacy, key, partitions), do: :erlang.phash2(key, partitions)
+  def partition(scheme, key, partitions) do
+    validate_key!(key)
+    reduce(scheme, key, partitions)
+  end
+
+  # partition_key is a string on the wire, so a key that is not valid UTF-8 fails the send
+  # under every scheme anyway. Rejecting it here reports it against the option the caller set.
+  defp validate_key!(key) when is_binary(key) do
+    if not String.valid?(key) do
+      raise ArgumentError, ":partition_key must be valid UTF-8"
+    end
+  end
+
+  defp validate_key!(_key) do
+    raise ArgumentError, ":partition_key must be a UTF-8 binary"
+  end
+
+  defp reduce(nil, key, partitions), do: reduce(@default_scheme, key, partitions)
+  defp reduce(:murmur3_32, key, partitions), do: rem(murmur3_32(key), partitions)
+  defp reduce(:java_string_hash, key, partitions), do: rem(java_string_hash(key), partitions)
+  defp reduce(:phash2_legacy, key, partitions), do: :erlang.phash2(key, partitions)
 
   @doc """
   MurmurHash3 x86 32-bit, as Pulsar's `Murmur3_32Hash` applies it.
@@ -119,16 +139,15 @@ defmodule Pulsar.Hash do
   """
   @spec java_string_hash(binary()) :: non_neg_integer()
   def java_string_hash(key) when is_binary(key) do
-    key
-    |> utf16_code_units()
-    |> Enum.reduce(0, fn unit, hash -> band(31 * hash + unit, @mask32) end)
-    |> band(@max_int32)
-  end
-
-  defp utf16_code_units(key) do
     case :unicode.characters_to_binary(key, :utf8, {:utf16, :big}) do
-      utf16 when is_binary(utf16) -> for <<unit::big-unsigned-16 <- utf16>>, do: unit
-      _invalid -> raise ArgumentError, "partition key is not valid UTF-8: #{inspect(key)}"
+      utf16 when is_binary(utf16) -> utf16 |> fold_code_units(0) |> band(@max_int32)
+      _invalid -> raise ArgumentError, ":partition_key must be valid UTF-8"
     end
   end
+
+  defp fold_code_units(<<unit::big-unsigned-16, rest::binary>>, hash) do
+    fold_code_units(rest, band(31 * hash + unit, @mask32))
+  end
+
+  defp fold_code_units(<<>>, hash), do: hash
 end
