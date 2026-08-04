@@ -30,8 +30,8 @@ defmodule Pulsar.Producer.Worker do
   @chunk_framing_overhead 64
 
   # Stands in while the budget is measured, so a message that turns out not to need chunking
-  # never generates a uuid. Every uuid4 encodes to this length.
-  @uuid_placeholder String.duplicate("0", 36)
+  # never generates a uuid. Itself a uuid, so it encodes to the length the chunks will use.
+  @uuid_placeholder Uniq.UUID.uuid4()
 
   defstruct [
     :client,

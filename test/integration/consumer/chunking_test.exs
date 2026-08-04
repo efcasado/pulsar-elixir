@@ -30,6 +30,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     :ok
   end
 
+  @tag telemetry_listen: [[:pulsar, :producer, :chunk, :start]]
   test "receives and reassembles a simple chunked message" do
     topic = isolated_topic("simple")
     large_message = "This is a test message that will be chunked."
@@ -69,6 +70,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.chunked == true
     assert received_msg.chunk_metadata.complete == true
     assert received_msg.chunk_metadata.num_chunks == 2
+
+    # Workers pick these up from their options by name, so a rename empties every event.
+    assert_receive {:telemetry_event, %{event: [:pulsar, :producer, :chunk, :start], metadata: metadata}}
+    assert metadata.topic == topic
+    assert metadata.base_topic == topic
+    assert metadata.partition == nil
   end
 
   test "handles interleaved chunks from multiple chunked messages" do
@@ -379,7 +386,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     topic = isolated_topic("budget-boundary")
 
     # Just past the limit, so the first chunk fills the budget exactly and the second holds
-    # the remainder. Sending twice the limit would prove nothing more.
+    # the remainder.
     message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
@@ -617,6 +624,11 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert measurements.received_chunks == 1
     assert measurements.num_chunks == 3
     assert metadata.uuid == "fake-uuid-oldest"
+
+    assert metadata.topic == topic
+    assert metadata.base_topic == topic
+    assert metadata.partition == nil
+    assert metadata.subscription_name == "chunking-evict"
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == 1

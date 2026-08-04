@@ -307,18 +307,6 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  # The keys `context/1` gives a callback, so chunk events group like every other signal.
-  defp chunk_context(state, uuid) do
-    %{
-      uuid: uuid,
-      consumer_id: state.consumer_id,
-      topic: state.topic,
-      base_topic: state.base_topic,
-      partition: state.partition,
-      subscription_name: state.subscription_name
-    }
-  end
-
   defp context(state) do
     %{
       topic: state.topic,
@@ -1006,6 +994,18 @@ defmodule Pulsar.Consumer.Worker do
   defp schedule_chunk_cleanup(interval) when is_integer(interval) and interval > 0 do
     Process.send_after(self(), :cleanup_expired_chunks, interval)
     :ok
+  end
+
+  # The keys `context/1` gives a callback, so chunk events group like every other signal.
+  defp chunk_context(state, uuid) do
+    %{
+      uuid: uuid,
+      consumer_id: state.consumer_id,
+      topic: state.topic,
+      base_topic: state.base_topic,
+      partition: state.partition,
+      subscription_name: state.subscription_name
+    }
   end
 
   defp maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata) do
