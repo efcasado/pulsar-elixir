@@ -114,6 +114,23 @@ defmodule Pulsar.Test.Support.System do
     :ok
   end
 
+  def enable_deduplication(topic) do
+    broker = broker()
+
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topicPolicies",
+      "set-deduplication",
+      "--enable",
+      topic
+    ]
+
+    {_, 0} = docker_exec(command)
+    :ok
+  end
+
   def unload_topic(topic) do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "unload", topic]
