@@ -377,7 +377,10 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     # The producer's deduction and the broker's check on the whole frame are separate
     # calculations, and this is where they have to agree.
     topic = isolated_topic("budget-boundary")
-    message = String.duplicate("x", 5_242_880 * 2)
+
+    # Just past the limit, so the first chunk fills the budget exactly and the second holds
+    # the remainder. Sending twice the limit would prove nothing more.
+    message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
       Pulsar.Producer.start(
