@@ -194,6 +194,17 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert state.acks.acked == %{}
     end
 
+    test "is acknowledged when it has nothing left to deliver at all" do
+      state = deliver(worker_state(%{}), ["a", "b", "c"], compacted_out: [0, 1, 2])
+
+      assert delivered_payloads() == []
+
+      # No callback runs, so nothing else could ever acknowledge this entry.
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+
     test "charges a permit for every message the broker sent, delivered or not" do
       state = %{worker_state(%{}) | flow_initial: 100, flow_threshold: 0, flow_outstanding_permits: 100}
 

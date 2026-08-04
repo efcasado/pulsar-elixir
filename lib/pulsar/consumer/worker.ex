@@ -392,10 +392,12 @@ defmodule Pulsar.Consumer.Worker do
     # A skipped message was still sent, and still charged a permit.
     permits_consumed = length(skipped_ids) + Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
 
+    # A skipped message is one nothing will ever ack, so it is counted off here instead. That
+    # also covers an entry with nothing left to deliver, which only this can acknowledge.
     new_state =
       new_state
       |> decrement_permits(permits_consumed)
-      |> Map.update!(:acks, &Ack.mark_acked(&1, skipped_ids))
+      |> ack_message_ids(skipped_ids)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
     new_state =

@@ -110,18 +110,6 @@ defmodule Pulsar.Consumer.Ack do
   end
 
   @doc """
-  Counts messages off the entry without anything being sent for them.
-
-  For the messages the broker will not deliver again — ones it has already deleted, or compacted
-  away — which it still counts when sizing the entry. Their entry could otherwise never complete,
-  and so would never be acknowledged at all.
-  """
-  @spec mark_acked(t(), [message_id()]) :: t()
-  def mark_acked(%__MODULE__{} = ack, message_ids) do
-    Enum.reduce(message_ids, ack, &mark(&2, batch_entry(&1)))
-  end
-
-  @doc """
   Drops what has been counted off for the entries these ids belong to.
 
   Redelivery is whole entries, so a nacked message brings its batch back with it: the tally
@@ -191,18 +179,6 @@ defmodule Pulsar.Consumer.Ack do
   def deliverable?(outstanding, index), do: Bitwise.band(outstanding, Bitwise.bsl(1, index)) != 0
 
   ## Private
-
-  defp mark(ack, nil), do: ack
-
-  defp mark(ack, {key, index, size}) do
-    acked = acked_with(ack, key, index)
-
-    if acked == every_message(size) do
-      %{ack | acked: Map.delete(ack.acked, key)}
-    else
-      %{ack | acked: Map.put(ack.acked, key, acked)}
-    end
-  end
 
   defp count_off(ack, {key, index, size}, message_id, ackable) do
     acked = acked_with(ack, key, index)
