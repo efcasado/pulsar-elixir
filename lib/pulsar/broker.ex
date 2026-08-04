@@ -557,6 +557,13 @@ defmodule Pulsar.Broker do
     end
   end
 
+  # An oversized frame is answered by closing the connection, which would take down every
+  # consumer and producer registered here.
+  def connected({:call, from}, {:publish_message, encoded_message}, %__MODULE__{max_message_size: limit} = broker)
+      when is_integer(limit) and byte_size(encoded_message) > limit do
+    {:keep_state, broker, [{:reply, from, {:error, :message_too_large}}]}
+  end
+
   def connected({:call, from}, {:publish_message, encoded_message}, broker) do
     %__MODULE__{socket_module: mod, socket: socket} = broker
 

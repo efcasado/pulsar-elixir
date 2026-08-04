@@ -119,6 +119,13 @@ defmodule Pulsar.ProtocolTest do
       assert payload == ctx.payload
     end
 
+    test "carries is_chunk, which no consumer-facing struct exposes", ctx do
+      frame = Protocol.encode(%{ctx.command | is_chunk: true}, ctx.metadata, ctx.payload)
+
+      assert {:ok, {command, _metadata, _payload, nil}} = Protocol.decode(frame)
+      assert command.is_chunk == true
+    end
+
     test "checksum covers the metadata size, metadata and payload", ctx do
       frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
 

@@ -31,11 +31,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "receives and reassembles a simple chunked message" do
+    topic = isolated_topic("simple")
     large_message = "This is a test message that will be chunked."
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_simple_producer,
         chunking_enabled: true,
@@ -44,7 +45,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-simple",
         @consumer_callback,
         client: @client,
@@ -71,12 +72,13 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "handles interleaved chunks from multiple chunked messages" do
+    topic = isolated_topic("interleaved")
     p1_large_message = "This is a test message that will be chunked from producer 1."
     p2_large_message = "This is a test message that will be chunked from producer 2."
 
     {:ok, producer1} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_interleaved_producer1,
         chunking_enabled: true,
@@ -85,7 +87,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, producer2} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_interleaved_producer2,
         chunking_enabled: true,
@@ -94,7 +96,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-interleaved",
         @consumer_callback,
         client: @client,
@@ -121,12 +123,13 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "handles mix of chunked and non-chunked messages" do
+    topic = isolated_topic("mixed")
     small_message = "Small message"
     large_message = "This is a test message that will be chunked."
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_mixed_producer,
         chunking_enabled: true,
@@ -135,7 +138,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-mixed",
         @consumer_callback,
         client: @client,
@@ -161,11 +164,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "producer with chunking disabled cannot send 5MB messages" do
+    topic = isolated_topic("disabled")
     very_large_message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_disabled_producer,
         chunking_enabled: false
@@ -184,11 +188,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "producer with chunking enabled can send and receive messages larger than 5MB" do
+    topic = isolated_topic("5mb")
     very_large_message = String.duplicate("x", 6_291_456)
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_enabled_5mb_producer,
         chunking_enabled: true
@@ -196,7 +201,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-5mb",
         @consumer_callback,
         client: @client,
@@ -227,24 +232,30 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
+  @chunk_size 1024
+
   for compression <- [:none, :lz4, :zlib, :snappy, :zstd] do
     test "reassembles a chunked message compressed with #{compression}" do
       compression = unquote(compression)
-      large_message = :crypto.strong_rand_bytes(8192)
+      topic = isolated_topic("#{compression}")
+
+      # Half incompressible so it still needs several chunks once compressed, half trivially
+      # compressible so every codec removes something.
+      large_message = :crypto.strong_rand_bytes(4096) <> String.duplicate("a", 4096)
 
       {:ok, producer} =
         Pulsar.Producer.start(
-          @topic,
+          topic,
           client: @client,
           name: :"chunking_#{compression}_producer",
           chunking_enabled: true,
           compression: compression,
-          max_message_size: 1024
+          max_message_size: @chunk_size
         )
 
       {:ok, _consumer_group} =
         Pulsar.Consumer.start(
-          @topic,
+          topic,
           "chunking-#{compression}",
           @consumer_callback,
           client: @client,
@@ -267,19 +278,33 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       # Every chunk describes the message it belongs to, not the slice it carries.
       for metadata <- received_msg.raw.metadata do
         assert metadata.uncompressed_size == byte_size(large_message)
-        assert metadata.total_chunk_msg_size == hd(received_msg.raw.metadata).total_chunk_msg_size
+      end
+
+      [%{total_chunk_msg_size: total} | _] = received_msg.raw.metadata
+      assert Enum.all?(received_msg.raw.metadata, &(&1.total_chunk_msg_size == total))
+
+      # An uncompressed total would not account for the chunks sent, for any codec that
+      # removed a byte.
+      assert received_msg.chunk_metadata.num_chunks == ceil(total / @chunk_size)
+
+      if compression == :none do
+        assert total == byte_size(large_message)
+      else
+        assert total < byte_size(large_message)
       end
     end
   end
 
   test "compresses before deciding whether to chunk" do
+    topic = isolated_topic("compress-first")
+
     # Compresses to well under :max_message_size, so there is nothing left to split.
     # Splitting first would have sent 64 chunks.
     compressible_message = String.duplicate("a", 65_536)
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_compress_first_producer,
         chunking_enabled: true,
@@ -289,7 +314,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-compress-first",
         @consumer_callback,
         client: @client,
@@ -310,6 +335,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   test "leaves room for the message metadata inside the broker's size limit" do
+    topic = isolated_topic("metadata-overhead")
+
     # Properties ride along with every chunk, so a chunk sized to :max_message_size on its
     # own would put the frame over what the broker accepts.
     bulky_properties = %{"padding" => String.duplicate("p", 32_768)}
@@ -317,7 +344,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_metadata_overhead_producer,
         chunking_enabled: true
@@ -325,7 +352,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-metadata-overhead",
         @consumer_callback,
         client: @client,
@@ -351,7 +378,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        isolated_topic("oversized-metadata"),
         client: @client,
         name: :chunking_oversized_metadata_producer,
         chunking_enabled: true
@@ -371,7 +398,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        isolated_topic("expire"),
         "chunking-expire",
         @consumer_callback,
         client: @client,
@@ -442,9 +469,11 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     alias Proto, as: Binary
     alias Pulsar.Consumer.ChunkedMessageContext
 
+    topic = isolated_topic("evict")
+
     {:ok, producer} =
       Pulsar.Producer.start(
-        @topic,
+        topic,
         client: @client,
         name: :chunking_evict_producer,
         chunking_enabled: true,
@@ -453,7 +482,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(
-        @topic,
+        topic,
         "chunking-evict",
         @consumer_callback,
         client: @client,
@@ -550,7 +579,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
                     }},
                    2000
 
-    assert measurements.reason == :queue_full
+    assert metadata.reason == :queue_full
+    assert measurements.received_chunks == 1
+    assert measurements.num_chunks == 3
     assert metadata.uuid == "fake-uuid-oldest"
 
     Utils.wait_for(fn ->
@@ -565,4 +596,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.complete == true
     assert received_msg.chunk_metadata.num_chunks == 2
   end
+
+  # These tests run async against one broker, and a subscription starting at :latest would
+  # otherwise pick up whatever the others happen to be publishing at the time. The broker
+  # creates the topic on first use, so this stays a name rather than an admin call.
+  defp isolated_topic(suffix), do: @topic <> "-" <> suffix
 end

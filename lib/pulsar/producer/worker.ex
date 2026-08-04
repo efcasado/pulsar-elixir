@@ -63,7 +63,7 @@ defmodule Pulsar.Producer.Worker do
           broker_pid: pid(),
           broker_monitor: reference(),
           sequence_id: integer(),
-          pending_sends: %{integer() => {GenServer.from(), map()}},
+          pending_sends: %{integer() => {GenServer.from(), map() | nil}},
           access_mode: atom(),
           compression: :none | :lz4 | :zlib | :snappy | :zstd,
           ready: boolean(),
@@ -264,21 +264,13 @@ defmodule Pulsar.Producer.Worker do
         command_send = %Binary.CommandSend{
           producer_id: acc_state.producer_id,
           sequence_id: sequence_id,
-          is_chunk: map_size(chunk_metadata) > 0
+          is_chunk: not is_nil(chunk_metadata)
         }
 
-        message_metadata = %{
-          base_metadata
-          | sequence_id: sequence_id,
-            uuid: Map.get(chunk_metadata, :uuid),
-            chunk_id: Map.get(chunk_metadata, :chunk_id),
-            num_chunks_from_msg: Map.get(chunk_metadata, :num_chunks),
-            total_chunk_msg_size: Map.get(chunk_metadata, :total_chunk_msg_size)
-        }
-
+        message_metadata = apply_chunk_metadata(base_metadata, sequence_id, chunk_metadata)
         encoded_message = Protocol.encode(command_send, message_metadata, chunk_payload)
 
-        case publish_frame(acc_state, encoded_message) do
+        case Pulsar.Broker.publish_message(acc_state.broker_pid, encoded_message) do
           :ok ->
             emit_message_sent(chunk_metadata, chunk_payload, sequence_id, acc_state)
 
@@ -337,7 +329,7 @@ defmodule Pulsar.Producer.Worker do
           %{state | pending_sends: new_pending}
 
         # Chunked message case
-        {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) and map_size(chunk_metadata) > 0 ->
+        {{from, chunk_metadata}, new_pending} when is_map(chunk_metadata) ->
           handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state)
 
         # Single message case
@@ -471,7 +463,7 @@ defmodule Pulsar.Producer.Worker do
 
     encoded_frame = Protocol.encode(command_send, message_metadata, compressed_payload)
 
-    case publish_frame(state, encoded_frame) do
+    case Pulsar.Broker.publish_message(state.broker_pid, encoded_frame) do
       :ok ->
         :telemetry.execute(
           [:pulsar, :producer, :batch, :published],
@@ -523,7 +515,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :complete],
       %{num_chunks: num_chunks},
-      %{uuid: uuid, producer_id: state.producer_id}
+      %{uuid: uuid, producer_id: state.producer_id, topic: state.topic}
     )
 
     chunked_msg_id = %{
@@ -615,18 +607,6 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
-  # An oversized frame is answered by closing the connection rather than by refusing the send,
-  # and that connection carries every other producer and consumer on this broker.
-  defp publish_frame(state, encoded_frame) do
-    case state.broker_max_message_size do
-      limit when is_integer(limit) and byte_size(encoded_frame) > limit ->
-        {:error, :message_too_large}
-
-      _ ->
-        Pulsar.Broker.publish_message(state.broker_pid, encoded_frame)
-    end
-  end
-
   defp broker_max_message_size(broker_pid) do
     case Pulsar.Broker.get_max_message_size(broker_pid) do
       size when is_integer(size) and size > 0 -> size
@@ -703,7 +683,7 @@ defmodule Pulsar.Producer.Worker do
     :telemetry.execute(
       [:pulsar, :producer, :chunk, :sent],
       %{chunk_id: chunk_id, chunk_size: byte_size(chunk_payload)},
-      %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id}
+      %{uuid: uuid, producer_id: state.producer_id, sequence_id: sequence_id, topic: state.topic}
     )
   end
 
@@ -720,9 +700,28 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
+  defp apply_chunk_metadata(base_metadata, sequence_id, nil) do
+    %{base_metadata | sequence_id: sequence_id}
+  end
+
+  defp apply_chunk_metadata(base_metadata, sequence_id, chunk_metadata) do
+    %{uuid: uuid, chunk_id: chunk_id, num_chunks: num_chunks, total_chunk_msg_size: total} = chunk_metadata
+
+    %{
+      base_metadata
+      | sequence_id: sequence_id,
+        uuid: uuid,
+        chunk_id: chunk_id,
+        num_chunks_from_msg: num_chunks,
+        total_chunk_msg_size: total
+    }
+  end
+
   defp build_message_metadata(payload, opts, state) do
     %Binary.MessageMetadata{
       producer_name: state.producer_name,
+      # Replaced per chunk, but not left nil: the budget below encodes this to measure it,
+      # and proto2 rejects a nil on a required field.
       sequence_id: 0,
       publish_time: System.system_time(:millisecond),
       uncompressed_size: byte_size(payload),
@@ -750,11 +749,11 @@ defmodule Pulsar.Producer.Worker do
         {:ok, split_into_chunks(payload, payload_size, uuid, chunk_size, state)}
 
       _ ->
-        {:ok, [{payload, %{}}]}
+        {:ok, [{payload, nil}]}
     end
   end
 
-  defp maybe_chunk(payload, _base_metadata, _state), do: {:ok, [{payload, %{}}]}
+  defp maybe_chunk(payload, _base_metadata, _state), do: {:ok, [{payload, nil}]}
 
   defp split_into_chunks(payload, payload_size, uuid, chunk_size, state) do
     num_chunks = div(payload_size + chunk_size - 1, chunk_size)
@@ -769,9 +768,7 @@ defmodule Pulsar.Producer.Worker do
 
     Enum.map(0..(num_chunks - 1), fn chunk_id ->
       offset = chunk_id * chunk_size
-      remaining = payload_size - offset
-      current_chunk_size = min(remaining, chunk_size)
-      <<_skip::binary-size(^offset), chunk_data::binary-size(^current_chunk_size), _rest::binary>> = payload
+      chunk_data = binary_part(payload, offset, min(payload_size - offset, chunk_size))
 
       chunk_metadata = %{
         uuid: uuid,

@@ -1006,7 +1006,7 @@ defmodule Pulsar.Consumer.Worker do
     :telemetry.execute(
       [:pulsar, :consumer, :chunk, :received],
       %{chunk_id: chunk_id, num_chunks: num_chunks},
-      %{uuid: uuid, consumer_id: state.consumer_id}
+      %{uuid: uuid, consumer_id: state.consumer_id, topic: state.topic, subscription: state.subscription_name}
     )
 
     chunk_data = %{
@@ -1082,8 +1082,12 @@ defmodule Pulsar.Consumer.Worker do
 
     :telemetry.execute(
       [:pulsar, :consumer, :chunk, :complete],
-      %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
-      %{uuid: uuid, consumer_id: state.consumer_id}
+      %{
+        num_chunks: ctx.num_chunks_from_msg,
+        total_size: byte_size(complete_payload),
+        age_ms: ChunkedMessageContext.age_ms(ctx)
+      },
+      %{uuid: uuid, consumer_id: state.consumer_id, topic: state.topic, subscription: state.subscription_name}
     )
 
     final_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
@@ -1112,8 +1116,14 @@ defmodule Pulsar.Consumer.Worker do
 
         :telemetry.execute(
           [:pulsar, :consumer, :chunk, :discarded],
-          %{reason: :queue_full},
-          %{uuid: oldest_uuid, consumer_id: state.consumer_id}
+          %{received_chunks: oldest_ctx.received_chunks, num_chunks: oldest_ctx.num_chunks_from_msg},
+          %{
+            uuid: oldest_uuid,
+            consumer_id: state.consumer_id,
+            topic: state.topic,
+            subscription: state.subscription_name,
+            reason: :queue_full
+          }
         )
 
         partial_payload = ChunkedMessageContext.assemble_payload(oldest_ctx)
@@ -1156,8 +1166,18 @@ defmodule Pulsar.Consumer.Worker do
       Enum.each(expired, fn {uuid, ctx} ->
         :telemetry.execute(
           [:pulsar, :consumer, :chunk, :expired],
-          %{age_ms: ChunkedMessageContext.age_ms(ctx), received_chunks: ctx.received_chunks},
-          %{uuid: uuid, consumer_id: state.consumer_id}
+          %{
+            age_ms: ChunkedMessageContext.age_ms(ctx),
+            received_chunks: ctx.received_chunks,
+            num_chunks: ctx.num_chunks_from_msg
+          },
+          %{
+            uuid: uuid,
+            consumer_id: state.consumer_id,
+            topic: state.topic,
+            subscription: state.subscription_name,
+            reason: :expired
+          }
         )
 
         partial_payload = ChunkedMessageContext.assemble_payload(ctx)
