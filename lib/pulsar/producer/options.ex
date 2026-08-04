@@ -1,6 +1,8 @@
 defmodule Pulsar.Producer.Options do
   @moduledoc false
 
+  alias Pulsar.Hash
+
   @schema [
     topic: [
       type: :string,
@@ -34,6 +36,23 @@ defmodule Pulsar.Producer.Options do
       type: {:in, [:none, :lz4, :zlib, :snappy, :zstd]},
       default: :none,
       doc: "Compression applied to the payload."
+    ],
+    hashing_scheme: [
+      type: {:in, Hash.schemes()},
+      default: Hash.default_scheme(),
+      doc: """
+      How a message's `:partition_key` is hashed to pick a partition of a partitioned topic.
+
+      `:murmur3_32` is implemented identically by every Pulsar client, so keys co-locate with
+      producers in other languages. `:java_string_hash` matches what the Java and Go clients
+      use when left at their own default.
+
+      `:phash2_legacy` is the non-standard `:erlang.phash2/2` routing used before 3.0. No
+      other client can reproduce it, so it is only for upgrading a partitioned topic without
+      remapping keys mid-flight: keeping a key's existing partition preserves its ordering,
+      which switching schemes breaks until the old partition drains. Prefer draining and
+      moving to `:murmur3_32`.
+      """
     ],
     batch_enabled: [
       type: :boolean,
