@@ -87,6 +87,10 @@ defmodule Pulsar.Consumer.DeadLetter do
     # send/3 already answers {:error, :not_ready} during discovery and turns a worker dying
     # mid-send into an error, so an unavailable dead letter topic never reaches the consumer.
     case Producer.send(producer, message.payload, opts) do
+      # {:ok, :deduplicated} is acknowledged along with the rest. An error would nack the message
+      # into a divert that is still over the redelivery threshold, so it would divert again, and
+      # this producer's name is shared by every node running the consumer -- a collision between
+      # them need not clear. The producer already logs and reports what the broker discarded.
       {:ok, _message_id} -> :ok
       {:error, _reason} = error -> error
     end

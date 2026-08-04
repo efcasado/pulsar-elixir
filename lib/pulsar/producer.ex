@@ -29,6 +29,22 @@ defmodule Pulsar.Producer do
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topology
 
+  @typedoc """
+  What a chunked send is answered with, since its message spans several broker messages.
+  """
+  @type chunked_message_id :: %{
+          first_chunk_message_id: MessageIdData.t(),
+          last_chunk_message_id: MessageIdData.t(),
+          uuid: String.t(),
+          num_chunks: pos_integer()
+        }
+
+  @typedoc """
+  What `send/3` is answered with. `:deduplicated` carries no message id because the broker
+  assigned none; see `send/3`.
+  """
+  @type send_result :: MessageIdData.t() | chunked_message_id() | :deduplicated
+
   @doc false
   def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
 
@@ -118,6 +134,15 @@ defmodule Pulsar.Producer do
   - `{:error, :metadata_too_large}` with `:chunking_enabled`, when `:properties` and the rest
     of the metadata leave no room for a payload to be split into
 
+  A successful send answers with the broker's message id, or with a `t:chunked_message_id/0`
+  when `:chunking_enabled` split the payload.
+
+  On a topic with deduplication enabled it can instead answer `{:ok, :deduplicated}`: the broker
+  recognised the sequence id as one it had already stored, kept the message it had, and assigned
+  this call no message id. Deduplication matches on the sequence id alone and never on the
+  payload, so the message it kept is not necessarily the one passed here. Before 3.0 this was
+  reported as `{:ok, message_id}`, with a message id referring to nothing.
+
   ## Options
 
   - `:partition_key` - decides the partition of a partitioned topic, hashed under the
@@ -134,7 +159,7 @@ defmodule Pulsar.Producer do
       {:ok, message_id} = Pulsar.Producer.send(:audit, "payload", partition_key: "tenant-1")
   """
   @spec send(pid() | String.t() | atom(), binary(), keyword()) ::
-          {:ok, MessageIdData.t()} | {:error, term()}
+          {:ok, send_result()} | {:error, term()}
   def send(producer, message, opts \\ [])
 
   def send(producer, message, opts) when is_pid(producer) and is_binary(message), do: publish(producer, message, opts)

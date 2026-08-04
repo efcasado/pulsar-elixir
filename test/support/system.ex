@@ -127,8 +127,10 @@ defmodule Pulsar.Test.Support.System do
       topic
     ]
 
-    {_, 0} = docker_exec(command)
-    :ok
+    case docker_exec(command) do
+      {_output, 0} -> :ok
+      {output, code} -> raise "enabling deduplication on #{topic} failed (exit #{code}): #{output}"
+    end
   end
 
   def unload_topic(topic) do

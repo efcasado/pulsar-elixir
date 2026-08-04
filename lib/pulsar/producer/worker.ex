@@ -33,6 +33,9 @@ defmodule Pulsar.Producer.Worker do
   # never generates a uuid. Only its encoded length matters here.
   @uuid_placeholder "00000000-0000-0000-0000-000000000000"
 
+  # The broker's -1, as it arrives over an unsigned 64-bit field.
+  @unpersisted 18_446_744_073_709_551_615
+
   defstruct [
     :client,
     :topic,
@@ -120,7 +123,7 @@ defmodule Pulsar.Producer.Worker do
   (default 5000), and `:ordering_key`, which orders within a `:key_shared` subscription
   without affecting which partition the message lands on.
   """
-  @spec send_message(pid(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec send_message(pid(), binary(), keyword()) :: {:ok, map() | :deduplicated} | {:error, term()}
   def send_message(producer_pid, message, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 5000)
     GenServer.call(producer_pid, {:send_message, message, opts}, timeout)
@@ -327,6 +330,17 @@ defmodule Pulsar.Producer.Worker do
     {:noreply, %{state | batch_flush_timer: timer_ref}}
   end
 
+  # A topic with deduplication enabled acknowledges a send it discarded, using this in place of
+  # the message id it never assigned. The send did reach the broker, so the caller is told so.
+  @impl true
+  def handle_info(
+        {:send_receipt,
+         %Binary.CommandSendReceipt{message_id: %{ledgerId: @unpersisted, entryId: @unpersisted}} = receipt},
+        state
+      ) do
+    {:noreply, report_deduplicated(receipt, state)}
+  end
+
   @impl true
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
     new_state =
@@ -348,8 +362,10 @@ defmodule Pulsar.Producer.Worker do
           GenServer.reply(from, {:ok, receipt.message_id})
           %{state | pending_sends: new_pending}
 
+        # A chunk of a message that was given up on, which a partial send and a discarded chunk
+        # both leave behind: the entry is gone, but what reached the broker is still answered.
         {nil, _} ->
-          Logger.warning("Received receipt for unknown sequence_id #{receipt.sequence_id}")
+          Logger.debug("Received receipt for untracked sequence_id #{receipt.sequence_id}")
           state
       end
 
@@ -499,6 +515,48 @@ defmodule Pulsar.Producer.Worker do
         %{state | batch: [], batched: 0}
     end
   end
+
+  defp report_deduplicated(receipt, state) do
+    case Map.pop(state.pending_sends, receipt.sequence_id) do
+      {{callers, %{batch: true}}, new_pending} when is_list(callers) ->
+        report_discarded(receipt, length(callers), state)
+        Enum.each(callers, fn from -> GenServer.reply(from, {:ok, :deduplicated}) end)
+        %{state | pending_sends: new_pending}
+
+      # One discarded chunk leaves a message that can never be reassembled, so the rest of it
+      # goes too rather than waiting for receipts that no longer complete anything.
+      {{from, %{uuid: uuid}}, new_pending} ->
+        report_discarded(receipt, 1, state)
+        GenServer.reply(from, {:ok, :deduplicated})
+        %{state | pending_sends: Map.reject(new_pending, &chunk_of?(&1, uuid))}
+
+      {{from, _metadata}, new_pending} ->
+        report_discarded(receipt, 1, state)
+        GenServer.reply(from, {:ok, :deduplicated})
+        %{state | pending_sends: new_pending}
+
+      # Answered and reported already, by the discarded chunk that dropped this one.
+      {nil, _} ->
+        Logger.debug("Received deduplicated receipt for untracked sequence_id #{receipt.sequence_id}")
+        state
+    end
+  end
+
+  defp report_discarded(receipt, count, state) do
+    Logger.warning(
+      "Broker discarded sequence_id #{receipt.sequence_id} on #{state.topic} as already stored " <>
+        "under producer name #{state.producer_name}"
+    )
+
+    :telemetry.execute(
+      [:pulsar, :producer, :message, :deduplicated],
+      %{count: count},
+      Map.put(producer_metadata(state), :sequence_id, receipt.sequence_id)
+    )
+  end
+
+  defp chunk_of?({_sequence_id, {_from, %{uuid: uuid}}}, uuid), do: true
+  defp chunk_of?(_pending_send, _uuid), do: false
 
   defp handle_chunk_receipt(receipt, from, chunk_metadata, new_pending, state) do
     uuid = chunk_metadata.uuid
