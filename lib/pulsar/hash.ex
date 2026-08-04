@@ -52,25 +52,18 @@ defmodule Pulsar.Hash do
   on it: the Pulsar ones take Pulsar's signSafeMod over a sign-masked hash, while `phash2`
   takes its range directly and does not give the same answer as a `rem/2` over `phash2/1`.
 
-  Raises unless the key is a valid UTF-8 binary. The key is validated once here rather than
-  per scheme so that changing `:hashing_scheme` never changes which keys are routable.
+  Raises unless the key is a binary, which every scheme needs and which `:erlang.phash2/2`
+  accepted anything in place of. Encoding is not checked: `:murmur3_32` hashes bytes, and a
+  key that is not valid UTF-8 fails the send at `partition_key`'s string field regardless of
+  whether routing looked at it.
   """
-  @spec partition(scheme() | nil, binary(), pos_integer()) :: non_neg_integer()
-  def partition(scheme, key, partitions) do
-    validate_key!(key)
+  @spec partition(scheme() | nil, term(), pos_integer()) :: non_neg_integer()
+  def partition(scheme, key, partitions) when is_binary(key) do
     reduce(scheme, key, partitions)
   end
 
-  # partition_key is a string on the wire, so a key that is not valid UTF-8 fails the send
-  # under every scheme anyway. Rejecting it here reports it against the option the caller set.
-  defp validate_key!(key) when is_binary(key) do
-    if not String.valid?(key) do
-      raise ArgumentError, ":partition_key must be valid UTF-8"
-    end
-  end
-
-  defp validate_key!(_key) do
-    raise ArgumentError, ":partition_key must be a UTF-8 binary"
+  def partition(_scheme, _key, _partitions) do
+    raise ArgumentError, ":partition_key must be a binary"
   end
 
   defp reduce(nil, key, partitions), do: reduce(@default_scheme, key, partitions)

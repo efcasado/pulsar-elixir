@@ -108,20 +108,20 @@ defmodule Pulsar.HashTest do
       end
     end
 
-    # A key that routes under one scheme must route under all of them, or changing the option
-    # would change which keys are publishable, and :phash2_legacy would accept keys that stop
-    # working on the switch to :murmur3_32 it exists to migrate towards.
+    # :erlang.phash2/2 accepts any term, so without this :phash2_legacy would keep routing atom
+    # keys that stop working on the switch to :murmur3_32 it exists to migrate towards.
     test "rejects a non-binary key under every scheme" do
       for scheme <- Hash.schemes(), key <- [:tenant_a, 123, {:a, 1}, nil] do
         assert_raise ArgumentError, ~r/:partition_key/, fn -> Hash.partition(scheme, key, 8) end
       end
     end
 
-    test "rejects a key that is not valid UTF-8 under every scheme" do
-      for scheme <- Hash.schemes() do
-        assert_raise ArgumentError, ~r/:partition_key/, fn ->
-          Hash.partition(scheme, <<0xFF, 0xFE>>, 8)
-        end
+    # Encoding is deliberately not checked here. murmur3 and phash2 hash bytes, so validating
+    # UTF-8 would cost a scan of the key on every send to reject something the send rejects
+    # anyway at partition_key's string field.
+    test "routes a key that is not valid UTF-8 under the byte-oriented schemes" do
+      for scheme <- [:murmur3_32, :phash2_legacy] do
+        assert Hash.partition(scheme, <<0xFF, 0xFE>>, 8) in 0..7
       end
     end
   end
