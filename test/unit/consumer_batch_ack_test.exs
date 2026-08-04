@@ -171,6 +171,39 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "an entry the broker will not deliver in full" do
+    test "still completes when part of it was acknowledged before" do
+      # Bits set are the messages still owed, so "a" was acked by whoever held the entry before.
+      state = deliver(worker_state(%{}), ["a", "b", "c"], ack_set: [0b110])
+
+      assert delivered_payloads() == ["b", "c"]
+
+      # Acking what arrived has to finish the entry: nothing will ever deliver "a" again.
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+
+    test "still completes when part of it was compacted away" do
+      state = deliver(worker_state(%{}), ["a", "b", "c"], compacted_out: [1])
+
+      assert delivered_payloads() == ["a", "c"]
+
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+
+    test "charges a permit for every message the broker sent, delivered or not" do
+      state = %{worker_state(%{}) | flow_initial: 100, flow_threshold: 0, flow_outstanding_permits: 100}
+
+      new_state = deliver(state, ["a", "b", "c"], compacted_out: [1], ack_set: [0b011])
+
+      assert delivered_payloads() == ["a"]
+      assert new_state.flow_outstanding_permits == 97
+    end
+  end
+
   ## Helpers
 
   defp worker_state(answers, opts \\ []) do
@@ -210,7 +243,13 @@ defmodule Pulsar.Consumer.BatchAckTest do
       num_messages_in_batch: length(payloads)
     }
 
-    payload = payloads |> Enum.map(&encode_single_message/1) |> :erlang.iolist_to_binary()
+    compacted_out = Keyword.get(opts, :compacted_out, [])
+
+    payload =
+      payloads
+      |> Enum.with_index()
+      |> Enum.map(fn {payload, index} -> encode_single_message(payload, index in compacted_out) end)
+      |> :erlang.iolist_to_binary()
 
     {:noreply, new_state} = Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)
     new_state
@@ -241,8 +280,12 @@ defmodule Pulsar.Consumer.BatchAckTest do
     %{message_id() | batch_index: index, batch_size: 3}
   end
 
-  defp encode_single_message(payload) do
-    metadata = Binary.SingleMessageMetadata.encode(%Binary.SingleMessageMetadata{payload_size: byte_size(payload)})
+  defp encode_single_message(payload, compacted_out \\ false) do
+    metadata =
+      Binary.SingleMessageMetadata.encode(%Binary.SingleMessageMetadata{
+        payload_size: byte_size(payload),
+        compacted_out: compacted_out
+      })
 
     <<byte_size(metadata)::32, metadata::binary, payload::binary>>
   end
