@@ -363,12 +363,13 @@ defmodule Pulsar.Consumer.Worker do
           {[build_invalid_message(command, bytes, validation_error)], state}
 
         {command, metadata, payload, broker_metadata} ->
-          payload = maybe_uncompress(metadata, payload)
-
           {state_after, msgs} =
             if chunked_message?(metadata) do
+              # A chunk is a slice of the compressed message, so it only decompresses once
+              # its siblings have been put back around it.
               maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
             else
+              payload = maybe_uncompress(metadata, payload)
               unwrapped = unwrap_messages(metadata, payload)
               pulsar_messages = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
               {state, pulsar_messages}
@@ -1045,38 +1046,7 @@ defmodule Pulsar.Consumer.Worker do
     } = chunk_data
 
     {:ok, ctx} = ChunkedMessageContext.new(command, metadata, payload, broker_metadata)
-    new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
-    new_state = %{state | chunked_message_contexts: new_contexts}
-
-    if ChunkedMessageContext.complete?(ctx) do
-      complete_payload = ChunkedMessageContext.assemble_payload(ctx)
-
-      :telemetry.execute(
-        [:pulsar, :consumer, :chunk, :complete],
-        %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
-        %{uuid: uuid, consumer_id: state.consumer_id}
-      )
-
-      final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
-
-      all_message_ids = ChunkedMessageContext.all_message_ids(ctx)
-
-      chunk_metadata = %{
-        chunked: true,
-        complete: true,
-        uuid: uuid,
-        num_chunks: num_chunks,
-        message_ids: all_message_ids,
-        commands: ctx.commands,
-        metadatas: ctx.metadatas,
-        broker_metadatas: ctx.broker_metadatas
-      }
-
-      message = build_message_from_chunk(chunk_metadata, complete_payload)
-      {final_state, [message]}
-    else
-      {new_state, []}
-    end
+    put_chunk_context(state, uuid, ctx, num_chunks)
   end
 
   defp add_chunk_to_context(state, ctx, chunk_data) do
@@ -1090,38 +1060,47 @@ defmodule Pulsar.Consumer.Worker do
     } = chunk_data
 
     {:ok, updated_ctx} = ChunkedMessageContext.add_chunk(ctx, command, metadata, payload, broker_metadata)
-    new_contexts = Map.put(state.chunked_message_contexts, uuid, updated_ctx)
+    put_chunk_context(state, uuid, updated_ctx, num_chunks)
+  end
+
+  defp put_chunk_context(state, uuid, ctx, num_chunks) do
+    new_contexts = Map.put(state.chunked_message_contexts, uuid, ctx)
     new_state = %{state | chunked_message_contexts: new_contexts}
 
-    if ChunkedMessageContext.complete?(updated_ctx) do
-      complete_payload = ChunkedMessageContext.assemble_payload(updated_ctx)
-
-      :telemetry.execute(
-        [:pulsar, :consumer, :chunk, :complete],
-        %{num_chunks: updated_ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
-        %{uuid: uuid, consumer_id: state.consumer_id}
-      )
-
-      final_state = %{new_state | chunked_message_contexts: Map.delete(new_state.chunked_message_contexts, uuid)}
-
-      all_message_ids = ChunkedMessageContext.all_message_ids(updated_ctx)
-
-      chunk_metadata = %{
-        chunked: true,
-        complete: true,
-        uuid: uuid,
-        num_chunks: num_chunks,
-        message_ids: all_message_ids,
-        commands: updated_ctx.commands,
-        metadatas: updated_ctx.metadatas,
-        broker_metadatas: updated_ctx.broker_metadatas
-      }
-
-      message = build_message_from_chunk(chunk_metadata, complete_payload)
-      {final_state, [message]}
+    if ChunkedMessageContext.complete?(ctx) do
+      complete_chunked_message(new_state, uuid, ctx, num_chunks)
     else
       {new_state, []}
     end
+  end
+
+  defp complete_chunked_message(state, uuid, ctx, num_chunks) do
+    # Every chunk repeats the metadata of the message it came from, so any of them describes
+    # how the reassembled payload was compressed.
+    assembled_payload = ChunkedMessageContext.assemble_payload(ctx)
+    complete_payload = maybe_uncompress(hd(ctx.metadatas), assembled_payload)
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :chunk, :complete],
+      %{num_chunks: ctx.num_chunks_from_msg, total_size: byte_size(complete_payload)},
+      %{uuid: uuid, consumer_id: state.consumer_id}
+    )
+
+    final_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
+
+    chunk_metadata = %{
+      chunked: true,
+      complete: true,
+      uuid: uuid,
+      num_chunks: num_chunks,
+      message_ids: ChunkedMessageContext.all_message_ids(ctx),
+      commands: ctx.commands,
+      metadatas: ctx.metadatas,
+      broker_metadatas: ctx.broker_metadatas
+    }
+
+    message = build_message_from_chunk(chunk_metadata, complete_payload)
+    {final_state, [message]}
   end
 
   defp handle_chunk_queue_full(state, chunk_data) do

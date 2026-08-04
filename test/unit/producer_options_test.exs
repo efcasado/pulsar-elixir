@@ -61,6 +61,17 @@ defmodule Pulsar.Producer.OptionsTest do
       assert validate!(partition_discovery_interval_ms: 5_000)[:partition_discovery_interval_ms] == 5_000
     end
 
+    test "rejects chunking together with batching" do
+      assert_raise NimbleOptions.ValidationError, ~r/:chunking_enabled.*:batch_enabled/, fn ->
+        validate!(batch_enabled: true, chunking_enabled: true)
+      end
+    end
+
+    test "accepts chunking and batching on their own" do
+      assert validate!(chunking_enabled: true)[:chunking_enabled] == true
+      assert validate!(batch_enabled: true)[:batch_enabled] == true
+    end
+
     test "rejects unknown options" do
       assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:batch_sze.*:nonsense/, fn ->
         validate!(batch_sze: 10, nonsense: true)

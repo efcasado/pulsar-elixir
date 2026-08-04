@@ -220,6 +220,125 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
+  for compression <- [:none, :lz4, :zlib, :snappy, :zstd] do
+    test "reassembles a chunked message compressed with #{compression}" do
+      compression = unquote(compression)
+      large_message = :crypto.strong_rand_bytes(8192)
+
+      {:ok, producer} =
+        Pulsar.Producer.start(
+          @topic,
+          client: @client,
+          name: :"chunking_#{compression}_producer",
+          chunking_enabled: true,
+          compression: compression,
+          max_message_size: 1024
+        )
+
+      {:ok, _consumer_group} =
+        Pulsar.Consumer.start(
+          @topic,
+          "chunking-#{compression}",
+          @consumer_callback,
+          client: @client,
+          init_args: [notify_pid: self()]
+        )
+
+      [consumer] = Utils.wait_for_consumer_ready(1)
+
+      {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
+
+      Utils.wait_for(fn ->
+        @consumer_callback.count_messages(consumer) == 1
+      end)
+
+      [received_msg] = @consumer_callback.get_messages(consumer)
+      assert received_msg.payload == large_message
+      assert received_msg.chunk_metadata.complete == true
+      assert received_msg.chunk_metadata.num_chunks > 1
+
+      # Every chunk describes the message it belongs to, not the slice it carries, which is
+      # what lets a consumer size the buffer before the last chunk arrives.
+      for metadata <- received_msg.raw.metadata do
+        assert metadata.uncompressed_size == byte_size(large_message)
+        assert metadata.total_chunk_msg_size == hd(received_msg.raw.metadata).total_chunk_msg_size
+      end
+    end
+  end
+
+  test "compresses before deciding whether to chunk" do
+    # Compresses to far under :max_message_size, so splitting the compressed bytes leaves
+    # nothing to split. Splitting first would have sent 64 chunks.
+    compressible_message = String.duplicate("a", 65_536)
+
+    {:ok, producer} =
+      Pulsar.Producer.start(
+        @topic,
+        client: @client,
+        name: :chunking_compress_first_producer,
+        chunking_enabled: true,
+        compression: :zlib,
+        max_message_size: 1024
+      )
+
+    {:ok, _consumer_group} =
+      Pulsar.Consumer.start(
+        @topic,
+        "chunking-compress-first",
+        @consumer_callback,
+        client: @client,
+        init_args: [notify_pid: self()]
+      )
+
+    [consumer] = Utils.wait_for_consumer_ready(1)
+
+    {:ok, _msg_id} = Pulsar.Producer.send(producer, compressible_message)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(consumer) == 1
+    end)
+
+    [received_msg] = @consumer_callback.get_messages(consumer)
+    assert received_msg.payload == compressible_message
+    assert received_msg.chunk_metadata == nil
+  end
+
+  test "leaves room for the message metadata inside the broker's size limit" do
+    # Properties ride along with every chunk, so a chunk sized to :max_message_size on its
+    # own would put the frame over what the broker accepts.
+    bulky_properties = %{"padding" => String.duplicate("p", 32_768)}
+    very_large_message = String.duplicate("x", 6_291_456)
+
+    {:ok, producer} =
+      Pulsar.Producer.start(
+        @topic,
+        client: @client,
+        name: :chunking_metadata_overhead_producer,
+        chunking_enabled: true
+      )
+
+    {:ok, _consumer_group} =
+      Pulsar.Consumer.start(
+        @topic,
+        "chunking-metadata-overhead",
+        @consumer_callback,
+        client: @client,
+        init_args: [notify_pid: self()]
+      )
+
+    [consumer] = Utils.wait_for_consumer_ready(1)
+
+    {:ok, _msg_id} = Pulsar.Producer.send(producer, very_large_message, properties: bulky_properties)
+
+    Utils.wait_for(fn ->
+      @consumer_callback.count_messages(consumer) == 1
+    end)
+
+    [received_msg] = @consumer_callback.get_messages(consumer)
+    assert received_msg.payload == very_large_message
+    assert Pulsar.Message.properties(received_msg) == bulky_properties
+  end
+
   @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :expired]]
   test "expired incomplete chunked messages are cleaned up and delivered" do
     alias Proto, as: Binary

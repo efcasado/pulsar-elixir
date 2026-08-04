@@ -33,10 +33,17 @@ When a producer is configured with chunking enabled:
 ```
 
 Large messages are automatically:
-1. Split into chunks of `max_message_size` bytes
-2. Each chunk is assigned a unique UUID and sequence number
-3. Chunks are sent to the broker individually
-4. Each chunk consumes one flow control permit
+1. Compressed as a whole, if `:compression` is set, and then split — so a chunk is a slice of
+   the compressed message rather than a separately compressed slice, which is what every other
+   Pulsar client expects on the wire
+2. Split into chunks of `max_message_size` bytes, capped so that a chunk plus the message
+   metadata that travels with it stays inside the limit the broker advertised at connect time
+3. Each chunk is assigned a unique UUID and sequence number
+4. Chunks are sent to the broker individually
+5. Each chunk consumes one flow control permit
+
+Because the split happens after compression, a payload that compresses to under
+`max_message_size` is sent as a single message and is never chunked at all.
 
 ### Consumer Side
 
@@ -90,7 +97,10 @@ holding a list of protocol structs per chunk rather than a single one.
 
 > #### Warning {: .warning}
 >
-> Batching and chunking cannot be enabled simultaneously on a producer. When `chunking_enabled: true` is set, batching is automatically disabled. These features are mutually exclusive because they represent different strategies for message transmission.
+> Batching and chunking cannot be enabled simultaneously on a producer: a batch is one entry
+> holding many messages, and a chunked message is one message spread over many entries. Starting
+> a producer with both `batch_enabled: true` and `chunking_enabled: true` raises a validation
+> error rather than silently picking one.
 
 ### Producer Configuration
 
