@@ -1,6 +1,7 @@
 defmodule Pulsar.ProducerTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Hash
   alias Pulsar.Producer
   alias Pulsar.Topology
   alias Pulsar.Topology.Group
@@ -76,15 +77,60 @@ defmodule Pulsar.ProducerTest do
         assert {:ok, _group} = Supervisor.start_child(root, routing_group_spec(index))
       end
 
-      partition_key = key_for_partition(4, 5)
+      partition_key = key_for_partition(4, 5, :murmur3_32)
 
       assert Producer.send(root, "payload", partition_key: partition_key) ==
-               {:ok, :erlang.phash2(partition_key, 4)}
+               {:ok, partition_for(partition_key, 4, :murmur3_32)}
 
       assert {:ok, _group} = Supervisor.start_child(root, routing_group_spec(4))
 
       assert Producer.send(root, "payload", partition_key: partition_key) ==
-               {:ok, :erlang.phash2(partition_key, 6)}
+               {:ok, partition_for(partition_key, 6, :murmur3_32)}
+    end
+
+    test "routes a key under murmur3_32 by default" do
+      root = start_routing_topology()
+      start_partitions(root, 8)
+
+      for candidate <- 0..20 do
+        key = "key-#{candidate}"
+
+        assert Producer.send(root, "payload", partition_key: key) ==
+                 {:ok, partition_for(key, 8, :murmur3_32)}
+      end
+    end
+
+    test "routes a key under the configured hashing scheme" do
+      root = start_routing_topology(hashing_scheme: :java_string_hash)
+      start_partitions(root, 8)
+
+      for candidate <- 0..20 do
+        key = "key-#{candidate}"
+
+        assert Producer.send(root, "payload", partition_key: key) ==
+                 {:ok, partition_for(key, 8, :java_string_hash)}
+      end
+    end
+
+    test "routes a key exactly as 2.x did under :phash2_legacy" do
+      root = start_routing_topology(hashing_scheme: :phash2_legacy)
+      start_partitions(root, 8)
+
+      for candidate <- 0..20 do
+        key = "key-#{candidate}"
+
+        assert Producer.send(root, "payload", partition_key: key) ==
+                 {:ok, :erlang.phash2(key, 8)}
+      end
+    end
+
+    test "raises on a non-binary key rather than reporting it as a dead producer" do
+      root = start_routing_topology()
+      start_partitions(root, 8)
+
+      assert_raise ArgumentError, ~r/:partition_key must be a binary/, fn ->
+        Producer.send(root, "payload", partition_key: :tenant_a)
+      end
     end
   end
 
@@ -108,7 +154,7 @@ defmodule Pulsar.ProducerTest do
     pid
   end
 
-  defp start_routing_topology do
+  defp start_routing_topology(extra_opts \\ []) do
     test_pid = self()
     registry = :"producer-routing-registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
@@ -121,13 +167,17 @@ defmodule Pulsar.ProducerTest do
       end
     end
 
-    opts = [
-      topic: "persistent://public/default/routing",
-      name: "routing-producer",
-      client: :test,
-      producer_count: 1,
-      partition_discovery_interval_ms: false
-    ]
+    opts =
+      Keyword.merge(
+        [
+          topic: "persistent://public/default/routing",
+          name: "routing-producer",
+          client: :test,
+          producer_count: 1,
+          partition_discovery_interval_ms: false
+        ],
+        extra_opts
+      )
 
     root =
       start_supervised!(%{
@@ -156,12 +206,20 @@ defmodule Pulsar.ProducerTest do
     }
   end
 
-  defp key_for_partition(partition, partitions) do
+  defp start_partitions(root, count) do
+    for index <- 0..(count - 1) do
+      assert {:ok, _group} = Supervisor.start_child(root, routing_group_spec(index))
+    end
+  end
+
+  defp partition_for(key, partitions, scheme), do: Hash.partition(scheme, key, partitions)
+
+  defp key_for_partition(partition, partitions, scheme) do
     0
     |> Stream.iterate(&(&1 + 1))
     |> Enum.find_value(fn candidate ->
       key = "key-#{candidate}"
-      if :erlang.phash2(key, partitions) == partition, do: key
+      if partition_for(key, partitions, scheme) == partition, do: key
     end)
   end
 end

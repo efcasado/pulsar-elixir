@@ -23,6 +23,7 @@ defmodule Pulsar.Producer do
   """
 
   alias Pulsar.Client
+  alias Pulsar.Hash
   alias Pulsar.Producer.Options
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
@@ -110,8 +111,9 @@ defmodule Pulsar.Producer do
 
   ## Options
 
-  - `:partition_key` - decides the partition of a partitioned topic, and is carried
-    with the message so a `:key_shared` subscription can use it
+  - `:partition_key` - decides the partition of a partitioned topic, hashed under the
+    producer's `:hashing_scheme`, and is carried with the message so a `:key_shared`
+    subscription can use it. Must be a binary; before 3.0 any term was accepted here
   - `:properties` - a map of user properties carried with the message
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery
@@ -174,16 +176,17 @@ defmodule Pulsar.Producer do
         {:error, :not_found}
 
       :topology ->
-        route(Topology.groups(producer), message, opts)
+        {groups, hashing_scheme} = Topology.routing(producer)
+        route(groups, hashing_scheme, message, opts)
     end
   catch
     # A stale root and a worker that dies mid-send have the same public result.
     :exit, reason -> {:error, {:producer_died, reason}}
   end
 
-  defp route([], _message, _opts), do: {:error, :not_ready}
+  defp route([], _hashing_scheme, _message, _opts), do: {:error, :not_ready}
 
-  defp route(groups, message, opts) do
+  defp route(groups, hashing_scheme, message, opts) do
     # Missing partitions are added highest-first, so the contiguous width stays at the old
     # modulus until every new slot exists. Restarting groups remain present and retain their
     # slot, avoiding a temporary key remap during either growth or recovery.
@@ -192,7 +195,7 @@ defmodule Pulsar.Producer do
         {:error, :not_ready}
 
       partitions ->
-        index = select_partition(opts, partitions)
+        index = select_partition(opts, hashing_scheme, partitions)
 
         case List.keyfind(groups, index, 0) do
           {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
@@ -211,10 +214,10 @@ defmodule Pulsar.Producer do
     end)
   end
 
-  defp select_partition(opts, partitions) do
+  defp select_partition(opts, hashing_scheme, partitions) do
     case Keyword.get(opts, :partition_key) do
       nil -> Enum.random(0..(partitions - 1))
-      partition_key -> :erlang.phash2(partition_key, partitions)
+      partition_key -> Hash.partition(hashing_scheme, partition_key, partitions)
     end
   end
 

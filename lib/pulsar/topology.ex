@@ -7,6 +7,7 @@ defmodule Pulsar.Topology do
 
   alias Pulsar.Backoff
   alias Pulsar.Consumer.Worker, as: ConsumerWorker
+  alias Pulsar.Hash
   alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Topic
   alias Pulsar.Topology.Discovery
@@ -200,7 +201,7 @@ defmodule Pulsar.Topology do
     root
     |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, _kind, _topic}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
+      {{Discovery, _kind, _topic, _scheme}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
       _child -> false
     end)
   end
@@ -211,7 +212,7 @@ defmodule Pulsar.Topology do
     root
     |> supervisor_children()
     |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, _kind, topic}, _pid, :worker, [Discovery]} -> topic
+      {{Discovery, _kind, topic, _scheme}, _pid, :worker, [Discovery]} -> topic
       _child -> false
     end)
   end
@@ -226,7 +227,7 @@ defmodule Pulsar.Topology do
     root
     |> supervisor_children()
     |> Enum.find_value(:unknown, fn
-      {{Discovery, kind, _topic}, _pid, :worker, [Discovery]} -> kind
+      {{Discovery, kind, _topic, _scheme}, _pid, :worker, [Discovery]} -> kind
       _child -> false
     end)
   end
@@ -278,13 +279,33 @@ defmodule Pulsar.Topology do
     end
   end
 
-  defp topology_groups(root) do
-    root
-    |> supervisor_children()
-    |> Enum.flat_map(fn
+  # Groups and the configured hashing scheme from one traversal, for a producer that needs both
+  # to route a keyed message and would otherwise pay a second call per send.
+  #
+  # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root, and answers a
+  # group or a worker as though it had no groups. Use groups/1 for anything else.
+  @doc false
+  @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
+  def routing(root) do
+    children = supervisor_children(root)
+
+    {groups_from(children), hashing_scheme_from(children)}
+  end
+
+  defp topology_groups(root), do: root |> supervisor_children() |> groups_from()
+
+  defp groups_from(children) do
+    Enum.flat_map(children, fn
       {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
       {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
+    end)
+  end
+
+  defp hashing_scheme_from(children) do
+    Enum.find_value(children, fn
+      {{Discovery, _kind, _topic, scheme}, _pid, :worker, [Discovery]} -> scheme
+      _child -> false
     end)
   end
 
@@ -384,7 +405,7 @@ defmodule Pulsar.Topology do
     discovery =
       {self(), config, controller_opts}
       |> Discovery.child_spec()
-      |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic})
+      |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic, hashing_scheme_for_config(config)})
 
     # Companions start before discovery so a worker never observes the tree without them. They
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
@@ -409,6 +430,19 @@ defmodule Pulsar.Topology do
   defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers
   defp resource_kind_for_config(%{count_key: :producer_count}), do: :producers
   defp resource_kind_for_config(_config), do: :unknown
+
+  # Carried on the child id so routing reads it from the same which_children the groups come
+  # from, keeping a send to one call. The registry value would be the usual place for this, but
+  # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
+  # and a producer started with start_link_unregistered/1 has none.
+  #
+  # nil where a resource does not route on a key, and for a producer whose options have not been
+  # through Producer.Options; Hash.partition/3 resolves it to the default.
+  defp hashing_scheme_for_config(%{count_key: :producer_count, opts: opts}) do
+    Keyword.get(opts, :hashing_scheme)
+  end
+
+  defp hashing_scheme_for_config(_config), do: nil
 
   @doc false
   @spec reconcile(pid(), non_neg_integer(), map()) ::
