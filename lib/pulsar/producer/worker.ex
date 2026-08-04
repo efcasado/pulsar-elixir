@@ -442,11 +442,16 @@ defmodule Pulsar.Producer.Worker do
     callers = Enum.map(batch, fn {_message, from} -> from end)
     messages_count = length(messages)
 
+    # A batch spends one sequence id per message it carries, so the next one starts past the
+    # whole range. Advertising only the first repeats the ids consumers see and leaves the
+    # broker's high-water mark short of what was handed out.
     sequence_id = state.sequence_id + 1
+    highest_sequence_id = sequence_id + messages_count - 1
 
     command_send = %Binary.CommandSend{
       producer_id: state.producer_id,
       sequence_id: sequence_id,
+      highest_sequence_id: highest_sequence_id,
       num_messages: messages_count
     }
 
@@ -463,6 +468,7 @@ defmodule Pulsar.Producer.Worker do
     message_metadata = %Binary.MessageMetadata{
       producer_name: state.producer_name,
       sequence_id: sequence_id,
+      highest_sequence_id: highest_sequence_id,
       publish_time: System.system_time(:millisecond),
       compression: Protocol.to_compression(state.compression),
       uncompressed_size: uncompressed_size,
@@ -482,9 +488,10 @@ defmodule Pulsar.Producer.Worker do
           Map.put(producer_metadata(state), :sequence_id, sequence_id)
         )
 
+        # Keyed on the first id, which is the one the receipt comes back on.
         new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
 
-        %{state | sequence_id: sequence_id, pending_sends: new_pending, batch: [], batched: 0}
+        %{state | sequence_id: highest_sequence_id, pending_sends: new_pending, batch: [], batched: 0}
 
       {:error, reason} ->
         Logger.error("Failed to send batch: #{inspect(reason)}")
