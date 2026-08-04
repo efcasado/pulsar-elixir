@@ -434,7 +434,7 @@ defmodule Pulsar.Topology do
   defp resource_kind_for_config(_config), do: :unknown
 
   # Carried on the child id so routing reads it from the same which_children the groups come
-  # from, keeping a send to one call. Only a producer routes on a key; anything else has none.
+  # from, keeping a send to one call.
   defp hashing_scheme_for_config(%{count_key: :producer_count, opts: opts}) do
     Keyword.get(opts, :hashing_scheme, Hash.default_scheme())
   end

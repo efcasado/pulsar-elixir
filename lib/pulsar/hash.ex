@@ -7,13 +7,11 @@ defmodule Pulsar.Hash do
   # Both Pulsar schemes mask the result with Integer.MAX_VALUE, as the Java client does, so
   # reducing them to a partition is Pulsar's signSafeMod with no further sign handling.
   #
-  # :phash2_legacy is not a Pulsar scheme and no other client can reproduce it. It exists only
-  # so a 2.x deployment can upgrade without its keys jumping partitions on the way, and should
-  # be migrated off deliberately. See partition/3 for why it cannot share their reduction.
+  # :phash2_legacy is not a Pulsar scheme and no other client can reproduce it. It is a
+  # migration path off the pre-3.0 routing, not a peer of the other two.
   #
-  # Reference implementations, which test/unit/hash_test.exs pins this module against. Both are
-  # tagged rather than tracking a branch, so a claim here always has a source that still says it;
-  # the Java tag is the broker version the integration suite runs against.
+  # Reference implementations, which test/unit/hash_test.exs pins this module against. The
+  # Java tag is the broker version the integration suite runs against.
   #
   # Under https://github.com/apache/pulsar/blob/v4.2.4/
   #
