@@ -7,13 +7,15 @@ defmodule Pulsar.Consumer.Ack do
   # siblings unless it carries an `ack_set` — which only a broker with
   # `acknowledgmentAtBatchIndexLevelEnabled` honours.
 
+  import Bitwise
+
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   # An `ack_set` is `repeated int64` (`MessageIdData` in pulsar.proto), holding a bitset in the
   # layout Java's `BitSet.toLongArray/0` produces: 64 bits per signed word, lowest index first.
   @word_bits 64
 
-  defstruct [{:acked, %{}}, {:nacked, MapSet.new()}, {:batch_index_ack_enabled, false}]
+  defstruct acked: %{}, nacked: MapSet.new(), batch_index_ack_enabled: false
 
   @type entry_key :: {non_neg_integer(), non_neg_integer()}
 
@@ -28,18 +30,16 @@ defmodule Pulsar.Consumer.Ack do
           batch_index_ack_enabled: boolean()
         }
 
-  @spec new(boolean()) :: t()
-  def new(batch_index_ack_enabled \\ false) do
-    %__MODULE__{batch_index_ack_enabled: batch_index_ack_enabled}
+  @spec new(keyword()) :: t()
+  def new(opts \\ []) do
+    %__MODULE__{batch_index_ack_enabled: Keyword.get(opts, :batch_index_ack_enabled, false)}
   end
 
   @doc """
-  Records an acknowledgement locally. Returns `{ids_to_send, ledger}`.
+  Records an acknowledgement locally, returning `{ids_to_send, ledger}`.
 
-  Nothing here reaches the broker: the caller hands over every id its callback acked, sends
-  whatever comes back — often nothing — and keeps the updated ledger.
-
-      {to_send, acks} = Ack.record_ack(state.acks, message_ids)
+  Nothing here reaches the broker: the caller sends whatever comes back, which for a batched
+  message is usually nothing.
 
   A message that arrived on its own always comes back:
 
@@ -69,7 +69,7 @@ defmodule Pulsar.Consumer.Ack do
       iex> alias Pulsar.Consumer.Ack
       iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
       iex> id = %MessageIdData{ledgerId: 7, entryId: 42, batch_index: 0, batch_size: 3}
-      iex> {[acked], _acks} = Ack.record_ack(Ack.new(true), [id])
+      iex> {[acked], _acks} = Ack.record_ack(Ack.new(batch_index_ack_enabled: true), [id])
       iex> {acked.ack_set, acked.batch_size}
       {[0b110], 3}
   """
@@ -108,29 +108,6 @@ defmodule Pulsar.Consumer.Ack do
     ack = forget(ack, message_ids)
     %{ack | nacked: MapSet.union(ack.nacked, MapSet.new(message_ids, &entry_id/1))}
   end
-
-  @doc """
-  Drops what has been counted off for the entries these ids belong to.
-
-  Redelivery is whole entries, so a nacked message brings its batch back with it: the tally
-  would otherwise be left unable to complete.
-  """
-  @spec forget(t(), [message_id()]) :: t()
-  def forget(%__MODULE__{} = ack, message_ids) do
-    keys =
-      message_ids
-      |> Enum.map(&batch_entry/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(fn {key, _index, _size} -> key end)
-
-    %{ack | acked: Map.drop(ack.acked, keys)}
-  end
-
-  @doc """
-  How many entries are part-acknowledged, waiting on the rest of their messages.
-  """
-  @spec held_entries(t()) :: non_neg_integer()
-  def held_entries(%__MODULE__{acked: acked}), do: map_size(acked)
 
   @spec take_nacked(t()) :: {[message_id()], t()}
   def take_nacked(%__MODULE__{nacked: nacked} = ack) do
@@ -176,9 +153,21 @@ defmodule Pulsar.Consumer.Ack do
 
   @spec deliverable?(bitset() | nil, non_neg_integer()) :: boolean()
   def deliverable?(nil, _index), do: true
-  def deliverable?(outstanding, index), do: Bitwise.band(outstanding, Bitwise.bsl(1, index)) != 0
+  def deliverable?(outstanding, index), do: (outstanding &&& 1 <<< index) != 0
 
   ## Private
+
+  # A redelivered entry has to be dealt with in full again before it can be acknowledged, so
+  # what it counted off before is dropped rather than counted on from.
+  defp forget(ack, message_ids) do
+    keys =
+      message_ids
+      |> Enum.map(&batch_entry/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(fn {key, _index, _size} -> key end)
+
+    %{ack | acked: Map.drop(ack.acked, keys)}
+  end
 
   defp count_off(ack, {key, index, size}, message_id, ackable) do
     acked = acked_with(ack, key, index)
@@ -211,7 +200,7 @@ defmodule Pulsar.Consumer.Ack do
   # Set bits are the messages still outstanding, not the acked ones: the broker starts an entry
   # with every bit set and deletes it once nothing is left.
   defp encode_ack_set(acked, size) do
-    outstanding = Bitwise.band(Bitwise.bnot(acked), every_message(size))
+    outstanding = bnot(acked) &&& every_message(size)
     bits = word_count(size) * @word_bits
 
     for <<(word::little-signed-size(@word_bits) <- <<outstanding::little-size(bits)>>)>>, do: word
@@ -220,14 +209,13 @@ defmodule Pulsar.Consumer.Ack do
   defp decode_ack_set(ack_set) do
     binary = for word <- ack_set, into: <<>>, do: <<word::little-signed-size(@word_bits)>>
     bits = bit_size(binary)
-    # Pinned because a size in a match is read, not bound.
     <<outstanding::little-size(^bits)>> = binary
     outstanding
   end
 
-  defp acked_with(ack, key, index), do: Bitwise.bor(Map.get(ack.acked, key, 0), Bitwise.bsl(1, index))
+  defp acked_with(ack, key, index), do: Map.get(ack.acked, key, 0) ||| 1 <<< index
 
-  defp every_message(size), do: Bitwise.bsl(1, size) - 1
+  defp every_message(size), do: (1 <<< size) - 1
 
   defp word_count(size), do: div(size - 1, @word_bits) + 1
 end

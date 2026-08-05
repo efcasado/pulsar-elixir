@@ -85,7 +85,10 @@ defmodule Pulsar.Consumer.Options do
     read_compacted: [
       type: :boolean,
       default: false,
-      doc: "Read only the latest value per key from a compacted topic."
+      doc: """
+      Read only the latest value per key from a compacted topic. Messages compaction has
+      replaced are filtered out of a batch rather than delivered, whatever this is set to.
+      """
     ],
     force_create_topic: [
       type: :boolean,
@@ -110,7 +113,8 @@ defmodule Pulsar.Consumer.Options do
       type: :pos_integer,
       doc: """
       Milliseconds between redelivery requests for negatively acknowledged messages.
-      Absent by default, in which case they are not redelivered.
+      Absent by default, in which case they are not redelivered and a nacked message from a
+      batch leaves its entry unacknowledged until it is acked or the consumer restarts.
       """
     ],
     dead_letter_policy: [

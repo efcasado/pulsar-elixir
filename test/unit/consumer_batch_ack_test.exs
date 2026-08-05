@@ -100,14 +100,47 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
       assert state.acks.acked == %{}
     end
+
+    test "starts a tally nothing will finish when a completed entry is acked again" do
+      state = deliver(worker_state(%{}), ["a", "b", "c"])
+      assert [_ack] = acks()
+
+      {:reply, :ok, state} = Worker.handle_call({:ack, [batch_id(1)]}, self(), state)
+
+      # The entry is gone, so the second ack counts one message of three off an empty tally.
+      assert [] == acks()
+      assert map_size(state.acks.acked) == 1
+    end
   end
 
   describe "nacking a batched message" do
+    test "does not queue a nack for a redelivery that will never be requested" do
+      state = deliver(worker_state(%{"b" => :nack}), ["a", "b", "c"])
+
+      # :trigger_redelivery is only scheduled when an interval is configured, so anything
+      # recorded here would sit forever with nothing to drain it.
+      assert {[], _acks} = Ack.take_nacked(state.acks)
+    end
+
     test "collapses ids to the entry the broker would redeliver" do
       state = deliver(worker_state(%{"a" => :nack, "c" => :nack}, redelivery_interval: 1000), ["a", "b", "c"])
 
       assert [%{batch_index: -1} = id] = MapSet.to_list(state.acks.nacked)
       assert {@ledger, @entry} == {id.ledgerId, id.entryId}
+    end
+
+    test "keeps the entry's tally when nothing will ask the nacked message back" do
+      state = deliver(worker_state(%{"b" => :nack}), ["a", "b", "c"])
+
+      assert [] == acks()
+      assert map_size(state.acks.acked) == 1
+
+      # "a" and "c" were acked before the nack, so acking "b" out of band completes the entry.
+      {:reply, :ok, state} = Worker.handle_call({:ack, [batch_id(1)]}, self(), state)
+
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
     end
   end
 
@@ -187,6 +220,20 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert new_state.flow_outstanding_permits == 97
     end
 
+    test "reads a set that spans words, and the sign the broker wrote it with" do
+      payloads = Enum.map(0..69, &"msg-#{&1}")
+
+      # Bits 1..63 of the first word, which sets its sign bit, and 64..69 of the second: only
+      # "msg-0" was acked before.
+      state = deliver(worker_state(%{}), payloads, ack_set: [-2, 0b111111])
+
+      assert delivered_payloads() == tl(payloads)
+
+      assert [ack] = acks()
+      assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+
     test "delivers everything when the entry carries no set" do
       deliver(worker_state(%{}), ["a", "b", "c"])
 
@@ -204,6 +251,23 @@ defmodule Pulsar.Consumer.BatchAckTest do
       # Acking what arrived has to finish the entry: nothing will ever deliver "a" again.
       assert [ack] = acks()
       assert [%{batch_index: -1}] = ack.message_id
+      assert state.acks.acked == %{}
+    end
+
+    test "keeps its full width under batch index acking, so it can still complete" do
+      state = worker_state(%{}, batch_index_ack_enabled: true)
+
+      # "a" was acked by whoever held the entry before, so only "b" and "c" are delivered.
+      state = deliver(state, ["a", "b", "c"], ack_set: [0b110])
+
+      assert delivered_payloads() == ["b", "c"]
+
+      # batch_size comes from the entry's own metadata, not from how much of it was delivered,
+      # so counting "a" off and acking the two that arrived still reaches the whole entry.
+      assert [first, second, third] = Enum.map(acks(), fn ack -> hd(ack.message_id) end)
+      assert {first.ack_set, first.batch_size} == {[0b110], 3}
+      assert {second.ack_set, second.batch_size} == {[0b100], 3}
+      assert third.batch_index == -1
       assert state.acks.acked == %{}
     end
 
@@ -238,59 +302,6 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
-  describe "reporting the ledger" do
-    test "counts the entries it is holding when it asks for more permits" do
-      handler = "held-entries-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler,
-        [:pulsar, :consumer, :flow_control, :stop],
-        fn _event, _measurements, metadata, pid -> send(pid, {:flow_control, metadata}) end,
-        self()
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      # The threshold is high enough that this delivery triggers a refill on its way out.
-      state = %{
-        worker_state(%{"b" => :defer})
-        | flow_initial: 100,
-          flow_threshold: 100,
-          flow_refill: 50,
-          flow_outstanding_permits: 100
-      }
-
-      deliver(state, ["a", "b", "c"])
-
-      assert_received {:flow_control, %{held_entries: 1}}
-    end
-
-    test "counts nothing once the entries it was holding complete" do
-      handler = "held-entries-#{System.unique_integer([:positive])}"
-
-      :telemetry.attach(
-        handler,
-        [:pulsar, :consumer, :flow_control, :stop],
-        fn _event, _measurements, metadata, pid -> send(pid, {:flow_control, metadata}) end,
-        self()
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      state = %{
-        worker_state(%{})
-        | flow_initial: 100,
-          flow_threshold: 100,
-          flow_refill: 50,
-          flow_outstanding_permits: 100
-      }
-
-      deliver(state, ["a", "b", "c"])
-
-      assert_received {:flow_control, %{held_entries: 0}}
-    end
-  end
-
   describe "diverting a batch to the dead letter topic" do
     test "does not acknowledge the entry when one message of it fails to divert" do
       state = diverting_state(refuse: ["b"])
@@ -301,7 +312,9 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert diverted_payloads() == ["a", "c"]
       assert [] == acks()
 
-      # Its tally goes too: the entry comes back whole, and "a" and "c" divert a second time.
+      # It is asked for again, so its tally goes: the entry comes back whole and has to answer
+      # for "a" and "c" a second time before it can be acknowledged.
+      assert {[%{batch_index: -1}], _acks} = Ack.take_nacked(state.acks)
       assert state.acks.acked == %{}
     end
 
@@ -334,7 +347,13 @@ defmodule Pulsar.Consumer.BatchAckTest do
         start: {Supervisor, :start_link, [[child], [strategy: :one_for_one]]}
       })
 
-    %{worker_state(%{}) | dead_letter_root: root, dead_letter_topic: "dlq", max_redelivery: 1}
+    # A failed divert is nacked, so the consumer needs an interval for it to come back at all.
+    %{
+      worker_state(%{}, redelivery_interval: 1000)
+      | dead_letter_root: root,
+        dead_letter_topic: "dlq",
+        max_redelivery: 1
+    }
   end
 
   defp diverted_payloads(acc \\ []) do
@@ -346,12 +365,12 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   defp worker_state(answers, opts \\ []) do
-    {batch_index_ack_enabled, opts} = Keyword.pop(opts, :batch_index_ack_enabled, false)
+    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled])
 
     struct(
       Worker,
       [
-        acks: Ack.new(batch_index_ack_enabled),
+        acks: Ack.new(ack_opts),
         topic: @topic,
         base_topic: @topic,
         subscription_name: "order-service",

@@ -20,29 +20,6 @@ defmodule Pulsar.Consumer.AckTest do
     end
   end
 
-  describe "forget/2" do
-    test "drops what an entry had counted off, so a redelivery starts again" do
-      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
-      {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
-
-      ack = Ack.forget(ack, [batch_id(1, 3)])
-      assert ack.acked == %{}
-
-      # Counting on from the first delivery would acknowledge the entry an ack early.
-      assert {[], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
-      assert {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
-      assert {[_entry], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
-    end
-
-    test "leaves entries the ids do not belong to alone" do
-      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
-
-      ack = Ack.forget(ack, [batch_id(0, 3, entry: 43), id()])
-
-      assert map_size(ack.acked) == 1
-    end
-  end
-
   describe "entry_id/1" do
     test "leaves an id that names no batch untouched" do
       assert Ack.entry_id(id()) == id()
@@ -99,6 +76,27 @@ defmodule Pulsar.Consumer.AckTest do
       assert {[%{batch_index: -1, entryId: 42}], ack} = Ack.take_nacked(ack)
       assert {[], _ack} = Ack.take_nacked(ack)
     end
+
+    test "makes the redelivered entry answer for every message again" do
+      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
+      {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+
+      ack = Ack.record_nack(ack, [batch_id(1, 3)])
+
+      # Counting on from the first delivery would acknowledge the entry on the redelivery of
+      # message 1, before message 2 had been dealt with.
+      assert {[], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+      assert {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      assert {[_entry], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+    end
+
+    test "leaves entries the nacked ids do not belong to alone" do
+      {[], ack} = Ack.record_ack(Ack.new(), [batch_id(0, 3)])
+
+      ack = Ack.record_nack(ack, [batch_id(0, 3, entry: 43), id()])
+
+      assert map_size(ack.acked) == 1
+    end
   end
 
   ## Helpers
@@ -108,7 +106,7 @@ defmodule Pulsar.Consumer.AckTest do
     acked = Enum.reject(0..(size - 1), &(&1 in owed))
 
     {ids, _ack} =
-      Enum.reduce(acked, {[], Ack.new(true)}, fn index, {ids, ack} ->
+      Enum.reduce(acked, {[], Ack.new(batch_index_ack_enabled: true)}, fn index, {ids, ack} ->
         {ackable, ack} = Ack.record_ack(ack, [batch_id(index, size)])
         {ids ++ ackable, ack}
       end)

@@ -177,7 +177,7 @@ defmodule Pulsar.Consumer.Worker do
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
-        acks: Ack.new(Keyword.get(opts, :batch_index_ack_enabled, false)),
+        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled])),
         schema: build_schema(Keyword.get(opts, :schema)),
         max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
@@ -276,7 +276,7 @@ defmodule Pulsar.Consumer.Worker do
   def handle_continue({:send_initial_flow, init_args}, state) do
     result =
       if state.flow_initial > 0 do
-        send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial)
+        send_flow_command(state, state.flow_initial)
       else
         :ok
       end
@@ -392,8 +392,7 @@ defmodule Pulsar.Consumer.Worker do
     # A skipped message was still sent, and still charged a permit.
     permits_consumed = length(skipped_ids) + Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
 
-    # A skipped message is one nothing will ever ack, so it is counted off here instead. That
-    # also covers an entry with nothing left to deliver, which only this can acknowledge.
+    # No callback runs for a skipped message, so nothing else can count it off its entry.
     new_state =
       new_state
       |> decrement_permits(permits_consumed)
@@ -585,17 +584,20 @@ defmodule Pulsar.Consumer.Worker do
       %{count: length(entry_ids)},
       consumer_metadata(state)
     )
-
-    :ok
   end
 
-  # :trigger_redelivery only fires when a redelivery interval is configured, so without one an
-  # id is deliberately not recorded.
   defp track_nacked(state, []), do: state
 
+  # Nothing drains the nacked set without an interval to fire :trigger_redelivery, so the entry
+  # is not coming back and its tally is left as it is: acking the message later still completes
+  # it.
   defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
-    Logger.debug("NACKed #{length(nacked_ids)} message(s), but no redelivery_interval configured")
-    %{state | acks: Ack.forget(state.acks, nacked_ids)}
+    Logger.warning(
+      "NACKed #{length(nacked_ids)} message(s) with no redelivery_interval configured: " <>
+        "nothing will ask for them back"
+    )
+
+    state
   end
 
   defp track_nacked(%__MODULE__{} = state, nacked_ids) do
@@ -682,13 +684,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_call({:send_flow, permits}, _from, state) do
-    case send_flow_command(
-           state.broker_pid,
-           state.consumer_id,
-           permits,
-           state.flow_outstanding_permits,
-           Ack.held_entries(state.acks)
-         ) do
+    case send_flow_command(state, permits) do
       :ok ->
         new_permits = state.flow_outstanding_permits + permits
         {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
@@ -810,10 +806,6 @@ defmodule Pulsar.Consumer.Worker do
     %{state | flow_outstanding_permits: new_permits}
   end
 
-  defp send_initial_flow(broker_pid, consumer_id, permits) do
-    send_flow_command(broker_pid, consumer_id, permits, 0, 0)
-  end
-
   defp check_and_refill_permits(%{flow_initial: 0} = state) do
     state
   end
@@ -831,13 +823,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp do_refill_permits(state, refill_amount, current_permits) do
-    case send_flow_command(
-           state.broker_pid,
-           state.consumer_id,
-           refill_amount,
-           current_permits,
-           Ack.held_entries(state.acks)
-         ) do
+    case send_flow_command(state, refill_amount) do
       :ok ->
         %{state | flow_outstanding_permits: current_permits + refill_amount}
 
@@ -847,24 +833,25 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits, held_entries) do
+  defp send_flow_command(state, permits) do
     flow_command = %Binary.CommandFlow{
-      consumer_id: consumer_id,
+      consumer_id: state.consumer_id,
       messagePermits: permits
     }
 
+    outstanding_permits = state.flow_outstanding_permits
+
     start_metadata = %{
-      consumer_id: consumer_id,
+      consumer_id: state.consumer_id,
       permits_requested: permits,
-      permits_before: outstanding_permits,
-      held_entries: held_entries
+      permits_before: outstanding_permits
     }
 
     :telemetry.span(
       [:pulsar, :consumer, :flow_control],
       start_metadata,
       fn ->
-        result = Pulsar.Broker.send_command(broker_pid, flow_command)
+        result = Pulsar.Broker.send_command(state.broker_pid, flow_command)
 
         stop_metadata = %{success: true, permits_after: outstanding_permits + permits}
 
@@ -919,8 +906,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   # A partly acknowledged entry is redelivered whole, carrying a set of what is still owed, and a
-  # compacted topic leaves entries holding messages compaction has replaced. Neither is delivered
-  # again; both still count towards the entry, so both come back to be counted off.
+  # compacted topic leaves entries holding messages compaction has replaced. Neither is delivered,
+  # and both still count towards their entry, so they come back to be counted off.
   defp build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped_messages) do
     base_message_id = command.message_id
     batch_size = length(unwrapped_messages)
