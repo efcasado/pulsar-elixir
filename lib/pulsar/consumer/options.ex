@@ -85,18 +85,36 @@ defmodule Pulsar.Consumer.Options do
     read_compacted: [
       type: :boolean,
       default: false,
-      doc: "Read only the latest value per key from a compacted topic."
+      doc: """
+      Read only the latest value per key from a compacted topic. Messages compaction has
+      replaced are filtered out of a batch rather than delivered, whatever this is set to.
+      """
     ],
     force_create_topic: [
       type: :boolean,
       default: true,
       doc: "Create the topic if it does not exist."
     ],
+    batch_index_ack_enabled: [
+      type: :boolean,
+      default: false,
+      doc: """
+      Tell the broker which messages of a batch an ack was for, so that a nack redelivers only
+      the rest of the entry instead of all of it. Costs one ack command per message rather
+      than one per entry.
+
+      **Requires `acknowledgmentAtBatchIndexLevelEnabled=true` on the broker.** Without it the
+      broker ignores the set and acknowledges the whole entry, losing the messages batched
+      alongside the acked one. Nothing in the protocol reports the setting, so this cannot be
+      detected: Pulsar's shipped `broker.conf` enables it, `standalone.conf` does not.
+      """
+    ],
     redelivery_interval: [
       type: :pos_integer,
       doc: """
       Milliseconds between redelivery requests for negatively acknowledged messages.
-      Absent by default, in which case they are not redelivered.
+      Absent by default, in which case they are not redelivered and a nacked message from a
+      batch leaves its entry unacknowledged until it is acked or the consumer restarts.
       """
     ],
     dead_letter_policy: [
@@ -130,6 +148,10 @@ defmodule Pulsar.Consumer.Options do
 
       A diverted message keeps its key, ordering key, properties and event time, and gains
       `REAL_TOPIC` and `ORIGIN_MESSAGE_ID` properties naming where it came from.
+
+      A batch diverts as one entry, so if any message in it fails to publish the entry is
+      redelivered and the rest are diverted a second time. Deduplicate on `ORIGIN_MESSAGE_ID`
+      if that matters.
 
       Diverting replaces delivery rather than accompanying it, so neither
       `c:Pulsar.Consumer.Callback.handle_message/2` nor

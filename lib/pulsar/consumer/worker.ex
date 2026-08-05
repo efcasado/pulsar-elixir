@@ -7,6 +7,7 @@ defmodule Pulsar.Consumer.Worker do
   use GenServer
 
   alias Pulsar.Backoff
+  alias Pulsar.Consumer.Ack
   alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Protocol
@@ -51,7 +52,7 @@ defmodule Pulsar.Consumer.Worker do
     :read_compacted,
     :start_message_id,
     :start_timestamp,
-    {:nacked_messages, MapSet.new()},
+    :acks,
     :redelivery_interval,
     :max_redelivery,
     :dead_letter_root,
@@ -85,7 +86,7 @@ defmodule Pulsar.Consumer.Worker do
           force_create_topic: boolean(),
           start_message_id: {non_neg_integer(), non_neg_integer()},
           start_timestamp: non_neg_integer(),
-          nacked_messages: MapSet.t(),
+          acks: Ack.t(),
           redelivery_interval: non_neg_integer() | nil,
           max_redelivery: non_neg_integer() | nil,
           dead_letter_root: pid() | nil,
@@ -176,6 +177,7 @@ defmodule Pulsar.Consumer.Worker do
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
+        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled])),
         schema: build_schema(Keyword.get(opts, :schema)),
         max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
@@ -274,7 +276,7 @@ defmodule Pulsar.Consumer.Worker do
   def handle_continue({:send_initial_flow, init_args}, state) do
     result =
       if state.flow_initial > 0 do
-        send_initial_flow(state.broker_pid, state.consumer_id, state.flow_initial)
+        send_flow_command(state, state.flow_initial)
       else
         :ok
       end
@@ -357,25 +359,23 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_info({:broker_message, message_data}, state) do
-    {messages, new_state} =
+    {messages, skipped_ids, new_state} =
       case message_data do
         {:invalid, command, bytes, validation_error} ->
-          {[build_invalid_message(command, bytes, validation_error)], state}
+          {[build_invalid_message(command, bytes, validation_error)], [], state}
 
         {command, metadata, payload, broker_metadata} ->
-          {state_after, msgs} =
-            if chunked_message?(metadata) do
-              # A chunk is a slice of the compressed message, so it cannot be decompressed
-              # before the rest of the slices are back around it.
-              maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
-            else
-              payload = maybe_uncompress(metadata, payload)
-              unwrapped = unwrap_messages(metadata, payload)
-              pulsar_messages = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
-              {state, pulsar_messages}
-            end
-
-          {msgs, state_after}
+          if chunked_message?(metadata) do
+            # A chunk is a slice of the compressed message, so it cannot be decompressed
+            # before the rest of the slices are back around it.
+            {state_after, msgs} = maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
+            {msgs, [], state_after}
+          else
+            payload = maybe_uncompress(metadata, payload)
+            unwrapped = unwrap_messages(metadata, payload)
+            {msgs, skipped_ids} = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+            {msgs, skipped_ids, state}
+          end
 
         {commands, metadatas, payload, broker_metadatas, chunk_metadata} ->
           chunk_metadata_full =
@@ -386,11 +386,17 @@ defmodule Pulsar.Consumer.Worker do
             })
 
           message = build_message_from_chunk(chunk_metadata_full, payload)
-          {[message], state}
+          {[message], [], state}
       end
 
-    permits_consumed = Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
-    new_state = decrement_permits(new_state, permits_consumed)
+    # A skipped message was still sent, and still charged a permit.
+    permits_consumed = length(skipped_ids) + Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
+
+    # No callback runs for a skipped message, so nothing else can count it off its entry.
+    new_state =
+      new_state
+      |> decrement_permits(permits_consumed)
+      |> ack_message_ids(skipped_ids)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
     new_state =
@@ -405,26 +411,13 @@ defmodule Pulsar.Consumer.Worker do
   @impl true
   def handle_info(:trigger_redelivery, state) do
     new_state =
-      if MapSet.size(state.nacked_messages) > 0 do
-        nacked_list = MapSet.to_list(state.nacked_messages)
+      case Ack.take_nacked(state.acks) do
+        {[], _acks} ->
+          state
 
-        redeliver_command = %Binary.CommandRedeliverUnacknowledgedMessages{
-          consumer_id: state.consumer_id,
-          message_ids: nacked_list
-        }
-
-        :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
-        Logger.warning("Requested redelivery of #{length(nacked_list)} NACKed messages")
-
-        :telemetry.execute(
-          [:pulsar, :consumer, :redelivery, :requested],
-          %{count: length(nacked_list)},
-          consumer_metadata(state)
-        )
-
-        %{state | nacked_messages: MapSet.new()}
-      else
-        state
+        {entry_ids, acks} ->
+          request_redelivery(state, entry_ids)
+          %{state | acks: acks}
       end
 
     schedule_redelivery(state.redelivery_interval)
@@ -504,25 +497,19 @@ defmodule Pulsar.Consumer.Worker do
     # supervisor discovery adds partitions to.
     producer = DeadLetter.producer(state.dead_letter_root)
 
-    {diverted, nacked_ids, reason} =
-      Enum.reduce(messages, {0, [], nil}, fn %Pulsar.Message{} = message, {diverted, nacked_acc, reason} ->
+    {state, diverted, nacked_ids, reason} =
+      Enum.reduce(messages, {state, 0, [], nil}, fn %Pulsar.Message{} = message,
+                                                    {acc_state, diverted, nacked_acc, reason} ->
         message_ids_list = List.wrap(message.message_id)
 
-        case publish_to_dead_letter(producer, message, state.topic) do
+        case publish_to_dead_letter(producer, message, acc_state.topic) do
           :ok ->
-            ack_command = %Binary.CommandAck{
-              consumer_id: state.consumer_id,
-              ack_type: :Individual,
-              message_id: message_ids_list,
-              validation_error: validation_error(message)
-            }
-
-            :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-            {diverted + 1, nacked_acc, reason}
+            acked_state = ack_message_ids(acc_state, message_ids_list, validation_error(message))
+            {acked_state, diverted + 1, nacked_acc, reason}
 
           {:error, dlq_reason} ->
             Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            {diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
+            {acc_state, diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
         end
       end)
 
@@ -567,9 +554,9 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
-    {final_callback_state, nacked_ids} =
-      Enum.reduce(messages, {state.callback_state, []}, fn message, {callback_state, nacked_acc} ->
-        process_single_message(state, message, callback_state, nacked_acc)
+    {new_state, nacked_ids} =
+      Enum.reduce(messages, {state, []}, fn message, {acc_state, nacked_acc} ->
+        process_single_message(acc_state, message, nacked_acc)
       end)
 
     if nacked_ids != [] do
@@ -580,48 +567,78 @@ defmodule Pulsar.Consumer.Worker do
       )
     end
 
-    %{track_nacked(state, nacked_ids) | callback_state: final_callback_state}
+    track_nacked(new_state, nacked_ids)
   end
 
-  # :trigger_redelivery drains this set and only fires when a redelivery interval is configured,
-  # so without one an id is deliberately not tracked rather than left in a set nothing empties.
+  defp request_redelivery(state, entry_ids) do
+    redeliver_command = %Binary.CommandRedeliverUnacknowledgedMessages{
+      consumer_id: state.consumer_id,
+      message_ids: entry_ids
+    }
+
+    :ok = Pulsar.Broker.send_command(state.broker_pid, redeliver_command)
+    Logger.warning("Requested redelivery of #{length(entry_ids)} NACKed messages")
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :redelivery, :requested],
+      %{count: length(entry_ids)},
+      consumer_metadata(state)
+    )
+  end
+
   defp track_nacked(state, []), do: state
 
+  # Nothing fires :trigger_redelivery without an interval, so the entry is not coming back and
+  # its tally is deliberately kept: acking the message later still completes it.
   defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
     Logger.debug("NACKed #{length(nacked_ids)} message(s), but no redelivery_interval configured")
     state
   end
 
   defp track_nacked(%__MODULE__{} = state, nacked_ids) do
-    %{state | nacked_messages: MapSet.union(state.nacked_messages, MapSet.new(nacked_ids))}
+    %{state | acks: Ack.record_nack(state.acks, nacked_ids)}
   end
 
-  defp process_single_message(state, %Pulsar.Message{} = message, callback_state, nacked_acc) do
+  defp ack_message_ids(state, message_ids, validation_error \\ nil) do
+    {to_send, acks} = Ack.record_ack(state.acks, message_ids)
+
+    case to_send do
+      [] -> %{state | acks: acks}
+      ids -> send_ack(%{state | acks: acks}, ids, validation_error)
+    end
+  end
+
+  defp send_ack(state, message_ids, validation_error) do
+    ack_command = %Binary.CommandAck{
+      consumer_id: state.consumer_id,
+      ack_type: :Individual,
+      message_id: message_ids,
+      validation_error: validation_error
+    }
+
+    :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
+    state
+  end
+
+  defp process_single_message(state, %Pulsar.Message{} = message, nacked_acc) do
     # Call callback for ALL messages (including incomplete chunks). An invalid one
     # goes to its own callback, so handle_message/2 can trust what it is given.
     result =
       if Pulsar.Message.valid?(message) do
-        state.callback_module.handle_message(message, callback_state)
+        state.callback_module.handle_message(message, state.callback_state)
       else
-        state.callback_module.handle_invalid_message(message, callback_state)
+        state.callback_module.handle_invalid_message(message, state.callback_state)
       end
 
     message_ids_list = List.wrap(message.message_id)
 
     case result do
       {:ok, new_callback_state} ->
-        ack_command = %Binary.CommandAck{
-          consumer_id: state.consumer_id,
-          ack_type: :Individual,
-          message_id: message_ids_list,
-          validation_error: validation_error(message)
-        }
-
-        :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-        {new_callback_state, nacked_acc}
+        state = ack_message_ids(state, message_ids_list, validation_error(message))
+        {%{state | callback_state: new_callback_state}, nacked_acc}
 
       {:noreply, new_callback_state} ->
-        {new_callback_state, nacked_acc}
+        {%{state | callback_state: new_callback_state}, nacked_acc}
 
       {:error, reason, new_callback_state} ->
         redelivery_count = Pulsar.Message.redelivery_count(message)
@@ -630,11 +647,11 @@ defmodule Pulsar.Consumer.Worker do
           "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
         )
 
-        {new_callback_state, message_ids_list ++ nacked_acc}
+        {%{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
 
       unexpected_result ->
         Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-        {callback_state, nacked_acc}
+        {state, nacked_acc}
     end
   end
 
@@ -662,7 +679,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_call({:send_flow, permits}, _from, state) do
-    case send_flow_command(state.broker_pid, state.consumer_id, permits, state.flow_outstanding_permits) do
+    case send_flow_command(state, permits) do
       :ok ->
         new_permits = state.flow_outstanding_permits + permits
         {:reply, :ok, %{state | flow_outstanding_permits: new_permits}}
@@ -673,14 +690,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_call({:ack, message_ids}, _from, state) when is_list(message_ids) do
-    ack_command = %Binary.CommandAck{
-      consumer_id: state.consumer_id,
-      ack_type: :Individual,
-      message_id: message_ids
-    }
-
-    :ok = Pulsar.Broker.send_command(state.broker_pid, ack_command)
-    {:reply, :ok, state}
+    {:reply, :ok, ack_message_ids(state, message_ids)}
   end
 
   def handle_call({:nack, message_ids}, _from, state) when is_list(message_ids) do
@@ -791,10 +801,6 @@ defmodule Pulsar.Consumer.Worker do
     %{state | flow_outstanding_permits: new_permits}
   end
 
-  defp send_initial_flow(broker_pid, consumer_id, permits) do
-    send_flow_command(broker_pid, consumer_id, permits, 0)
-  end
-
   defp check_and_refill_permits(%{flow_initial: 0} = state) do
     state
   end
@@ -812,7 +818,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp do_refill_permits(state, refill_amount, current_permits) do
-    case send_flow_command(state.broker_pid, state.consumer_id, refill_amount, current_permits) do
+    case send_flow_command(state, refill_amount) do
       :ok ->
         %{state | flow_outstanding_permits: current_permits + refill_amount}
 
@@ -822,14 +828,16 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp send_flow_command(broker_pid, consumer_id, permits, outstanding_permits) do
+  defp send_flow_command(state, permits) do
     flow_command = %Binary.CommandFlow{
-      consumer_id: consumer_id,
+      consumer_id: state.consumer_id,
       messagePermits: permits
     }
 
+    outstanding_permits = state.flow_outstanding_permits
+
     start_metadata = %{
-      consumer_id: consumer_id,
+      consumer_id: state.consumer_id,
       permits_requested: permits,
       permits_before: outstanding_permits
     }
@@ -838,7 +846,7 @@ defmodule Pulsar.Consumer.Worker do
       [:pulsar, :consumer, :flow_control],
       start_metadata,
       fn ->
-        result = Pulsar.Broker.send_command(broker_pid, flow_command)
+        result = Pulsar.Broker.send_command(state.broker_pid, flow_command)
 
         stop_metadata = %{success: true, permits_after: outstanding_permits + permits}
 
@@ -892,32 +900,61 @@ defmodule Pulsar.Consumer.Worker do
     payload
   end
 
+  # A partly acknowledged entry is redelivered whole, carrying a set of what is still owed, and a
+  # compacted topic leaves entries holding messages compaction has replaced. Neither is delivered,
+  # and both still count towards their entry, so they come back to be counted off.
   defp build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped_messages) do
     base_message_id = command.message_id
+    batch_size = length(unwrapped_messages)
+    outstanding = Ack.outstanding(command.ack_set)
 
-    unwrapped_messages
-    |> Enum.with_index()
-    |> Enum.map(fn {{single_metadata, payload}, index} ->
-      message_id =
-        if single_metadata == nil do
-          base_message_id
-        else
-          %{base_message_id | batch_index: index}
-        end
+    {delivered, skipped} =
+      unwrapped_messages
+      |> Enum.with_index()
+      |> Enum.split_with(fn {{single_metadata, _payload}, index} ->
+        deliverable?(single_metadata, outstanding, index)
+      end)
 
-      %Pulsar.Message{
-        payload: payload,
-        message_id: message_id,
-        chunk_metadata: nil,
-        raw: %{
-          command: command,
-          metadata: metadata,
-          single_metadata: single_metadata,
-          broker_metadata: broker_metadata
+    messages =
+      Enum.map(delivered, fn {{single_metadata, payload}, index} ->
+        %Pulsar.Message{
+          payload: payload,
+          message_id: unwrapped_message_id(base_message_id, single_metadata, index, batch_size),
+          chunk_metadata: nil,
+          raw: %{
+            command: command,
+            metadata: metadata,
+            single_metadata: single_metadata,
+            broker_metadata: broker_metadata
+          }
         }
-      }
-    end)
+      end)
+
+    skipped_ids =
+      Enum.map(skipped, fn {{single_metadata, _payload}, index} ->
+        unwrapped_message_id(base_message_id, single_metadata, index, batch_size)
+      end)
+
+    {messages, skipped_ids}
   end
+
+  # The width travels on the id so a deferred ack, arriving with nothing else, can still tell
+  # when its entry is complete.
+  defp unwrapped_message_id(base_message_id, nil, _index, _batch_size), do: base_message_id
+
+  defp unwrapped_message_id(base_message_id, _single_metadata, index, batch_size) do
+    %{base_message_id | batch_index: index, batch_size: batch_size}
+  end
+
+  # A delivery with no batch framing is one message, whatever set the entry arrived with.
+  defp deliverable?(nil, _outstanding, _index), do: true
+
+  defp deliverable?(single_metadata, outstanding, index) do
+    Ack.deliverable?(outstanding, index) and not compacted_out?(single_metadata)
+  end
+
+  defp compacted_out?(%Binary.SingleMessageMetadata{compacted_out: true}), do: true
+  defp compacted_out?(_single_metadata), do: false
 
   # Pulsar's validation errors all describe damaged message contents, with nothing
   # for a frame that was malformed around them, so every reason is reported as the
