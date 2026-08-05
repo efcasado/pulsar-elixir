@@ -134,6 +134,14 @@ defmodule Pulsar.Producer do
   - `{:error, :metadata_too_large}` with `:chunking_enabled`, when `:properties` and the rest
     of the metadata leave no room for a payload to be split into
 
+  A producer already carrying `:max_pending_messages` refuses with
+  `{:error, :producer_queue_full}` rather than taking on more.
+
+  `{:error, :send_timeout}` is the other shape: the broker did not acknowledge the message
+  within `:send_timeout`. **It does not say the message was not published**, only that nothing
+  came back in time. A retry publishes under a fresh sequence id, which the broker's
+  deduplication does not match against the first attempt, so it can duplicate the message.
+
   A successful send answers with the broker's message id, or with a `t:chunked_message_id/0`
   when `:chunking_enabled` split the payload.
 
@@ -152,6 +160,10 @@ defmodule Pulsar.Producer do
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
     a delayed message is published on its own rather than joining a batch
+  - `:timeout` - how long to wait for the call itself, in milliseconds. Defaults to `:infinity`,
+    leaving `:send_timeout` as the deadline. `:send_timeout` is counted from when the producer
+    takes the message, so a producer that has not finished registering has not started it: this
+    is what bounds that wait
   - `:client` - the client to resolve a producer name against
 
   ## Examples
