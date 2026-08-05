@@ -24,6 +24,7 @@ defmodule Pulsar.MixProject do
         extras: [
           "README.md",
           "docs/architecture.md",
+          "docs/batching.md",
           "docs/chunking.md",
           "docs/dead_letter_policies.md",
           "docs/schemas.md",

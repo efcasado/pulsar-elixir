@@ -140,14 +140,14 @@ defmodule Pulsar.Message do
   @doc """
   Returns the message's partition key, or `nil` when it has none.
 
-  A batched message carries its own key, so this reads the batch entry's key and falls back
-  to the key of the message that carried it.
+  A batched message carries its own key, so this reads that one and falls back to the key on
+  the entry it arrived in.
 
   ## Examples
 
-      iex> raw = %{metadata: %{partition_key: "batch"}, single_metadata: %{partition_key: "entry"}}
+      iex> raw = %{metadata: %{partition_key: "entry"}, single_metadata: %{partition_key: "message"}}
       iex> Pulsar.Message.key(%Pulsar.Message{raw: raw})
-      "entry"
+      "message"
   """
   @spec key(t()) :: String.t() | nil
   def key(%__MODULE__{} = message), do: per_message(message, :partition_key)
@@ -205,9 +205,10 @@ defmodule Pulsar.Message do
   @doc """
   Returns the message's id as Pulsar prints it, or `nil` when it has none.
 
-  The shape is `ledgerId:entryId:partition`, with a batch entry's index appended, which is what
-  the Java client's `MessageId.toString()` produces. It is what to log or carry when a message
-  has to be correlated with one seen elsewhere; `message_id` itself stays opaque.
+  The shape is `ledgerId:entryId:partition`, with a batched message's index within its entry
+  appended, which is what the Java client's `MessageId.toString()` produces. It is what to log
+  or carry when a message has to be correlated with one seen elsewhere; `message_id` itself
+  stays opaque.
 
   A chunked message answers for the chunk it began at.
 
@@ -217,7 +218,7 @@ defmodule Pulsar.Message do
       iex> Pulsar.Message.message_id_string(%Pulsar.Message{message_id: id})
       "7:42:-1"
 
-  A batch entry appends its index, so two entries of one batch stay distinguishable:
+  A batched message appends its index, so two messages of one batch stay distinguishable:
 
       iex> id = %{ledgerId: 7, entryId: 42, partition: 3, batch_index: 1}
       iex> Pulsar.Message.message_id_string(%Pulsar.Message{message_id: id})
@@ -240,12 +241,12 @@ defmodule Pulsar.Message do
     end
   end
 
-  # A batch entry carries its own key, properties and times; a message delivered on its own
-  # carries them in the message metadata. Chunks of one message all repeat the same values.
+  # A batched message carries its own key, properties and times; one delivered on its own carries
+  # them in the entry's metadata. Chunks of one message all repeat the same values.
   #
-  # An entry that set nothing decodes to whatever proto2 renders for that field kind: nil for
+  # A message that set nothing decodes to whatever proto2 renders for that field kind: nil for
   # an optional with no default, 0 for one with a numeric default, [] for a repeated field. All
-  # three mean "not set here, ask the message that carried it", as they do in the Java client.
+  # three mean "not set here, ask the entry", as they do in the Java client.
   defp per_message(message, key) do
     case message |> single_metadata() |> field(key) do
       unset when unset in [nil, 0, []] -> message |> metadata() |> field(key)
