@@ -98,12 +98,13 @@ defmodule Pulsar.Producer.Options do
       type: {:or, [:pos_integer, {:in, [false, nil]}]},
       default: 30_000,
       doc: """
-      Milliseconds to wait for the broker to acknowledge a published message before answering
-      its caller `{:error, :send_timeout}`. `false` waits indefinitely; `nil` is an alias.
+      Milliseconds a send may wait before its caller is answered `{:error, :send_timeout}`,
+      counted from when the producer takes it rather than from when it reaches the broker.
+      `false` waits indefinitely; `nil` is an alias.
 
-      This is the deadline a caller waits on, so leave it on unless something else bounds the
-      wait: an unacknowledged send otherwise holds its caller until the producer restarts, and
-      holds its place in `:max_pending_messages` with it.
+      Leave it on unless something else bounds the wait: an unacknowledged send otherwise holds
+      its caller, and its place in `:max_pending_messages`, until the producer restarts. Keep
+      `:flush_interval` well below it.
       """
     ],
     max_pending_messages: [

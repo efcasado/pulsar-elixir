@@ -98,6 +98,22 @@ defmodule Pulsar.Producer.SendTest do
       assert map_size(state.pending_sends) == 3
     end
 
+    test "answers a caller still waiting to be batched", ctx do
+      state = %{ctx.state | batch_enabled: true, batch_size: 100, flush_interval: 30_000}
+
+      {from, state} = send_message(state, "a")
+
+      assert state.batched == 1
+      assert [] == published(), "nothing was published: it is waiting for a flush"
+
+      state = expire(state)
+
+      assert_replied(from, {:error, :send_timeout})
+      assert state.batch == []
+      assert state.batch_started_at == nil
+      assert state.pending_messages == 0
+    end
+
     test "schedules nothing when the timeout is off", ctx do
       {_from, state} = send_message(%{ctx.state | send_timeout: false}, "a")
 
@@ -118,7 +134,7 @@ defmodule Pulsar.Producer.SendTest do
       assert_replied(from, {:error, {:PersistenceError, "storage down"}})
       assert state.pending_sends == %{}
 
-      # Three frames, one caller: the count lands back on nothing owed.
+      # Same again: three frames, one caller.
       assert state.pending_messages == 0
     end
 

@@ -62,6 +62,7 @@ defmodule Pulsar.Producer.Worker do
     :batch_enabled,
     {:batch, []},
     {:batched, 0},
+    :batch_started_at,
     :batch_size,
     :batch_builder,
     :batch_flush_timer,
@@ -95,6 +96,7 @@ defmodule Pulsar.Producer.Worker do
           batch_enabled: boolean(),
           batch: list({map(), GenServer.from()}),
           batched: non_neg_integer(),
+          batch_started_at: integer() | nil,
           batch_size: non_neg_integer(),
           batch_builder: :default | :key_based,
           batch_flush_timer: reference() | nil,
@@ -311,12 +313,14 @@ defmodule Pulsar.Producer.Worker do
     state = park_send(state)
     new_batch = [{message, from} | state.batch]
     new_batched = state.batched + 1
+    started_at = state.batch_started_at || System.monotonic_time(:millisecond)
+
+    state = %{state | batch: new_batch, batched: new_batched, batch_started_at: started_at}
 
     if new_batched >= state.batch_size do
-      state = do_flush_batch(%{state | batch: new_batch, batched: new_batched})
-      {:noreply, state}
+      {:noreply, do_flush_batch(state)}
     else
-      {:noreply, %{state | batch: new_batch, batched: new_batched}}
+      {:noreply, maybe_schedule_send_timeout(state)}
     end
   end
 
@@ -518,7 +522,7 @@ defmodule Pulsar.Producer.Worker do
       |> batch_entries(state.batch_builder)
       |> Enum.reduce(state, &publish_batch/2)
 
-    %{new_state | batch: [], batched: 0}
+    %{new_state | batch: [], batched: 0, batch_started_at: nil}
   end
 
   # Grouping on the ordering key ahead of the partition key is the order the broker resolves a
@@ -616,16 +620,21 @@ defmodule Pulsar.Producer.Worker do
       nil ->
         state
 
-      sent_at ->
-        due_in = max(sent_at + state.send_timeout - System.monotonic_time(:millisecond), 0)
+      due_at ->
+        due_in = max(due_at - System.monotonic_time(:millisecond), 0)
         %{state | send_timeout_timer: Process.send_after(self(), :expire_sends, due_in)}
     end
   end
 
-  defp oldest_send(%__MODULE__{pending_sends: pending}) do
-    pending
-    |> Enum.map(fn {_sequence_id, {_callers, _metadata, sent_at}} -> sent_at end)
-    |> Enum.min(fn -> nil end)
+  # A message waiting to be batched is owed an answer too, counted from when it was taken.
+  defp oldest_send(%__MODULE__{} = state) do
+    published = for {_sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends, do: sent_at
+    batched = List.wrap(state.batch_started_at)
+
+    case Enum.min(published ++ batched, fn -> nil end) do
+      nil -> nil
+      oldest -> oldest + state.send_timeout
+    end
   end
 
   defp expire_due_sends(%__MODULE__{} = state) do
@@ -639,6 +648,20 @@ defmodule Pulsar.Producer.Worker do
     due
     |> Enum.sort()
     |> Enum.reduce(state, &expire_send/2)
+    |> expire_due_batch()
+  end
+
+  defp expire_due_batch(%__MODULE__{batch_started_at: nil} = state), do: state
+
+  defp expire_due_batch(%__MODULE__{} = state) do
+    if state.batch_started_at + state.send_timeout <= System.monotonic_time(:millisecond) do
+      callers = Enum.map(state.batch, fn {_message, from} -> from end)
+      report_send_timeout(length(callers), :batched, state)
+
+      answer(%{state | batch: [], batched: 0, batch_started_at: nil}, callers, {:error, :send_timeout})
+    else
+      state
+    end
   end
 
   defp expire_send(sequence_id, state) do
