@@ -94,6 +94,29 @@ defmodule Pulsar.Producer.Options do
       one that compresses below the limit is sent whole.
       """
     ],
+    send_timeout: [
+      type: {:or, [:pos_integer, {:in, [false, nil]}]},
+      default: 30_000,
+      doc: """
+      Milliseconds to wait for the broker to acknowledge a published message before answering
+      its caller `{:error, :send_timeout}`. `false` waits indefinitely; `nil` is an alias.
+
+      This is the deadline a caller waits on, so leave it on unless something else bounds the
+      wait: an unacknowledged send otherwise holds its caller until the producer restarts, and
+      holds its place in `:max_pending_messages` with it.
+      """
+    ],
+    max_pending_messages: [
+      type: {:or, [:pos_integer, {:in, [false, nil]}]},
+      default: 1000,
+      doc: """
+      How many sends a producer will carry before refusing more with
+      `{:error, :producer_queue_full}`. `false` removes the limit; `nil` is an alias.
+
+      Counts every send taken and not yet answered, waiting to be batched or waiting for a
+      receipt. A chunked message counts once, however many frames carry it.
+      """
+    ],
     max_message_size: [
       type: :pos_integer,
       default: 5_242_880,

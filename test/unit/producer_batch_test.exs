@@ -7,13 +7,14 @@ defmodule Pulsar.Producer.BatchTest do
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Test.Support.BrokerStub
+  alias Pulsar.Test.Support.ProducerState
 
   @at_time 1_900_000_000_000
 
   setup do
     broker = start_supervised!({BrokerStub, self()})
 
-    %{state: producer_state(broker)}
+    %{state: ProducerState.new(broker, batch_enabled: true, batch_size: 10)}
   end
 
   describe "the entry a batch is published as" do
@@ -267,23 +268,5 @@ defmodule Pulsar.Producer.BatchTest do
     <<payload::bytes-size(^payload_size), tail::binary>> = rest
 
     messages_in_batch(tail, [{single.partition_key, payload} | acc])
-  end
-
-  defp producer_state(broker) do
-    struct(Worker, %{
-      topic: "persistent://public/default/orders",
-      base_topic: "persistent://public/default/orders",
-      producer_id: 1,
-      producer_name: "orders-api",
-      broker_pid: broker,
-      ready: true,
-      compression: :none,
-      chunking_enabled: false,
-      max_message_size: 5_242_880,
-      batch_enabled: true,
-      batch_size: 10,
-      batch_builder: :default,
-      flush_interval: 30_000
-    })
   end
 end
