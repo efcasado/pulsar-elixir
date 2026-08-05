@@ -236,6 +236,20 @@ defmodule Pulsar.Producer.Worker do
   end
 
   def handle_call({:send_message, payload, opts}, from, %{batch_enabled: true} = state) do
+    if delayed?(opts) do
+      # A delay names the entry and SingleMessageMetadata has no field for one, so this cannot
+      # ride in a batch. What is pending goes first, or it would overtake earlier messages.
+      send_unbatched(payload, opts, from, do_flush_batch(state))
+    else
+      add_to_batch(payload, opts, from, state)
+    end
+  end
+
+  def handle_call({:send_message, payload, opts}, from, state) do
+    send_unbatched(payload, opts, from, state)
+  end
+
+  defp add_to_batch(payload, opts, from, state) do
     message = %{
       payload: payload,
       partition_key: Keyword.get(opts, :partition_key),
@@ -255,7 +269,7 @@ defmodule Pulsar.Producer.Worker do
     end
   end
 
-  def handle_call({:send_message, payload, opts}, from, state) do
+  defp send_unbatched(payload, opts, from, state) do
     # Compression covers the whole message and the split comes after it, so a chunk is a slice
     # of compressed bytes rather than compressed on its own.
     base_metadata = build_message_metadata(payload, opts, state)
@@ -753,6 +767,8 @@ defmodule Pulsar.Producer.Worker do
 
   defp to_timestamp(%DateTime{} = dt), do: DateTime.to_unix(dt, :millisecond)
   defp to_timestamp(ms), do: ms
+
+  defp delayed?(opts), do: not is_nil(resolve_deliver_at_time(opts))
 
   defp resolve_deliver_at_time(opts) do
     case {Keyword.get(opts, :deliver_at_time), Keyword.get(opts, :deliver_after)} do
