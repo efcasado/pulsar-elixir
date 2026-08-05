@@ -1,26 +1,12 @@
-defmodule Pulsar.Producer.DelayedDeliveryTest do
+defmodule Pulsar.Producer.BatchTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
+  import Pulsar.Test.Support.BrokerStub, only: [published: 0]
+
   alias Pulsar.Producer.Worker
-  alias Pulsar.Protocol
-
-  # Answers the :gen_statem.call publish_message/2 makes, and hands the frame to the test.
-  defmodule BrokerStub do
-    @moduledoc false
-    use GenServer
-
-    def start_link(notify_pid), do: GenServer.start_link(__MODULE__, notify_pid)
-
-    @impl true
-    def init(notify_pid), do: {:ok, notify_pid}
-
-    @impl true
-    def handle_call({:publish_message, frame}, _from, notify_pid) do
-      send(notify_pid, {:published, frame})
-      {:reply, :ok, notify_pid}
-    end
-  end
+  alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Test.Support.BrokerStub
 
   @at_time 1_900_000_000_000
 
@@ -28,6 +14,45 @@ defmodule Pulsar.Producer.DelayedDeliveryTest do
     broker = start_supervised!({BrokerStub, self()})
 
     %{state: producer_state(broker)}
+  end
+
+  describe "the entry a batch is published as" do
+    test "carries the key its messages share", ctx do
+      flush(ctx.state, [[partition_key: "tenant-1"], [partition_key: "tenant-1"]])
+
+      assert [entry] = published()
+      assert entry.metadata.partition_key == "tenant-1"
+    end
+
+    test "carries the ordering key its messages share", ctx do
+      flush(ctx.state, [[ordering_key: "order-1"], [ordering_key: "order-1"]])
+
+      assert [entry] = published()
+      assert entry.metadata.ordering_key == "order-1"
+    end
+
+    test "carries no key when its messages have none", ctx do
+      flush(ctx.state, [[], []])
+
+      assert [entry] = published()
+      assert entry.metadata.partition_key == nil
+      assert entry.metadata.ordering_key == nil
+    end
+
+    # What Java and Go do. Only key-based batching would give the rest of the entry their own.
+    test "carries the first message's key when they differ", ctx do
+      flush(ctx.state, [[partition_key: "tenant-1"], [partition_key: "tenant-2"]])
+
+      assert [entry] = published()
+      assert entry.metadata.partition_key == "tenant-1"
+    end
+
+    test "leaves each message its own key", ctx do
+      flush(ctx.state, [[partition_key: "tenant-1"], [partition_key: "tenant-2"]])
+
+      assert [entry] = published()
+      assert keys_in_batch(entry.payload) == ["tenant-1", "tenant-2"]
+    end
   end
 
   describe "a delayed message on a batching producer" do
@@ -103,6 +128,26 @@ defmodule Pulsar.Producer.DelayedDeliveryTest do
     Worker.handle_call({:send_message, payload, opts}, {self(), make_ref()}, state)
   end
 
+  # Fills the batch so the last send flushes it.
+  defp flush(state, sends) do
+    Enum.reduce(sends, %{state | batch_size: length(sends)}, fn opts, acc ->
+      {:noreply, next} = send_message(acc, "payload", opts)
+      next
+    end)
+  end
+
+  defp keys_in_batch(payload), do: keys_in_batch(payload, [])
+
+  defp keys_in_batch(<<>>, acc), do: Enum.reverse(acc)
+
+  defp keys_in_batch(<<size::32, metadata::bytes-size(size), rest::binary>>, acc) do
+    single = Binary.SingleMessageMetadata.decode(metadata)
+    payload_size = single.payload_size
+    <<_payload::bytes-size(^payload_size), tail::binary>> = rest
+
+    keys_in_batch(tail, [single.partition_key | acc])
+  end
+
   defp producer_state(broker) do
     struct(Worker, %{
       topic: "persistent://public/default/orders",
@@ -118,15 +163,5 @@ defmodule Pulsar.Producer.DelayedDeliveryTest do
       batch_size: 10,
       flush_interval: 30_000
     })
-  end
-
-  defp published(acc \\ []) do
-    receive do
-      {:published, frame} ->
-        {:ok, {command, metadata, payload, _broker_metadata}} = Protocol.decode(frame)
-        published([%{command: command, metadata: metadata, payload: payload} | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
   end
 end
