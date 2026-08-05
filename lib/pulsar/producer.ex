@@ -185,6 +185,66 @@ defmodule Pulsar.Producer do
   end
 
   @doc """
+  Publishes without waiting for the broker, answering with a reference to await on.
+
+  Takes the same options as `send/3`, other than `:timeout`, which belongs to the wait rather
+  than the send. The message is published in the order it was handed over, so two sends from one
+  process to one partition keep theirs.
+
+      {:ok, first} = Pulsar.Producer.send_async(:audit, "one")
+      {:ok, second} = Pulsar.Producer.send_async(:audit, "two")
+
+      {:ok, _message_id} = Pulsar.Producer.await(first)
+      {:ok, _message_id} = Pulsar.Producer.await(second)
+
+  Errors that `send/3` returns are delivered to `await/2` instead, so nothing is lost by not
+  waiting — but a reference that is never awaited leaves its answer unread in the mailbox.
+
+  Whether a producer will take the message at all is answered here: a full one refuses with
+  `{:error, :producer_queue_full}` rather than handing back a reference.
+  """
+  @spec send_async(pid() | String.t() | atom(), binary(), keyword()) ::
+          {:ok, reference()} | {:error, term()}
+  def send_async(producer, message, opts \\ [])
+
+  def send_async(producer, message, opts) when is_pid(producer) and is_binary(message) do
+    publish_async(producer, message, opts)
+  end
+
+  def send_async(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
+    case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
+      {:ok, pid} -> publish_async(pid, message, opts)
+      {:error, :not_found} = error -> error
+    end
+  end
+
+  @doc """
+  Waits for a send started by `send_async/3`, answering as `send/3` would have.
+
+  A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`,
+  the same shape `send/3` reports it under.
+
+  `:send_timeout` already bounds how long a producer holds a send, so the default here is to wait
+  for it. A timeout given instead abandons the wait without cancelling the send: the message may
+  still be published, and its answer stays in the mailbox unread.
+  """
+  @spec await(reference(), timeout()) :: {:ok, send_result()} | {:error, term()}
+  def await(ref, timeout \\ :infinity) when is_reference(ref) do
+    receive do
+      {^ref, reply} ->
+        Process.demonitor(ref, [:flush])
+        reply
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        {:error, {:producer_died, reason}}
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+        {:error, :timeout}
+    end
+  end
+
+  @doc """
   Stops a producer, given its pid or its name.
 
   A pid must be the stable root returned by `start/1` or `start_link/1`. Group and worker pids
@@ -215,25 +275,44 @@ defmodule Pulsar.Producer do
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
   defp publish(producer, message, opts) do
-    case Topology.kind(producer) do
-      :worker ->
-        Worker.send_message(producer, message, opts)
-
-      :group ->
-        {:error, :not_found}
-
-      :topology ->
-        {groups, hashing_scheme} = Topology.routing(producer)
-        route(groups, hashing_scheme, message, opts)
+    with {:ok, worker} <- resolve_worker(producer, opts) do
+      Worker.send_message(worker, message, opts)
     end
   catch
     # A stale root and a worker that dies mid-send have the same public result.
     :exit, reason -> {:error, {:producer_died, reason}}
   end
 
-  defp route([], _hashing_scheme, _message, _opts), do: {:error, :not_ready}
+  # The monitor's reference doubles as the tag the reply carries, the way `GenServer.call/3`
+  # does it, so `await/2` selects on either the reply or the producer going down.
+  defp publish_async(producer, message, opts) do
+    with {:ok, worker} <- resolve_worker(producer, opts) do
+      ref = Process.monitor(worker)
+      GenServer.cast(worker, {:send_message, message, opts, {self(), ref}})
 
-  defp route(groups, hashing_scheme, message, opts) do
+      {:ok, ref}
+    end
+  catch
+    :exit, reason -> {:error, {:producer_died, reason}}
+  end
+
+  defp resolve_worker(producer, opts) do
+    case Topology.kind(producer) do
+      :worker ->
+        {:ok, producer}
+
+      :group ->
+        {:error, :not_found}
+
+      :topology ->
+        {groups, hashing_scheme} = Topology.routing(producer)
+        route(groups, hashing_scheme, opts)
+    end
+  end
+
+  defp route([], _hashing_scheme, _opts), do: {:error, :not_ready}
+
+  defp route(groups, hashing_scheme, opts) do
     # Missing partitions are added highest-first, so the contiguous width stays at the old
     # modulus until every new slot exists. Restarting groups remain present and retain their
     # slot, avoiding a temporary key remap during either growth or recovery.
@@ -245,7 +324,7 @@ defmodule Pulsar.Producer do
         index = select_partition(opts, hashing_scheme, partitions)
 
         case List.keyfind(groups, index, 0) do
-          {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
+          {_index, group} when is_pid(group) -> pick_worker(Topology.workers(group))
           {_index, _restarting} -> {:error, :no_producers_available}
           nil -> {:error, {:partition_not_found, index}}
         end
@@ -268,11 +347,8 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp send_to_worker([], _message, _opts), do: {:error, :no_producers_available}
-
-  defp send_to_worker([worker | _rest], message, opts) do
-    Worker.send_message(worker, message, opts)
-  end
+  defp pick_worker([]), do: {:error, :no_producers_available}
+  defp pick_worker([worker | _rest]), do: {:ok, worker}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.

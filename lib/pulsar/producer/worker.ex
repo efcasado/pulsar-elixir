@@ -246,12 +246,29 @@ defmodule Pulsar.Producer.Worker do
   @impl true
   def handle_call(:ready?, _from, state), do: {:reply, state.ready, state}
 
-  def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do
+  def handle_call({:send_message, payload, opts}, from, state) do
+    take_send(payload, opts, from, state)
+  end
+
+  @impl true
+  def handle_cast({:send_message, payload, opts, from}, state) do
+    case take_send(payload, opts, from, state) do
+      # A caster has nothing to receive a synchronous answer, so it is delivered like any other.
+      {:reply, reply, new_state} ->
+        GenServer.reply(from, reply)
+        {:noreply, new_state}
+
+      {:noreply, _new_state} = noreply ->
+        noreply
+    end
+  end
+
+  defp take_send(_payload, _opts, _from, %__MODULE__{ready: false} = state) do
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
     {:reply, {:error, :producer_waiting}, state}
   end
 
-  def handle_call({:send_message, payload, opts}, from, state) do
+  defp take_send(payload, opts, from, state) do
     if queue_full?(state) do
       {:reply, {:error, :producer_queue_full}, state}
     else
