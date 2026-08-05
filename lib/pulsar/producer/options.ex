@@ -58,7 +58,7 @@ defmodule Pulsar.Producer.Options do
       type: :boolean,
       default: false,
       doc: """
-      Collect messages and publish them as one batch. A message sent with `:deliver_at_time` or
+      Collect messages and publish them together. A message sent with `:deliver_at_time` or
       `:deliver_after` goes on its own, since the broker delays whole entries.
       """
     ],
@@ -66,6 +66,19 @@ defmodule Pulsar.Producer.Options do
       type: :pos_integer,
       default: 100,
       doc: "Messages to collect before flushing a batch. Only used when batching."
+    ],
+    batch_builder: [
+      type: {:in, [:default, :key_based]},
+      default: :default,
+      doc: """
+      How a flushed batch is divided into entries. Only used when batching.
+
+      `:default` publishes it as one entry, under the key of its first message. `:key_based`
+      publishes one entry per key, so a `:key_shared` subscription dispatches every message on
+      its own key. It regroups the batch — order holds within a key, not across them — and
+      suits a small key space: `:batch_size` caps the whole batch, so mostly unique keys leave
+      an entry per message and batching only adds overhead.
+      """
     ],
     flush_interval: [
       type: :pos_integer,
