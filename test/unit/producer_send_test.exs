@@ -107,6 +107,35 @@ defmodule Pulsar.Producer.SendTest do
     end
   end
 
+  describe "a send the broker rejects" do
+    test "drops the rest of a chunked message with it", ctx do
+      state = %{ctx.state | chunking_enabled: true, max_message_size: 8}
+
+      {from, state} = send_message(state, String.duplicate("x", 24))
+      assert map_size(state.pending_sends) == 3
+
+      state = reject_oldest(state)
+
+      assert_replied(from, {:error, {:PersistenceError, "storage down"}})
+      assert state.pending_sends == %{}
+
+      # Three frames, one caller: the count lands back on nothing owed.
+      assert state.pending_messages == 0
+    end
+
+    # Chunks left behind expired later, answering a caller that already had its error.
+    test "answers its caller once, and not again when the timer comes due", ctx do
+      state = %{ctx.state | chunking_enabled: true, max_message_size: 8}
+
+      {from, state} = send_message(state, String.duplicate("x", 24))
+      state = state |> reject_oldest() |> expire()
+
+      assert_replied(from, {:error, {:PersistenceError, "storage down"}})
+      refute_received {_ref, {:error, :send_timeout}}
+      assert state.pending_messages == 0
+    end
+  end
+
   describe "a producer carrying its limit of sends" do
     test "refuses another rather than queueing it", ctx do
       state = %{ctx.state | max_pending_messages: 1}
@@ -192,6 +221,14 @@ defmodule Pulsar.Producer.SendTest do
     {:noreply, new_state} = Worker.handle_call({:send_message, payload, []}, from, state)
 
     {from, new_state}
+  end
+
+  defp reject_oldest(state) do
+    [sequence_id | _] = Enum.sort(Map.keys(state.pending_sends))
+    error = %Binary.CommandSendError{sequence_id: sequence_id, error: :PersistenceError, message: "storage down"}
+    {:noreply, new_state} = Worker.handle_info({:send_error, error}, state)
+
+    new_state
   end
 
   # Waits for the producer's timer to come due, then hands it back as the producer would get it.
