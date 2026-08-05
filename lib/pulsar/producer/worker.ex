@@ -596,9 +596,9 @@ defmodule Pulsar.Producer.Worker do
           Map.put(producer_metadata(state), :sequence_id, sequence_id)
         )
 
-        # Keyed on the first id, which is the one the receipt comes back on.
-        sent_at = System.monotonic_time(:millisecond)
-        new_pending = Map.put(state.pending_sends, sequence_id, {callers, nil, sent_at})
+        # Keyed on the first id, which is the one the receipt comes back on. It keeps the clock
+        # it started in the batch, or flushing would hand every message it carries a fresh one.
+        new_pending = Map.put(state.pending_sends, sequence_id, {callers, nil, state.batch_started_at})
 
         maybe_schedule_send_timeout(%{state | sequence_id: highest_sequence_id, pending_sends: new_pending})
 
@@ -620,21 +620,17 @@ defmodule Pulsar.Producer.Worker do
       nil ->
         state
 
-      due_at ->
-        due_in = max(due_at - System.monotonic_time(:millisecond), 0)
+      sent_at ->
+        due_in = max(sent_at + state.send_timeout - System.monotonic_time(:millisecond), 0)
         %{state | send_timeout_timer: Process.send_after(self(), :expire_sends, due_in)}
     end
   end
 
   # A message waiting to be batched is owed an answer too, counted from when it was taken.
   defp oldest_send(%__MODULE__{} = state) do
-    published = for {_sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends, do: sent_at
-    batched = List.wrap(state.batch_started_at)
+    sent_ats = for {_sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends, do: sent_at
 
-    case Enum.min(published ++ batched, fn -> nil end) do
-      nil -> nil
-      oldest -> oldest + state.send_timeout
-    end
+    Enum.min(sent_ats ++ List.wrap(state.batch_started_at), fn -> nil end)
   end
 
   defp expire_due_sends(%__MODULE__{} = state) do
@@ -648,20 +644,18 @@ defmodule Pulsar.Producer.Worker do
     due
     |> Enum.sort()
     |> Enum.reduce(state, &expire_send/2)
-    |> expire_due_batch()
+    |> expire_due_batch(cutoff)
   end
 
-  defp expire_due_batch(%__MODULE__{batch_started_at: nil} = state), do: state
+  defp expire_due_batch(%__MODULE__{batch_started_at: nil} = state, _cutoff), do: state
 
-  defp expire_due_batch(%__MODULE__{} = state) do
-    if state.batch_started_at + state.send_timeout <= System.monotonic_time(:millisecond) do
-      callers = Enum.map(state.batch, fn {_message, from} -> from end)
-      report_send_timeout(length(callers), :batched, state)
+  defp expire_due_batch(%__MODULE__{batch_started_at: started_at} = state, cutoff) when started_at > cutoff, do: state
 
-      answer(%{state | batch: [], batched: 0, batch_started_at: nil}, callers, {:error, :send_timeout})
-    else
-      state
-    end
+  defp expire_due_batch(%__MODULE__{} = state, _cutoff) do
+    callers = Enum.map(state.batch, fn {_message, from} -> from end)
+    report_batch_timeout(length(callers), state)
+
+    answer(%{state | batch: [], batched: 0, batch_started_at: nil}, callers, {:error, :send_timeout})
   end
 
   defp expire_send(sequence_id, state) do
@@ -686,6 +680,20 @@ defmodule Pulsar.Producer.Worker do
       [:pulsar, :producer, :send, :timeout],
       %{count: count},
       Map.put(producer_metadata(state), :sequence_id, sequence_id)
+    )
+  end
+
+  # These never reached the broker, so there is no sequence id to name them by.
+  defp report_batch_timeout(count, state) do
+    Logger.warning(
+      "#{count} message(s) on #{state.topic} were still waiting to be batched after " <>
+        "#{state.send_timeout}ms, failing their callers"
+    )
+
+    :telemetry.execute(
+      [:pulsar, :producer, :send, :timeout],
+      %{count: count},
+      producer_metadata(state)
     )
   end
 
