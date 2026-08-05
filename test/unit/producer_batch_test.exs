@@ -147,7 +147,7 @@ defmodule Pulsar.Producer.BatchTest do
 
       # Ids 1 and 2 went to the entry that landed; the refused one claimed none.
       assert state.sequence_id == 2
-      assert map_size(state.pending_sends) == 1
+      assert map_size(state.pending_frames) == 1
 
       # Only "b" hears about it. The others are still waiting on the receipt for their entry.
       [{_, a_ref}, {_, b_ref}, _] = froms
@@ -165,7 +165,7 @@ defmodule Pulsar.Producer.BatchTest do
       assert [entry] = published()
       assert entry.command.sequence_id == 1
       assert state.sequence_id == 1
-      assert map_size(state.pending_sends) == 1
+      assert map_size(state.pending_frames) == 1
     end
   end
 

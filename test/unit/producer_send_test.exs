@@ -19,13 +19,13 @@ defmodule Pulsar.Producer.SendTest do
     test "answers its caller and stops tracking it", ctx do
       {from, state} = send_message(ctx.state, "a")
 
-      assert map_size(state.pending_sends) == 1
+      assert map_size(state.pending_frames) == 1
       assert [_frame] = published()
 
       state = expire(state)
 
       assert_replied(from, {:error, :send_timeout})
-      assert state.pending_sends == %{}
+      assert state.pending_frames == %{}
     end
 
     test "answers every caller of a batch it carried", ctx do
@@ -38,7 +38,7 @@ defmodule Pulsar.Producer.SendTest do
 
       assert_replied(first, {:error, :send_timeout})
       assert_replied(second, {:error, :send_timeout})
-      assert state.pending_sends == %{}
+      assert state.pending_frames == %{}
       assert state.pending_messages == 0
     end
 
@@ -46,12 +46,12 @@ defmodule Pulsar.Producer.SendTest do
       state = %{ctx.state | chunking_enabled: true, max_message_size: 8}
 
       {from, state} = send_message(state, String.duplicate("x", 24))
-      assert map_size(state.pending_sends) == 3
+      assert map_size(state.pending_frames) == 3
 
       state = expire(state)
 
       assert_replied(from, {:error, :send_timeout})
-      assert state.pending_sends == %{}
+      assert state.pending_frames == %{}
 
       # Three frames, one caller: the count lands back on nothing owed.
       assert state.pending_messages == 0
@@ -59,7 +59,7 @@ defmodule Pulsar.Producer.SendTest do
 
     test "leaves an already answered send alone", ctx do
       {from, state} = send_message(ctx.state, "a")
-      [sequence_id] = Map.keys(state.pending_sends)
+      [sequence_id] = Map.keys(state.pending_frames)
 
       receipt = %Binary.CommandSendReceipt{sequence_id: sequence_id, message_id: message_id()}
       {:noreply, state} = Worker.handle_info({:send_receipt, receipt}, state)
@@ -69,7 +69,7 @@ defmodule Pulsar.Producer.SendTest do
       state = expire(state)
 
       refute_received {_ref, {:error, :send_timeout}}
-      assert state.pending_sends == %{}
+      assert state.pending_frames == %{}
     end
 
     test "spares a send that has not been waiting long enough", ctx do
@@ -83,7 +83,7 @@ defmodule Pulsar.Producer.SendTest do
 
       assert_replied(first, {:error, :send_timeout})
       refute_received {_ref, {:error, :send_timeout}}
-      assert map_size(state.pending_sends) == 1
+      assert map_size(state.pending_frames) == 1
       refute is_nil(state.send_timeout_timer), "re-aimed at the send it is still carrying"
     end
 
@@ -95,7 +95,7 @@ defmodule Pulsar.Producer.SendTest do
       {_from, state} = send_message(state, "c")
 
       assert state.send_timeout_timer == armed
-      assert map_size(state.pending_sends) == 3
+      assert map_size(state.pending_frames) == 3
     end
 
     test "answers a caller still waiting to be batched", ctx do
@@ -114,6 +114,31 @@ defmodule Pulsar.Producer.SendTest do
       assert state.pending_messages == 0
     end
 
+    test "spares a batch that has not been waiting long enough", ctx do
+      state = %{ctx.state | batch_enabled: true, batch_size: 100, flush_interval: 30_000}
+
+      {_from, state} = send_message(state, "a")
+      {:noreply, state} = Worker.handle_info(:expire_sends, state)
+
+      refute_received {_ref, {:error, :send_timeout}}
+      assert state.batched == 1
+      assert state.batch_started_at
+    end
+
+    test "hands a flushed batch the clock it started on, not a fresh one", ctx do
+      state = %{ctx.state | batch_enabled: true, batch_size: 2}
+
+      {_first, state} = send_message(state, "a")
+
+      # As if the first message had been sitting in the batch for a second.
+      started_at = state.batch_started_at - 1_000
+      {_second, state} = send_message(%{state | batch_started_at: started_at}, "b")
+
+      assert [{_sequence_id, {_callers, _metadata, sent_at}}] = Map.to_list(state.pending_frames)
+      assert sent_at == started_at
+      assert is_nil(state.batch_started_at)
+    end
+
     test "schedules nothing when the timeout is off", ctx do
       {_from, state} = send_message(%{ctx.state | send_timeout: false}, "a")
 
@@ -127,12 +152,12 @@ defmodule Pulsar.Producer.SendTest do
       state = %{ctx.state | chunking_enabled: true, max_message_size: 8}
 
       {from, state} = send_message(state, String.duplicate("x", 24))
-      assert map_size(state.pending_sends) == 3
+      assert map_size(state.pending_frames) == 3
 
       state = reject_oldest(state)
 
       assert_replied(from, {:error, {:PersistenceError, "storage down"}})
-      assert state.pending_sends == %{}
+      assert state.pending_frames == %{}
 
       # Same again: three frames, one caller.
       assert state.pending_messages == 0
@@ -178,7 +203,7 @@ defmodule Pulsar.Producer.SendTest do
       state = %{ctx.state | max_pending_messages: 1}
 
       {_from, state} = send_message(state, "a")
-      [sequence_id] = Map.keys(state.pending_sends)
+      [sequence_id] = Map.keys(state.pending_frames)
 
       receipt = %Binary.CommandSendReceipt{sequence_id: sequence_id, message_id: message_id()}
       {:noreply, state} = Worker.handle_info({:send_receipt, receipt}, state)
@@ -192,7 +217,7 @@ defmodule Pulsar.Producer.SendTest do
 
       {_from, state} = send_message(state, String.duplicate("x", 40))
 
-      assert map_size(state.pending_sends) == 5, "five frames"
+      assert map_size(state.pending_frames) == 5, "five frames"
       assert state.pending_messages == 1, "one message"
 
       assert {:noreply, _state} = Worker.handle_call({:send_message, "b", []}, {self(), make_ref()}, state)
@@ -202,7 +227,7 @@ defmodule Pulsar.Producer.SendTest do
       {from, state} = send_message(ctx.state, "a")
       assert state.pending_messages == 1
 
-      [sequence_id] = Map.keys(state.pending_sends)
+      [sequence_id] = Map.keys(state.pending_frames)
       receipt = %Binary.CommandSendReceipt{sequence_id: sequence_id, message_id: message_id()}
       {:noreply, state} = Worker.handle_info({:send_receipt, receipt}, state)
 
@@ -225,7 +250,7 @@ defmodule Pulsar.Producer.SendTest do
 
       state = Enum.reduce(1..20, state, fn i, acc -> elem(send_message(acc, "msg-#{i}"), 1) end)
 
-      assert map_size(state.pending_sends) == 20
+      assert map_size(state.pending_frames) == 20
     end
   end
 
@@ -239,7 +264,7 @@ defmodule Pulsar.Producer.SendTest do
   end
 
   defp reject_oldest(state) do
-    [sequence_id | _] = Enum.sort(Map.keys(state.pending_sends))
+    [sequence_id | _] = Enum.sort(Map.keys(state.pending_frames))
     error = %Binary.CommandSendError{sequence_id: sequence_id, error: :PersistenceError, message: "storage down"}
     {:noreply, new_state} = Worker.handle_info({:send_error, error}, state)
 

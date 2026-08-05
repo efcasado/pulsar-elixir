@@ -84,7 +84,7 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
 
       # Four chunks over ids 2..5, the first two of them at or below the mark.
       assert {:ok, %{num_chunks: 4}} = Pulsar.Producer.send(producer, String.duplicate("x", 128))
-      assert worker_state(producer).pending_sends == %{}
+      assert worker_state(producer).pending_frames == %{}
 
       # The same id, unchunked, is discarded -- so it is is_chunk that exempts them.
       :sys.replace_state(worker, &%{&1 | sequence_id: 1})

@@ -160,6 +160,10 @@ defmodule Pulsar.Producer do
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
     a delayed message is published on its own rather than joining a batch
+  - `:timeout` - how long to wait for the call itself, in milliseconds. Defaults to `:infinity`,
+    leaving `:send_timeout` as the deadline. `:send_timeout` is counted from when the producer
+    takes the message, so a producer that has not finished registering has not started it: this
+    is what bounds that wait
   - `:client` - the client to resolve a producer name against
 
   ## Examples

@@ -46,7 +46,7 @@ defmodule Pulsar.Producer.Worker do
     :broker_pid,
     :broker_monitor,
     {:sequence_id, 0},
-    {:pending_sends, %{}},
+    {:pending_frames, %{}},
     {:pending_messages, 0},
     :send_timeout,
     :send_timeout_timer,
@@ -80,7 +80,7 @@ defmodule Pulsar.Producer.Worker do
           broker_pid: pid(),
           broker_monitor: reference(),
           sequence_id: integer(),
-          pending_sends: %{integer() => {[GenServer.from()], map() | nil, integer()}},
+          pending_frames: %{integer() => {[GenServer.from()], map() | nil, integer()}},
           pending_messages: non_neg_integer(),
           send_timeout: pos_integer() | false | nil,
           send_timeout_timer: reference() | nil,
@@ -276,13 +276,13 @@ defmodule Pulsar.Producer.Worker do
   # Answers everyone a pending send owes and stops tracking it. A chunk takes the rest of its
   # message with it: nothing can complete it now.
   defp resolve_send(%__MODULE__{} = state, sequence_id, reply) do
-    case Map.pop(state.pending_sends, sequence_id) do
+    case Map.pop(state.pending_frames, sequence_id) do
       {nil, _pending} ->
         :error
 
       {{callers, metadata, _sent_at}, pending} ->
         pending = drop_chunks_of(pending, metadata)
-        {:ok, callers, answer(%{state | pending_sends: pending}, callers, reply)}
+        {:ok, callers, answer(%{state | pending_frames: pending}, callers, reply)}
     end
   end
 
@@ -357,8 +357,8 @@ defmodule Pulsar.Producer.Worker do
           :ok ->
             emit_message_sent(chunk_metadata, chunk_payload, sequence_id, acc_state)
 
-            new_pending = Map.put(acc_state.pending_sends, sequence_id, {[from], chunk_metadata, sent_at})
-            new_state = %{acc_state | sequence_id: sequence_id, pending_sends: new_pending}
+            new_pending = Map.put(acc_state.pending_frames, sequence_id, {[from], chunk_metadata, sent_at})
+            new_state = %{acc_state | sequence_id: sequence_id, pending_frames: new_pending}
             {:cont, {:ok, new_state}}
 
           {:error, reason} ->
@@ -374,7 +374,7 @@ defmodule Pulsar.Producer.Worker do
       # broker's deduplication reads as repeats. The pending entries do go: a message missing
       # chunks can never complete, and its caller already has an error.
       {:error, reason, acc_state} ->
-        {:reply, {:error, reason}, %{acc_state | pending_sends: state.pending_sends}}
+        {:reply, {:error, reason}, %{acc_state | pending_frames: state.pending_frames}}
     end
   end
 
@@ -423,13 +423,13 @@ defmodule Pulsar.Producer.Worker do
   @impl true
   def handle_info({:send_receipt, %Binary.CommandSendReceipt{} = receipt}, state) do
     new_state =
-      case Map.pop(state.pending_sends, receipt.sequence_id) do
+      case Map.pop(state.pending_frames, receipt.sequence_id) do
         # A chunk resolves nothing on its own: the message is owed the rest of its receipts.
         {{callers, %{uuid: _} = chunk_metadata, sent_at}, new_pending} ->
           handle_chunk_receipt(receipt, callers, chunk_metadata, sent_at, new_pending, state)
 
         {{callers, _metadata, _sent_at}, new_pending} ->
-          answer(%{state | pending_sends: new_pending}, callers, {:ok, receipt.message_id})
+          answer(%{state | pending_frames: new_pending}, callers, {:ok, receipt.message_id})
 
         # A chunk of a message that was given up on, which a partial send and a discarded chunk
         # both leave behind: the entry is gone, but what reached the broker is still answered.
@@ -598,9 +598,9 @@ defmodule Pulsar.Producer.Worker do
 
         # Keyed on the first id, which is the one the receipt comes back on. It keeps the clock
         # it started in the batch, or flushing would hand every message it carries a fresh one.
-        new_pending = Map.put(state.pending_sends, sequence_id, {callers, nil, state.batch_started_at})
+        new_pending = Map.put(state.pending_frames, sequence_id, {callers, nil, state.batch_started_at})
 
-        maybe_schedule_send_timeout(%{state | sequence_id: highest_sequence_id, pending_sends: new_pending})
+        maybe_schedule_send_timeout(%{state | sequence_id: highest_sequence_id, pending_frames: new_pending})
 
       # Only this entry's callers hear about it; the ones published before it are still owed
       # their receipts.
@@ -628,7 +628,7 @@ defmodule Pulsar.Producer.Worker do
 
   # A message waiting to be batched is owed an answer too, counted from when it was taken.
   defp oldest_send(%__MODULE__{} = state) do
-    sent_ats = for {_sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends, do: sent_at
+    sent_ats = for {_sequence_id, {_callers, _metadata, sent_at}} <- state.pending_frames, do: sent_at
 
     Enum.min(sent_ats ++ List.wrap(state.batch_started_at), fn -> nil end)
   end
@@ -637,7 +637,7 @@ defmodule Pulsar.Producer.Worker do
     cutoff = System.monotonic_time(:millisecond) - state.send_timeout
 
     due =
-      for {sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends,
+      for {sequence_id, {_callers, _metadata, sent_at}} <- state.pending_frames,
           sent_at <= cutoff,
           do: sequence_id
 
@@ -683,7 +683,6 @@ defmodule Pulsar.Producer.Worker do
     )
   end
 
-  # These never reached the broker, so there is no sequence id to name them by.
   defp report_batch_timeout(count, state) do
     Logger.warning(
       "#{count} message(s) on #{state.topic} were still waiting to be batched after " <>
@@ -691,7 +690,7 @@ defmodule Pulsar.Producer.Worker do
     )
 
     :telemetry.execute(
-      [:pulsar, :producer, :send, :timeout],
+      [:pulsar, :producer, :batch, :timeout],
       %{count: count},
       producer_metadata(state)
     )
@@ -741,7 +740,7 @@ defmodule Pulsar.Producer.Worker do
     if length(chunks_with_receipts) == num_chunks do
       complete_chunked_message(callers, uuid, num_chunks, chunks_with_receipts, updated_pending, state)
     else
-      %{state | pending_sends: updated_pending}
+      %{state | pending_frames: updated_pending}
     end
   end
 
@@ -773,7 +772,7 @@ defmodule Pulsar.Producer.Worker do
       |> Enum.reject(fn {seq_id, _} -> seq_id in chunk_seq_ids end)
       |> Map.new()
 
-    %{state | pending_sends: final_pending}
+    %{state | pending_frames: final_pending}
   end
 
   defp register_with_broker(state, broker_pid) do

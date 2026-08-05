@@ -115,7 +115,8 @@ defmodule Pulsar.Producer.Options do
       `{:error, :producer_queue_full}`. `false` removes the limit; `nil` is an alias.
 
       Counts every send taken and not yet answered, waiting to be batched or waiting for a
-      receipt. A chunked message counts once, however many frames carry it.
+      receipt. A chunked message counts once, however many frames carry it, so a producer
+      chunking large payloads tracks more frames than this bounds.
       """
     ],
     max_message_size: [
