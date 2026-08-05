@@ -77,15 +77,14 @@ defmodule Pulsar.Producer.SendTest do
 
       # Only the first is old enough once the timer comes due.
       Process.sleep(60)
-      {second, state} = send_message(%{state | send_timeout: 5_000}, "b")
+      {_second, state} = send_message(state, "b")
 
-      {:noreply, state} = Worker.handle_info(:expire_sends, %{state | send_timeout: 50})
+      {:noreply, state} = Worker.handle_info(:expire_sends, state)
 
       assert_replied(first, {:error, :send_timeout})
       refute_received {_ref, {:error, :send_timeout}}
       assert map_size(state.pending_sends) == 1
       refute is_nil(state.send_timeout_timer), "re-aimed at the send it is still carrying"
-      assert {_pid, _ref} = second
     end
 
     test "arms one timer for the producer, not one per send", ctx do

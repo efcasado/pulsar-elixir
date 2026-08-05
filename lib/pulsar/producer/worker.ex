@@ -622,20 +622,21 @@ defmodule Pulsar.Producer.Worker do
     end
   end
 
-  defp oldest_send(%__MODULE__{pending_sends: pending}) when map_size(pending) == 0, do: nil
-
   defp oldest_send(%__MODULE__{pending_sends: pending}) do
     pending
     |> Enum.map(fn {_sequence_id, {_callers, _metadata, sent_at}} -> sent_at end)
-    |> Enum.min()
+    |> Enum.min(fn -> nil end)
   end
 
   defp expire_due_sends(%__MODULE__{} = state) do
     cutoff = System.monotonic_time(:millisecond) - state.send_timeout
 
-    state.pending_sends
-    |> Enum.filter(fn {_sequence_id, {_callers, _metadata, sent_at}} -> sent_at <= cutoff end)
-    |> Enum.map(fn {sequence_id, _entry} -> sequence_id end)
+    due =
+      for {sequence_id, {_callers, _metadata, sent_at}} <- state.pending_sends,
+          sent_at <= cutoff,
+          do: sequence_id
+
+    due
     |> Enum.sort()
     |> Enum.reduce(state, &expire_send/2)
   end
