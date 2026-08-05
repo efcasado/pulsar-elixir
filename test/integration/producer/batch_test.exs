@@ -83,6 +83,29 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       end
     end
 
+    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    test "the entry a batch arrives as carries a key for Key_Shared to dispatch on" do
+      {consumer_pid, producer_pid} =
+        setup_producer_consumer("entry-key", batch_size: 2, flush_interval: 30_000)
+
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      producer_name = :sys.get_state(producer).producer_name
+
+      sends =
+        Enum.map(1..2, fn i ->
+          Task.async(fn -> Pulsar.Producer.send(producer_pid, "keyed-#{i}", partition_key: "tenant-1") end)
+        end)
+
+      assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
+
+      assert_messages_received(consumer_pid, ["keyed-1", "keyed-2"])
+      assert_batch_telemetry(count: 2, producer_name: producer_name)
+
+      for message <- DummyConsumer.get_messages(consumer_pid) do
+        assert message.raw.metadata.partition_key == "tenant-1"
+      end
+    end
+
     # A batch spends one sequence id per message it carries, so the next batch has to start
     # past the whole range. Starting at the previous batch's first id repeats the ids consumers
     # see and understates the high-water mark the broker reports back on reconnect.

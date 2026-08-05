@@ -471,6 +471,7 @@ defmodule Pulsar.Producer.Worker do
     messages = Enum.map(batch, fn {message, _from} -> message end)
     callers = Enum.map(batch, fn {_message, from} -> from end)
     messages_count = length(messages)
+    [first_message | _] = messages
 
     # A batch spends one sequence id per message it carries, so the next one starts past the
     # whole range. Advertising only the first repeats the ids consumers see and leaves the
@@ -495,6 +496,8 @@ defmodule Pulsar.Producer.Worker do
 
     uncompressed_size = byte_size(single_messages_payload)
 
+    # Key_Shared reads the sticky key off the entry rather than the messages inside it, and
+    # invents one per entry when it finds none, scattering a key across consumers.
     message_metadata = %Binary.MessageMetadata{
       producer_name: state.producer_name,
       sequence_id: sequence_id,
@@ -503,6 +506,8 @@ defmodule Pulsar.Producer.Worker do
       compression: Protocol.to_compression(state.compression),
       uncompressed_size: uncompressed_size,
       num_messages_in_batch: messages_count,
+      partition_key: first_message.partition_key,
+      ordering_key: first_message.ordering_key,
       schema_version: state.schema_version
     }
 
