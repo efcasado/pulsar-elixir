@@ -8,7 +8,12 @@ defmodule Pulsar.Test.Support.BrokerStub do
 
   alias Pulsar.Protocol
 
-  def start_link(notify_pid), do: GenServer.start_link(__MODULE__, notify_pid)
+  @doc """
+  Starts a stub that accepts everything, or one that refuses the publishes whose zero-based
+  position is in `refuse`.
+  """
+  def start_link({notify_pid, refuse}), do: GenServer.start_link(__MODULE__, {notify_pid, refuse})
+  def start_link(notify_pid), do: start_link({notify_pid, []})
 
   @doc """
   Every frame published so far, decoded, oldest first.
@@ -24,11 +29,17 @@ defmodule Pulsar.Test.Support.BrokerStub do
   end
 
   @impl true
-  def init(notify_pid), do: {:ok, notify_pid}
+  def init({notify_pid, refuse}), do: {:ok, %{notify_pid: notify_pid, refuse: refuse, attempts: 0}}
 
   @impl true
-  def handle_call({:publish_message, frame}, _from, notify_pid) do
-    send(notify_pid, {:published, frame})
-    {:reply, :ok, notify_pid}
+  def handle_call({:publish_message, frame}, _from, %{attempts: attempt} = state) do
+    state = %{state | attempts: attempt + 1}
+
+    if attempt in state.refuse do
+      {:reply, {:error, :message_too_large}, state}
+    else
+      send(state.notify_pid, {:published, frame})
+      {:reply, :ok, state}
+    end
   end
 end

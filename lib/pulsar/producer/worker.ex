@@ -59,6 +59,7 @@ defmodule Pulsar.Producer.Worker do
     {:batch, []},
     {:batched, 0},
     :batch_size,
+    :batch_builder,
     :batch_flush_timer,
     :flush_interval,
     :schema,
@@ -87,6 +88,7 @@ defmodule Pulsar.Producer.Worker do
           batch: list({map(), GenServer.from()}),
           batched: non_neg_integer(),
           batch_size: non_neg_integer(),
+          batch_builder: :default | :key_based,
           batch_flush_timer: reference() | nil,
           flush_interval: non_neg_integer(),
           schema: Schema.t() | nil,
@@ -467,7 +469,31 @@ defmodule Pulsar.Producer.Worker do
   defp do_flush_batch(%{batch: []} = state), do: state
 
   defp do_flush_batch(state) do
-    batch = Enum.reverse(state.batch)
+    new_state =
+      state.batch
+      |> Enum.reverse()
+      |> batch_entries(state.batch_builder)
+      |> Enum.reduce(state, &publish_batch/2)
+
+    %{new_state | batch: [], batched: 0}
+  end
+
+  # Grouping on the ordering key ahead of the partition key is the order the broker resolves a
+  # sticky key in, so messages bound for one consumer stay in one entry.
+  defp batch_entries(batch, :key_based) do
+    grouped = Enum.group_by(batch, &batch_key/1)
+
+    batch
+    |> Enum.map(&batch_key/1)
+    |> Enum.uniq()
+    |> Enum.map(&Map.fetch!(grouped, &1))
+  end
+
+  defp batch_entries(batch, :default), do: [batch]
+
+  defp batch_key({message, _from}), do: message.ordering_key || message.partition_key
+
+  defp publish_batch(batch, state) do
     messages = Enum.map(batch, fn {message, _from} -> message end)
     callers = Enum.map(batch, fn {_message, from} -> from end)
     messages_count = length(messages)
@@ -526,12 +552,14 @@ defmodule Pulsar.Producer.Worker do
         # Keyed on the first id, which is the one the receipt comes back on.
         new_pending = Map.put(state.pending_sends, sequence_id, {callers, %{batch: true}})
 
-        %{state | sequence_id: highest_sequence_id, pending_sends: new_pending, batch: [], batched: 0}
+        %{state | sequence_id: highest_sequence_id, pending_sends: new_pending}
 
+      # Only this entry's callers hear about it; the ones published before it are still owed
+      # their receipts.
       {:error, reason} ->
         Logger.error("Failed to send batch: #{inspect(reason)}")
         Enum.each(callers, fn from -> GenServer.reply(from, {:error, reason}) end)
-        %{state | batch: [], batched: 0}
+        state
     end
   end
 

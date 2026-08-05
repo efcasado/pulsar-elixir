@@ -84,6 +84,42 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     end
 
     @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    test "key-based batching gives every key an entry of its own, not just the first" do
+      {consumer_pid, producer_pid} =
+        setup_producer_consumer("key-based",
+          batch_size: 4,
+          flush_interval: 30_000,
+          batch_builder: :key_based
+        )
+
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      producer_name = :sys.get_state(producer).producer_name
+
+      keys = ["tenant-1", "tenant-2", "tenant-1", "tenant-2"]
+
+      sends =
+        keys
+        |> Enum.with_index()
+        |> Enum.map(fn {key, i} ->
+          Task.async(fn -> Pulsar.Producer.send(producer_pid, "keyed-#{i}", partition_key: key) end)
+        end)
+
+      assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
+
+      expected_payloads = Enum.map(0..3, &"keyed-#{&1}")
+      assert_messages_received(consumer_pid, expected_payloads)
+
+      # One entry per key, rather than the single entry the default builder would have sent.
+      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
+      assert [%{count: 2}, %{count: 2}] = events
+
+      # Every message dispatches on its own key, not on whichever one led the batch.
+      for message <- DummyConsumer.get_messages(consumer_pid) do
+        assert message.raw.metadata.partition_key == Pulsar.Message.key(message)
+      end
+    end
+
+    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
     test "the entry a batch arrives as carries a key for Key_Shared to dispatch on" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("entry-key", batch_size: 2, flush_interval: 30_000)
