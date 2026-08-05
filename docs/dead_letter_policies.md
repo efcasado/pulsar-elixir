@@ -252,6 +252,9 @@ per delivery rather than per message — and `%{topic:, subscription_name:, cons
 The two dead letter events add `:dead_letter_topic` and `:redelivery_count`; `:failed` also carries
 `:reason`.
 
+`:requested` counts entries, where the other three count messages. Against a batching producer three
+nacked messages of one batch are one entry to ask for again, so the two counts do not line up.
+
 `:nacked` reports that a callback rejected a message, whether or not anything will redeliver it. With no
 `:redelivery_interval` configured you will see it with no `:redelivery, :requested` behind it and nothing
 ever reaching the dead letter topic, which is the shape of the mistake the warning above describes.

@@ -30,7 +30,9 @@ defmodule Pulsar.Consumer.Ack do
           batch_index_ack_enabled: boolean()
         }
 
-  @spec new(keyword()) :: t()
+  @type opt :: {:batch_index_ack_enabled, boolean()}
+
+  @spec new([opt()]) :: t()
   def new(opts \\ []) do
     %__MODULE__{batch_index_ack_enabled: Keyword.get(opts, :batch_index_ack_enabled, false)}
   end
@@ -75,15 +77,15 @@ defmodule Pulsar.Consumer.Ack do
   """
   @spec record_ack(t(), [message_id()]) :: {[message_id()], t()}
   def record_ack(%__MODULE__{} = ack, message_ids) do
-    {ackable, new_ack} =
-      Enum.reduce(message_ids, {[], ack}, fn message_id, {ackable, acc} ->
-        case batch_entry(message_id) do
-          nil -> {[entry_id(message_id) | ackable], acc}
-          entry -> count_off(acc, entry, message_id, ackable)
+    {to_send, new_ack} =
+      Enum.reduce(message_ids, {[], ack}, fn message_id, {to_send, acc} ->
+        case count_off(acc, message_id) do
+          {nil, acc} -> {to_send, acc}
+          {id, acc} -> {[id | to_send], acc}
         end
       end)
 
-    {Enum.reverse(ackable), new_ack}
+    {Enum.reverse(to_send), new_ack}
   end
 
   @doc """
@@ -169,18 +171,26 @@ defmodule Pulsar.Consumer.Ack do
     %{ack | acked: Map.drop(ack.acked, keys)}
   end
 
-  defp count_off(ack, {key, index, size}, message_id, ackable) do
-    acked = acked_with(ack, key, index)
+  defp count_off(ack, message_id) do
+    case batch_entry(message_id) do
+      nil ->
+        {entry_id(message_id), ack}
 
-    cond do
-      acked == every_message(size) ->
-        {[entry_id(message_id) | ackable], %{ack | acked: Map.delete(ack.acked, key)}}
+      {key, index, size} ->
+        acked = acked_with(ack, key, index)
 
-      ack.batch_index_ack_enabled ->
-        {[batch_index_ack_id(message_id, acked, size) | ackable], %{ack | acked: Map.put(ack.acked, key, acked)}}
+        cond do
+          # Only real acks and messages the broker will not deliver again reach the width, so
+          # there is nothing left in the entry for this to acknowledge unread.
+          acked == every_message(size) ->
+            {entry_id(message_id), %{ack | acked: Map.delete(ack.acked, key)}}
 
-      true ->
-        {ackable, %{ack | acked: Map.put(ack.acked, key, acked)}}
+          ack.batch_index_ack_enabled ->
+            {batch_index_ack_id(message_id, acked, size), %{ack | acked: Map.put(ack.acked, key, acked)}}
+
+          true ->
+            {nil, %{ack | acked: Map.put(ack.acked, key, acked)}}
+        end
     end
   end
 

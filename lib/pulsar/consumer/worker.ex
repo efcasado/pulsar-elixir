@@ -588,15 +588,10 @@ defmodule Pulsar.Consumer.Worker do
 
   defp track_nacked(state, []), do: state
 
-  # Nothing drains the nacked set without an interval to fire :trigger_redelivery, so the entry
-  # is not coming back and its tally is left as it is: acking the message later still completes
-  # it.
+  # Nothing fires :trigger_redelivery without an interval, so the entry is not coming back and
+  # its tally is deliberately kept: acking the message later still completes it.
   defp track_nacked(%__MODULE__{redelivery_interval: nil} = state, nacked_ids) do
-    Logger.warning(
-      "NACKed #{length(nacked_ids)} message(s) with no redelivery_interval configured: " <>
-        "nothing will ask for them back"
-    )
-
+    Logger.debug("NACKed #{length(nacked_ids)} message(s), but no redelivery_interval configured")
     state
   end
 
@@ -917,7 +912,7 @@ defmodule Pulsar.Consumer.Worker do
       unwrapped_messages
       |> Enum.with_index()
       |> Enum.split_with(fn {{single_metadata, _payload}, index} ->
-        Ack.deliverable?(outstanding, index) and not compacted_out?(single_metadata)
+        deliverable?(single_metadata, outstanding, index)
       end)
 
     messages =
@@ -949,6 +944,13 @@ defmodule Pulsar.Consumer.Worker do
 
   defp unwrapped_message_id(base_message_id, _single_metadata, index, batch_size) do
     %{base_message_id | batch_index: index, batch_size: batch_size}
+  end
+
+  # A delivery with no batch framing is one message, whatever set the entry arrived with.
+  defp deliverable?(nil, _outstanding, _index), do: true
+
+  defp deliverable?(single_metadata, outstanding, index) do
+    Ack.deliverable?(outstanding, index) and not compacted_out?(single_metadata)
   end
 
   defp compacted_out?(%Binary.SingleMessageMetadata{compacted_out: true}), do: true

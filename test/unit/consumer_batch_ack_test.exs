@@ -129,6 +129,15 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert {@ledger, @entry} == {id.ledgerId, id.entryId}
     end
 
+    test "collapses ids handed to Pulsar.Consumer.nack/2 to their entry" do
+      state = worker_state(%{}, redelivery_interval: 1000)
+
+      {:reply, :ok, state} = Worker.handle_call({:nack, [batch_id(0), batch_id(2)]}, self(), state)
+
+      assert [%{batch_index: -1} = id] = MapSet.to_list(state.acks.nacked)
+      assert {@ledger, @entry} == {id.ledgerId, id.entryId}
+    end
+
     test "keeps the entry's tally when nothing will ask the nacked message back" do
       state = deliver(worker_state(%{"b" => :nack}), ["a", "b", "c"])
 
