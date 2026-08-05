@@ -151,6 +151,40 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Reaching the broker with this would have closed the connection.
       assert [{:ok, _}, {:ok, _}] = send_concurrently(producer_pid, ["a", "b"])
     end
+
+    test "a delayed message keeps its delay, and flushes the batch it could not join" do
+      {consumer_pid, producer_pid} =
+        setup_producer_consumer("delayed", batch_size: 10, flush_interval: 30_000)
+
+      deliver_at = DateTime.shift(DateTime.utc_now(), second: 1)
+      deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
+
+      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+
+      # Neither fills the batch, so both wait for a flush that nothing has scheduled yet.
+      pending =
+        Enum.map(["batched-1", "batched-2"], fn payload ->
+          Task.async(fn -> Pulsar.Producer.send(producer_pid, payload) end)
+        end)
+
+      # Both are queued before the delayed one arrives, so it is what flushes them.
+      Utils.wait_for(fn -> :sys.get_state(producer).batched == 2 end)
+
+      assert {:ok, _message_id} = Pulsar.Producer.send(producer_pid, "delayed-1", deliver_at_time: deliver_at)
+
+      assert Enum.all?(Task.await_many(pending, 10_000), &match?({:ok, _}, &1))
+
+      assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
+      messages = DummyConsumer.get_messages(consumer_pid)
+      delayed = Enum.find(messages, &(&1.payload == "delayed-1"))
+      batched = Enum.find(messages, &(&1.payload == "batched-1"))
+
+      assert delayed.raw.metadata.deliver_at_time == deliver_at_ms
+
+      # It arrived as an entry of its own: a batched message carries an index into its entry.
+      assert delayed.message_id.batch_index == -1
+      assert batched.message_id.batch_index >= 0
+    end
   end
 
   # Helpers

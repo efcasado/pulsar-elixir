@@ -57,7 +57,10 @@ defmodule Pulsar.Producer.Options do
     batch_enabled: [
       type: :boolean,
       default: false,
-      doc: "Collect messages and publish them as one batch."
+      doc: """
+      Collect messages and publish them as one batch. A message sent with `:deliver_at_time` or
+      `:deliver_after` goes on its own, since the broker delays whole entries.
+      """
     ],
     batch_size: [
       type: :pos_integer,

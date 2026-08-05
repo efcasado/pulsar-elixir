@@ -150,7 +150,8 @@ defmodule Pulsar.Producer do
     subscription can use it. Must be a binary; before 3.0 any term was accepted here
   - `:properties` - a map of user properties carried with the message
   - `:event_time` - the message's event time, in milliseconds
-  - `:deliver_at_time` / `:deliver_after` - delayed delivery
+  - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
+    a delayed message is published on its own rather than joining a batch
   - `:client` - the client to resolve a producer name against
 
   ## Examples
