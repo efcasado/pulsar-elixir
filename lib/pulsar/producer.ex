@@ -275,8 +275,9 @@ defmodule Pulsar.Producer do
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
   defp publish(producer, message, opts) do
-    with {:ok, worker} <- resolve_worker(producer, opts) do
-      Worker.send_message(worker, message, opts)
+    case resolve_worker(producer, opts) do
+      {:ok, worker} -> Worker.send_message(worker, message, opts)
+      {:error, _reason} = error -> error
     end
   catch
     # A stale root and a worker that dies mid-send have the same public result.
@@ -286,11 +287,15 @@ defmodule Pulsar.Producer do
   # The monitor's reference doubles as the tag the reply carries, the way `GenServer.call/3`
   # does it, so `await/2` selects on either the reply or the producer going down.
   defp publish_async(producer, message, opts) do
-    with {:ok, worker} <- resolve_worker(producer, opts) do
-      ref = Process.monitor(worker)
-      GenServer.cast(worker, {:send_message, message, opts, {self(), ref}})
+    case resolve_worker(producer, opts) do
+      {:ok, worker} ->
+        ref = Process.monitor(worker)
+        GenServer.cast(worker, {:send_message, message, opts, {self(), ref}})
 
-      {:ok, ref}
+        {:ok, ref}
+
+      {:error, _reason} = error ->
+        error
     end
   catch
     :exit, reason -> {:error, {:producer_died, reason}}
