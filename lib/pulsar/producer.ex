@@ -198,8 +198,9 @@ defmodule Pulsar.Producer do
   Errors that `send/3` returns are delivered to `await/2` instead, so nothing is lost by not
   waiting — but a reference that is never awaited leaves its answer unread in the mailbox.
 
-  Whether a producer will take the message at all is answered here: a full one refuses with
-  `{:error, :producer_queue_full}` rather than handing back a reference.
+  It answers `{:error, reason}` here only when there is no worker to hand the message to, such as
+  a producer still discovering its topology. What the producer itself decides, a full queue
+  included, reaches `await/2`.
   """
   @spec send_async(pid() | String.t() | atom(), binary(), keyword()) ::
           {:ok, reference()} | {:error, term()}
@@ -219,8 +220,7 @@ defmodule Pulsar.Producer do
   @doc """
   Waits for a send started by `send_async/3`, answering as `send/3` would have.
 
-  A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`,
-  the same shape `send/3` reports it under.
+  A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`.
 
   `:send_timeout` already bounds how long a producer holds a send, so the default here is to wait
   for it. A timeout given instead abandons the wait without cancelling the send: the message may

@@ -247,7 +247,6 @@ defmodule Pulsar.Producer.Worker do
     end
   end
 
-  # Answered without `answer/3`: a refused send was never parked, so there is nothing to count off.
   defp refuse(state, from, reason) do
     GenServer.reply(from, {:error, reason})
 

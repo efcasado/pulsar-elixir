@@ -9,8 +9,8 @@ defmodule Pulsar.Producer.SendAsyncTest do
   alias Pulsar.Test.Support.BrokerStub
   alias Pulsar.Test.Support.ProducerState
 
-  # Stands in for a producer worker: it answers the cast the way one eventually would, or holds
-  # onto it when asked to, so `await/2` can be driven without a broker behind it.
+  # Stands in for a producer worker: it answers the cast, or sits on it, so `await/2` can be
+  # driven without a broker behind it.
   defmodule StubWorker do
     @moduledoc false
     use GenServer
@@ -44,7 +44,6 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert state.pending_messages == 1
     end
 
-    # A caster has no reply to return, so what `send/3` answers synchronously is delivered.
     test "delivers a refusal to its caller rather than returning it", ctx do
       state = %{ctx.state | max_pending_messages: 1}
       {:noreply, state} = cast(state, "a")
