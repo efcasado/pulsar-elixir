@@ -16,8 +16,9 @@ defmodule Pulsar.ProducerTest do
     def init(partition), do: {:ok, partition}
 
     @impl true
-    def handle_call({:send_message, _message, _opts}, _from, partition) do
-      {:reply, {:ok, partition}, partition}
+    def handle_cast({:send_message, _message, _opts, from}, partition) do
+      GenServer.reply(from, {:ok, partition})
+      {:noreply, partition}
     end
   end
 

@@ -160,10 +160,10 @@ defmodule Pulsar.Producer do
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
     a delayed message is published on its own rather than joining a batch
-  - `:timeout` - how long to wait for the call itself, in milliseconds. Defaults to `:infinity`,
-    leaving `:send_timeout` as the deadline. `:send_timeout` is counted from when the producer
-    takes the message, so a producer that has not finished registering has not started it: this
-    is what bounds that wait
+  - `:timeout` - how long to wait, in milliseconds, answering `{:error, :timeout}` if it passes.
+    Defaults to `:infinity`, leaving `:send_timeout` as the deadline. `:send_timeout` is counted
+    from when the producer takes the message, so a producer that has not finished registering has
+    not started it: this is what bounds that wait. Giving up here does not cancel the send
   - `:client` - the client to resolve a producer name against
 
   ## Examples
@@ -175,12 +175,10 @@ defmodule Pulsar.Producer do
           {:ok, send_result()} | {:error, term()}
   def send(producer, message, opts \\ [])
 
-  def send(producer, message, opts) when is_pid(producer) and is_binary(message), do: publish(producer, message, opts)
-
-  def send(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
-    case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
-      {:ok, pid} -> publish(pid, message, opts)
-      {:error, :not_found} = error -> error
+  def send(producer, message, opts) when is_binary(message) do
+    case send_async(producer, message, opts) do
+      {:ok, ref} -> await(ref, Keyword.get(opts, :timeout, :infinity))
+      {:error, _reason} = error -> error
     end
   end
 
@@ -274,16 +272,6 @@ defmodule Pulsar.Producer do
 
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
-  defp publish(producer, message, opts) do
-    case resolve_worker(producer, opts) do
-      {:ok, worker} -> Worker.send_message(worker, message, opts)
-      {:error, _reason} = error -> error
-    end
-  catch
-    # A stale root and a worker that dies mid-send have the same public result.
-    :exit, reason -> {:error, {:producer_died, reason}}
-  end
-
   # The monitor's reference doubles as the tag the reply carries, the way `GenServer.call/3`
   # does it, so `await/2` selects on either the reply or the producer going down.
   defp publish_async(producer, message, opts) do

@@ -182,8 +182,9 @@ defmodule Pulsar.Producer.SendTest do
 
       {_from, state} = send_message(state, "a")
 
-      assert {:reply, {:error, :producer_queue_full}, ^state} =
-               Worker.handle_call({:send_message, "b", []}, {self(), make_ref()}, state)
+      {refused, {:noreply, ^state}} = cast(state, "b")
+
+      assert_replied(refused, {:error, :producer_queue_full})
     end
 
     test "counts messages waiting to be batched", ctx do
@@ -195,8 +196,9 @@ defmodule Pulsar.Producer.SendTest do
       assert state.batched == 2
       assert [] == published(), "neither has been published yet"
 
-      assert {:reply, {:error, :producer_queue_full}, _state} =
-               Worker.handle_call({:send_message, "c", []}, {self(), make_ref()}, state)
+      {refused, {:noreply, _state}} = cast(state, "c")
+
+      assert_replied(refused, {:error, :producer_queue_full})
     end
 
     test "accepts again once a send is acknowledged", ctx do
@@ -208,7 +210,7 @@ defmodule Pulsar.Producer.SendTest do
       receipt = %Binary.CommandSendReceipt{sequence_id: sequence_id, message_id: message_id()}
       {:noreply, state} = Worker.handle_info({:send_receipt, receipt}, state)
 
-      assert {:noreply, _state} = Worker.handle_call({:send_message, "b", []}, {self(), make_ref()}, state)
+      assert {:noreply, _state} = Worker.handle_cast({:send_message, "b", [], {self(), make_ref()}}, state)
     end
 
     # Counting frames took a producer past its limit on one large message.
@@ -220,7 +222,7 @@ defmodule Pulsar.Producer.SendTest do
       assert map_size(state.pending_frames) == 5, "five frames"
       assert state.pending_messages == 1, "one message"
 
-      assert {:noreply, _state} = Worker.handle_call({:send_message, "b", []}, {self(), make_ref()}, state)
+      assert {:noreply, _state} = Worker.handle_cast({:send_message, "b", [], {self(), make_ref()}}, state)
     end
 
     test "lets a send go again once its caller has been answered", ctx do
@@ -239,9 +241,9 @@ defmodule Pulsar.Producer.SendTest do
       # Nothing is published, so nothing waits: the caller already has its error.
       state = %{ctx.state | chunking_enabled: true, max_message_size: 0, broker_max_message_size: 0}
 
-      assert {:reply, {:error, :metadata_too_large}, state} =
-               Worker.handle_call({:send_message, "a", []}, {self(), make_ref()}, state)
+      {refused, {:noreply, state}} = cast(state, "a")
 
+      assert_replied(refused, {:error, :metadata_too_large})
       assert state.pending_messages == 0
     end
 
@@ -256,9 +258,16 @@ defmodule Pulsar.Producer.SendTest do
 
   ## Helpers
 
+  # A send arrives as a cast, so a refusal is delivered to its caller rather than returned.
+  defp cast(state, payload) do
+    from = {self(), make_ref()}
+
+    {from, Worker.handle_cast({:send_message, payload, [], from}, state)}
+  end
+
   defp send_message(state, payload) do
     from = {self(), make_ref()}
-    {:noreply, new_state} = Worker.handle_call({:send_message, payload, []}, from, state)
+    {:noreply, new_state} = Worker.handle_cast({:send_message, payload, [], from}, state)
 
     {from, new_state}
   end

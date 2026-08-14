@@ -37,13 +37,15 @@ defmodule Pulsar.Consumer.BatchAckTest do
     def init(state), do: {:ok, state}
 
     @impl true
-    def handle_call({:send_message, payload, _opts}, _from, {refuse, notify_pid} = state) do
+    def handle_cast({:send_message, payload, _opts, from}, {refuse, notify_pid} = state) do
       if payload in refuse do
-        {:reply, {:error, :message_too_large}, state}
+        GenServer.reply(from, {:error, :message_too_large})
       else
         send(notify_pid, {:diverted, payload})
-        {:reply, {:ok, %Binary.MessageIdData{ledgerId: 9, entryId: 1, partition: -1}}, state}
+        GenServer.reply(from, {:ok, %Binary.MessageIdData{ledgerId: 9, entryId: 1, partition: -1}})
       end
+
+      {:noreply, state}
     end
   end
 
