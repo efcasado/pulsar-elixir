@@ -1,5 +1,97 @@
 # Changelog
 
+## [3.0.0](https://github.com/efcasado/pulsar-elixir/compare/v2.11.1...v3.0.0) (2026-08-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove producer_count option ([#187](https://github.com/efcasado/pulsar-elixir/issues/187))
+* **chunking:** chunked messages are not wire-compatible ([#177](https://github.com/efcasado/pulsar-elixir/issues/177))
+* **producer:** route partition keys with a Pulsar hashing scheme ([#176](https://github.com/efcasado/pulsar-elixir/issues/176))
+* **options:** downcase enum option atoms ([#171](https://github.com/efcasado/pulsar-elixir/issues/171))
+* make Pulsar.Message independent of batching and chunking ([#170](https://github.com/efcasado/pulsar-elixir/issues/170))
+* **consumer:** pass the resolved topic and subscription to callback ([#169](https://github.com/efcasado/pulsar-elixir/issues/169))
+* make Client, Consumer, and Producer the public API ([#164](https://github.com/efcasado/pulsar-elixir/issues/164))
+
+### Features
+
+* **consumer:** add handle_invalid_message/2 ([31cfddf](https://github.com/efcasado/pulsar-elixir/commit/31cfddfefd4ce242ca7279ac4cc9e12a4b9ac7de))
+* **consumer:** pass the resolved topic and subscription to callback ([#169](https://github.com/efcasado/pulsar-elixir/issues/169)) ([59444de](https://github.com/efcasado/pulsar-elixir/commit/59444de470bc5ee4d07cd01b56f0f3d53c918a56))
+* **producer:** async send ([#186](https://github.com/efcasado/pulsar-elixir/issues/186)) ([81d403d](https://github.com/efcasado/pulsar-elixir/commit/81d403da611bceb11f80776e5474fecbcd71811e))
+* **producer:** key-based batching ([#183](https://github.com/efcasado/pulsar-elixir/issues/183)) ([d2f44bd](https://github.com/efcasado/pulsar-elixir/commit/d2f44bd2021289fbc156668ce6d3bee5c9965054))
+* **producer:** send timeout and backpressure ([#185](https://github.com/efcasado/pulsar-elixir/issues/185)) ([6ceefb5](https://github.com/efcasado/pulsar-elixir/commit/6ceefb568cb290fa89378b44f5ff498eb5db6e13))
+
+
+### Bug Fixes
+
+* **application:** stop dropping unknown client options ([e43d308](https://github.com/efcasado/pulsar-elixir/commit/e43d3080e5aa3624c3a974cadce93eb90c62dce4))
+* **broker:** accept general socket option lists ([1b60c63](https://github.com/efcasado/pulsar-elixir/commit/1b60c639c887147f0c939dfc86775ad525a13eeb))
+* **broker:** broker crashes on unexpected info messages ([#161](https://github.com/efcasado/pulsar-elixir/issues/161)) ([5989995](https://github.com/efcasado/pulsar-elixir/commit/5989995575cfa6ae25236c5f290ac10180bfc62f))
+* **broker:** ignore events from stale sockets ([73434b4](https://github.com/efcasado/pulsar-elixir/commit/73434b4fbb44ab6e4232a2d8b2ba066c2f6d75af))
+* **broker:** stale parse buffer desyncs the stream on reconnect ([d5552a1](https://github.com/efcasado/pulsar-elixir/commit/d5552a14e714b06ce38a139fe6bc7527c8222fc0))
+* **chunking:** chunked messages are not wire-compatible ([#177](https://github.com/efcasado/pulsar-elixir/issues/177)) ([83f52eb](https://github.com/efcasado/pulsar-elixir/commit/83f52eb46730f5bcb20315565fd18a8265b764e5))
+* **client:** accept :infinity as a connection timeout ([9e48526](https://github.com/efcasado/pulsar-elixir/commit/9e4852699b6946c524eef0c48f6f4ee8a0e3552e))
+* **consumer:** a batch index ack acknowledged the whole batch ([#179](https://github.com/efcasado/pulsar-elixir/issues/179)) ([39e8b1b](https://github.com/efcasado/pulsar-elixir/commit/39e8b1b324581d25271c2322507c96e030a04fcb))
+* **consumer:** deliver unverifiable messages instead of dropping the connection ([d4b9229](https://github.com/efcasado/pulsar-elixir/commit/d4b922987b69f27e31e7317c843c430c9c185684))
+* **consumer:** give invalid messages their payload ([99d2284](https://github.com/efcasado/pulsar-elixir/commit/99d22844286e5ab397b338156729dea6369c7451))
+* **consumer:** stop :name naming both the group and the consumers ([136ccc4](https://github.com/efcasado/pulsar-elixir/commit/136ccc4b1c744d009c6dbad562a8d9f3f2a63155))
+* **consumer:** supervise the dead letter producer under its consumer ([#172](https://github.com/efcasado/pulsar-elixir/issues/172)) ([7395f53](https://github.com/efcasado/pulsar-elixir/commit/7395f53f64f0810e085f9d4e0c1146685cac4dcd))
+* **producer:** a batch carried no key for Key_Shared to dispatch on ([#182](https://github.com/efcasado/pulsar-elixir/issues/182)) ([d0fbc0a](https://github.com/efcasado/pulsar-elixir/commit/d0fbc0aa773458c4d2d87fc1327c24443692127a))
+* **producer:** a batching producer dropped delayed delivery ([#181](https://github.com/efcasado/pulsar-elixir/issues/181)) ([4c9324c](https://github.com/efcasado/pulsar-elixir/commit/4c9324c57b123042eef5f26afa9fcfc41ff579c7))
+* **producer:** advertise the full sequence id range of a batch ([1c0cabd](https://github.com/efcasado/pulsar-elixir/commit/1c0cabd6373937b113f60b5c714ec9ae5ba43783))
+* **producer:** deduplicated sends reported as stored messages ([664926d](https://github.com/efcasado/pulsar-elixir/commit/664926d013ae322d9d07fe82040d50341505ff81))
+* **producer:** route partition keys with a Pulsar hashing scheme ([#176](https://github.com/efcasado/pulsar-elixir/issues/176)) ([eb3eb13](https://github.com/efcasado/pulsar-elixir/commit/eb3eb13c2f116e6980d14a664455261acfa4a9c2))
+* **producer:** silent data loss after producer restart ([a68bb69](https://github.com/efcasado/pulsar-elixir/commit/a68bb69daf3de88b0e21580d383e3487ed50866d))
+* **protocol:** accept message frames without a checksum ([86f4825](https://github.com/efcasado/pulsar-elixir/commit/86f4825e9f69efd45c51100f23384d4cbfa50ed0))
+* **protocol:** bound the frame size read off the wire ([7c7d7fd](https://github.com/efcasado/pulsar-elixir/commit/7c7d7fde2c281c3026143fac6cdf68a9f1fffef6))
+* **protocol:** crash on unsupported inbound command types ([6333aba](https://github.com/efcasado/pulsar-elixir/commit/6333aba2236a3ac211e7452bf7a95a6c3e848b8b))
+* **protocol:** decode/1 raises and kills the connection ([e51f49c](https://github.com/efcasado/pulsar-elixir/commit/e51f49c79db81e1578966bd2379e25b4b2e03a04))
+* **protocol:** reject BaseCommands missing their command ([ff0c5f9](https://github.com/efcasado/pulsar-elixir/commit/ff0c5f9de2a0891ff8a07da32a8f311833444b86))
+* **protocol:** verify the CRC32C checksum on inbound message frames ([c90ce8c](https://github.com/efcasado/pulsar-elixir/commit/c90ce8ce004fe1cc50a82fefb07df662487ef78f))
+
+
+### Performance Improvements
+
+* **protocol:** copy a frame once rather than once per packet ([1b484f1](https://github.com/efcasado/pulsar-elixir/commit/1b484f12934066f50ad1cbac351080d6fae9596a))
+
+
+### Dependencies
+
+* bump apachepulsar/pulsar from 4.2.3 to 4.2.4 ([#174](https://github.com/efcasado/pulsar-elixir/issues/174)) ([b97b864](https://github.com/efcasado/pulsar-elixir/commit/b97b864c3565afc6175d735e83c4a99cb402b800))
+* bump jdx/mise-action from 4 to 4.2.3 ([#175](https://github.com/efcasado/pulsar-elixir/issues/175)) ([bfa974f](https://github.com/efcasado/pulsar-elixir/commit/bfa974f7fc7793e17f6a1584e3e7d3ee67edf63a))
+* bump jdx/mise-action from 4.2.3 to 4.2.4 ([#180](https://github.com/efcasado/pulsar-elixir/issues/180)) ([0969a29](https://github.com/efcasado/pulsar-elixir/commit/0969a292f48114836f61eafbd26a375afb7958c4))
+* bump styler from 1.11.0 to 1.12.2 ([#167](https://github.com/efcasado/pulsar-elixir/issues/167)) ([8357854](https://github.com/efcasado/pulsar-elixir/commit/8357854011679c11c0d6ec74b944bb801fe406ae))
+
+
+### Documentation
+
+* batching guide ([#184](https://github.com/efcasado/pulsar-elixir/issues/184)) ([bb021de](https://github.com/efcasado/pulsar-elixir/commit/bb021de40152c44fe63695f660e570135dd7590e))
+* update feature-matrix in readme file ([56f8413](https://github.com/efcasado/pulsar-elixir/commit/56f8413e97e5fa7369c3ebe24a2e5ddb4adfa490))
+
+
+### Code Refactoring
+
+* **client:** validate options against a schema ([bb4349e](https://github.com/efcasado/pulsar-elixir/commit/bb4349e3467d6f372e3a2714806957652c212e82))
+* **consumer:** validate options against a schema ([389fae3](https://github.com/efcasado/pulsar-elixir/commit/389fae36dcccea0cfb4a8acbc1b3c8c378f94a80))
+* make Client, Consumer, and Producer the public API ([#164](https://github.com/efcasado/pulsar-elixir/issues/164)) ([b353b19](https://github.com/efcasado/pulsar-elixir/commit/b353b1918d0dfc940d320cb5debceec5cb887f26))
+* make Pulsar.Message independent of batching and chunking ([#170](https://github.com/efcasado/pulsar-elixir/issues/170)) ([6cdd75a](https://github.com/efcasado/pulsar-elixir/commit/6cdd75a7a98f822504b32537072653a0cc98e580))
+* **options:** downcase enum option atoms ([#171](https://github.com/efcasado/pulsar-elixir/issues/171)) ([0d2f381](https://github.com/efcasado/pulsar-elixir/commit/0d2f381ea5c8e39a851cf73a48cb9b97cd6f3158))
+* **producer:** validate options against a schema ([f10d3f3](https://github.com/efcasado/pulsar-elixir/commit/f10d3f37af0c4fba440d76da99c39ed2aa2aea30))
+* **protocol:** fold encode_message into encode ([f2ba4ff](https://github.com/efcasado/pulsar-elixir/commit/f2ba4ff36e18d5bfdb1cf3a37df43a0b7ce56cdb))
+* **reader:** validate options against a schema ([09e99b4](https://github.com/efcasado/pulsar-elixir/commit/09e99b4390bc01065ba40fb16c3b134b3497d674))
+* remove producer_count option ([#187](https://github.com/efcasado/pulsar-elixir/issues/187)) ([2737c2a](https://github.com/efcasado/pulsar-elixir/commit/2737c2a2f59698abd25db169c5c3af2c2d6d0325))
+
+
+### Tests
+
+* add connection reset tests ([3b848ae](https://github.com/efcasado/pulsar-elixir/commit/3b848aef0d6a6e32b12af5027ddf876a9fa3fcd4))
+* add unit tests for the binary protocol ([c7deb74](https://github.com/efcasado/pulsar-elixir/commit/c7deb7436d4af2868ae0d6fab84ef13de223b0b0))
+
+
+### Miscellaneous Chores
+
+* auto-update version on new release ([af0e77f](https://github.com/efcasado/pulsar-elixir/commit/af0e77f583e6bcf61f810114f8ab63a3bace812d))
+
 ## [2.11.1](https://github.com/efcasado/pulsar-elixir/compare/v2.11.0...v2.11.1) (2026-07-17)
 
 
