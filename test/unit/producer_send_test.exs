@@ -258,7 +258,6 @@ defmodule Pulsar.Producer.SendTest do
 
   ## Helpers
 
-  # A send arrives as a cast, so a refusal is delivered to its caller rather than returned.
   defp cast(state, payload) do
     from = {self(), make_ref()}
 

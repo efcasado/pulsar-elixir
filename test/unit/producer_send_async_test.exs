@@ -28,13 +28,11 @@ defmodule Pulsar.Producer.SendAsyncTest do
 
     def handle_cast({:send_message, _payload, _opts, _from}, :silent = state), do: {:noreply, state}
 
-    # Answers late, so a caller that has already given up would be the one to receive it.
     def handle_cast({:send_message, payload, _opts, from}, {:echo_after, delay} = state) do
       Process.send_after(self(), {:answer, from, payload}, delay)
       {:noreply, state}
     end
 
-    # Runs `send/3` in the worker's own process, as a synchronous telemetry handler would.
     @impl true
     def handle_call({:publish_to_self, payload}, _from, state) do
       {:reply, Producer.send(self(), payload, timeout: 100), state}
@@ -156,8 +154,6 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
     end
 
-    # `send/3` never hands back the reference, so an answer arriving after it gave up would be
-    # one its caller could not reach. Demonitoring the alias has the runtime drop it instead.
     test "leaves no answer behind when it gives up" do
       worker = start_supervised!({StubWorker, {:echo_after, 60}})
 
@@ -167,8 +163,6 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert {:messages, []} = Process.info(self(), :messages)
     end
 
-    # A worker awaiting its own cast would wedge mid-callback and stop draining its mailbox, so
-    # neither the reply nor its own `:send_timeout` could ever reach it.
     test "refuses to publish to the producer it is already running in" do
       worker = start_supervised!({StubWorker, :echo})
 
@@ -189,7 +183,6 @@ defmodule Pulsar.Producer.SendAsyncTest do
 
   ## Helpers
 
-  # What `Pulsar.Producer.send_async/3` does once it has resolved a worker.
   defp send_async_to(worker, payload) do
     ref = Process.monitor(worker, alias: :demonitor)
     GenServer.cast(worker, {:send_message, payload, [], {ref, ref}})

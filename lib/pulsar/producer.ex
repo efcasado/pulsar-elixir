@@ -137,8 +137,7 @@ defmodule Pulsar.Producer do
   A producer already carrying `:max_pending_messages` refuses with
   `{:error, :producer_queue_full}` rather than taking on more.
 
-  Publishing to a producer from inside its own worker — a synchronous telemetry handler, say —
-  answers `{:error, :calling_self}` rather than waiting on a reply the worker cannot get to.
+  Calling `send/3` from the selected producer worker returns `{:error, :calling_self}`.
 
   `{:error, :send_timeout}` is the other shape: the broker did not acknowledge the message
   within `:send_timeout`. **It does not say the message was not published**, only that nothing
@@ -164,9 +163,10 @@ defmodule Pulsar.Producer do
   - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
     a delayed message is published on its own rather than joining a batch
   - `:timeout` - how long to wait, in milliseconds, answering `{:error, :timeout}` if it passes.
-    Defaults to `:infinity`, leaving `:send_timeout` as the deadline. `:send_timeout` is counted
-    from when the producer takes the message, so a producer that has not finished registering has
-    not started it: this is what bounds that wait. Giving up here does not cancel the send
+    Defaults to `:infinity`. With the default producer settings, `:send_timeout` remains the
+    deadline; if `:send_timeout` is disabled, the wait can be unbounded. `:send_timeout` is counted
+    from when the producer takes the message, so it does not bound the wait for a producer that has
+    not finished registering. Giving up here does not cancel the send
   - `:client` - the client to resolve a producer name against
 
   ## Examples
@@ -187,11 +187,10 @@ defmodule Pulsar.Producer do
   end
 
   @doc """
-  Publishes without waiting for the broker, answering with a reference to await on.
+  Starts publishing without waiting for the broker and returns a reference for `await/2`.
 
-  Takes the same options as `send/3`, other than `:timeout`, which belongs to the wait rather
-  than the send. The message is published in the order it was handed over, so two sends from one
-  process to one partition keep theirs.
+  Takes the same options as `send/3`, except `:timeout`, which belongs to `await/2`. Calls from
+  one process that route to the same partition are handed to the producer in order.
 
       {:ok, first} = Pulsar.Producer.send_async(:audit, "one")
       {:ok, second} = Pulsar.Producer.send_async(:audit, "two")
@@ -199,16 +198,12 @@ defmodule Pulsar.Producer do
       {:ok, _message_id} = Pulsar.Producer.await(first)
       {:ok, _message_id} = Pulsar.Producer.await(second)
 
-  Errors that `send/3` returns are delivered to `await/2` instead, so nothing is lost by not
-  waiting — but a reference that is never awaited leaves its answer unread in the mailbox.
+  The process that calls `send_async/3` must also call `await/2`, because the reply and the
+  producer's `:DOWN` message arrive in its mailbox. If the reference is never awaited, the reply
+  remains unread there.
 
-  The reference belongs to the process that made it: the reply and the producer's `:DOWN` both
-  arrive in that mailbox, so `await/2` has to run there. Handing one to another process gives it
-  nothing to receive.
-
-  It answers `{:error, reason}` here only when there is no worker to hand the message to, such as
-  a producer still discovering its topology. What the producer itself decides, a full queue
-  included, reaches `await/2`.
+  Routing failures, such as a producer still discovering its topology, are returned immediately.
+  Once a worker accepts the send, producer errors such as a full queue are returned by `await/2`.
   """
   @spec send_async(pid() | String.t() | atom(), binary(), keyword()) ::
           {:ok, reference()} | {:error, term()}
@@ -230,9 +225,9 @@ defmodule Pulsar.Producer do
 
   A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`.
 
-  `:send_timeout` already bounds how long a producer holds a send, so the default here is to wait
-  for it. A timeout given instead abandons the wait without cancelling the send: the message may
-  still be published, and its answer stays in the mailbox unread.
+  The default is `:infinity`; when the producer's `:send_timeout` is disabled, this can wait
+  indefinitely. A finite timeout abandons the wait without cancelling the send: the message may
+  still be published, and its answer remains unread in the caller's mailbox.
   """
   @spec await(reference(), timeout()) :: {:ok, send_result()} | {:error, term()}
   def await(ref, timeout \\ :infinity) when is_reference(ref) do
@@ -280,14 +275,11 @@ defmodule Pulsar.Producer do
 
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
-  # The monitor's reference doubles as the tag the reply carries, the way `GenServer.call/3`
-  # does it, so `await/2` selects on either the reply or the producer going down. It is an alias
-  # for the same reason: demonitoring deactivates it, so an answer to a wait already given up on
-  # is dropped by the runtime rather than left in the caller's mailbox.
+  # Use the monitor alias as the reply tag so `await/2` receives either the reply or `:DOWN`.
+  # Demonitoring deactivates the alias, which drops replies that arrive after a timeout.
   defp publish_async(producer, message, opts) do
     case resolve_worker(producer, opts) do
-      # A worker cannot take its own cast while it is waiting for the answer, and it is holding
-      # up its whole mailbox while it waits. `GenServer.call/3` refuses this for the same reason.
+      # Prevent `send/3` from awaiting a cast that only this worker can process.
       {:ok, worker} when worker == self() ->
         {:error, :calling_self}
 
