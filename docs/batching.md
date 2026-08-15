@@ -29,7 +29,7 @@ supervision tree, or directly in a script:
 {:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
 ```
 
-With batching enabled, `Pulsar.Producer.send/3` no longer publishes immediately:
+With batching enabled, a send no longer publishes immediately:
 
 ```elixir
 {:ok, producer} = Pulsar.Producer.start(
@@ -40,32 +40,38 @@ With batching enabled, `Pulsar.Producer.send/3` no longer publishes immediately:
 )
 ```
 
-A message is added to the pending batch and **its caller keeps waiting**. `send/3` does not
-return when the message is buffered — it returns when the broker acknowledges the entry the
-message ended up in. The batch is flushed when:
+`send/3` adds a message to the pending batch and **keeps its caller waiting**. It does not return
+when the message is buffered — it returns when the broker acknowledges the entry the message
+ended up in. The batch is flushed when:
 
 1. **It is full** — `batch_size` messages are waiting
 2. **The interval fires** — `flush_interval` milliseconds have passed
 3. **A delayed message arrives** — it cannot join a batch, so it publishes what is pending first
-4. **The producer terminates** — see [Limitations](#limitations)
 
 On flush, the messages are framed into one payload, compressed as a whole when `:compression` is
-set, and published as a single entry. Every caller waiting on that batch is answered when the
+set, and published as a single entry. Every send in that batch receives its result when the
 broker's receipt for the entry comes back.
 
-> #### `send/3` waits for the batch, not for the buffer {: .warning}
+> #### Fill a batch without blocking on each receipt {: .info}
 >
-> There is no fire-and-forget send. `Pulsar.Producer.send/3` is a `GenServer.call` with a 5
-> second default timeout, and a batched message holds that call open until its entry is
-> published and acknowledged. With `flush_interval: 30_000` and a batch that never fills, every
-> caller times out before the flush ever happens:
+> Use `send_async/3` to start several sends from one process without waiting for each broker
+> receipt. It returns a reference for `await/2`; awaiting that reference gives the same result as
+> `send/3`:
 >
+> ```elixir
+> refs =
+>   for payload <- ["one", "two", "three"] do
+>     {:ok, ref} = Pulsar.Producer.send_async(producer, payload)
+>     ref
+>   end
+>
+> for ref <- refs do
+>   {:ok, _message_id} = Pulsar.Producer.await(ref)
+> end
 > ```
-> ** (exit) exited in: GenServer.call(#PID<0.324.0>, {:send_message, "a", []}, 5000)
->     ** (EXIT) time out
-> ```
 >
-> Keep `flush_interval` well below the send timeout, or raise the timeout with `:timeout`.
+> Call `await/2` from the same process that called `send_async/3`. A finite await timeout does not
+> cancel the send; the message may still be published.
 
 ### Consumer Side
 
@@ -150,14 +156,17 @@ messages in a batch meet different fates.
 therefore carries one key for dispatch purposes, taken from its first message:
 
 ```elixir
-# All three ride one entry, dispatched on "tenant-1"
-Pulsar.Producer.send(producer, "a", partition_key: "tenant-1")
-Pulsar.Producer.send(producer, "b", partition_key: "tenant-2")
-Pulsar.Producer.send(producer, "c", partition_key: "tenant-1")
+# All three can ride one entry, dispatched on "tenant-1"
+{:ok, a} = Pulsar.Producer.send_async(producer, "a", partition_key: "tenant-1")
+{:ok, b} = Pulsar.Producer.send_async(producer, "b", partition_key: "tenant-2")
+{:ok, c} = Pulsar.Producer.send_async(producer, "c", partition_key: "tenant-1")
+
+for ref <- [a, b, c], do: Pulsar.Producer.await(ref)
 ```
 
-For a subscription that is not `Key_Shared` this does not matter. For one that is, the messages
-keyed `tenant-2` are dispatched on `tenant-1`, and per-key ordering is not preserved.
+For a subscription that is not `Key_Shared` this does not matter. For one that is, when those
+messages share a batch, the message keyed `tenant-2` is dispatched on `tenant-1`, and per-key
+ordering is not preserved.
 
 `batch_builder: :key_based` fixes that by publishing one entry per key:
 
@@ -239,31 +248,13 @@ accepted before it, then publishes it as its own entry. This is what the Java an
   `:key_based`, where the messages may end up spread across several entries.
 
 - **`flush_interval`**: Milliseconds between flushes. This is the latency batching costs you, and
-  it must stay well below the `send/3` timeout.
+  it is part of how long `send/3` or `await/2` waits for a low-volume batch.
 
 - **`batch_builder`**: How a flushed batch is divided into entries. `:default` publishes one
   entry; `:key_based` publishes one per key.
 
 - **`batch_index_ack_enabled`**: Whether acks name individual messages of an entry. Requires
   broker support, as described above.
-
-## Limitations
-
-- **No maximum batch size in bytes.** A batch is capped by message count and time only, so it is
-  the broker's frame check that rejects an oversized one — and it rejects the whole batch, so one
-  large message fails every caller batched with it with `{:error, :message_too_large}`. Keep
-  `batch_size` in proportion to your payloads.
-
-- **No asynchronous send, and no way to force a flush.** `send/3` blocks until the broker
-  acknowledges, and it is the only way to publish. The Java and Go clients pair their blocking
-  `send` with a `sendAsync` that returns as soon as the message is queued, and with an explicit
-  `flush`; this client has neither, so `:flush_interval` has to stay comfortably below the
-  `send/3` timeout rather than being something a caller can cut short.
-
-- **A pending batch is dropped on termination.** `terminate/2` answers the waiting callers with
-  `{:error, :producer_terminated}` rather than flushing what it holds.
-
-- **Batching cannot be combined with chunking.** See the warning above.
 
 ## Example: Batched Orders with Per-Key Ordering
 
@@ -278,8 +269,14 @@ accepted before it, then publishes it as its own entry. This is what the Java an
   batch_builder: :key_based
 )
 
-for {tenant, order} <- orders do
-  {:ok, _msg_id} = Pulsar.Producer.send(producer, order, partition_key: tenant)
+refs =
+  for {tenant, order} <- orders do
+    {:ok, ref} = Pulsar.Producer.send_async(producer, order, partition_key: tenant)
+    ref
+  end
+
+for ref <- refs do
+  {:ok, _msg_id} = Pulsar.Producer.await(ref)
 end
 
 defmodule Billing do
