@@ -215,7 +215,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       subscription_type: type,
       initial_position: :earliest,
       consumer_count: count,
-      flow_policy: :manual,
+      flow_policy: {Pulsar.Test.Support.Flow, :never, []},
       flow_initial: 0,
       init_args: [notify_pid: self()]
     ]

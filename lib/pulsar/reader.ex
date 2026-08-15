@@ -69,6 +69,7 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
+  alias Pulsar.Reader.Callback
   alias Pulsar.Topology
 
   @default_startup_timeout 5_000
@@ -193,7 +194,7 @@ defmodule Pulsar.Reader do
       consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
-      flow_policy: {Pulsar.Reader.Callback, :report_permits, [self(), reader_ref]},
+      flow_policy: {Callback, :report_permits, [self(), reader_ref]},
       flow_initial: flow_permits,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms,
@@ -206,7 +207,7 @@ defmodule Pulsar.Reader do
       |> maybe_put(:start_message_id, start_message_id)
       |> maybe_put(:start_timestamp, start_timestamp)
 
-    case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
+    case Consumer.start(topic, subscription_name, Callback, consumer_opts) do
       {:ok, consumer} ->
         case build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
           {:ok, state} ->

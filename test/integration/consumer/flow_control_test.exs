@@ -166,7 +166,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       client: @client,
       initial_position: :earliest,
       consumer_count: count,
-      flow_policy: if(initial == 0, do: :manual, else: :auto),
+      flow_policy: if(initial == 0, do: {Pulsar.Test.Support.Flow, :never, []}, else: :auto),
       flow_initial: initial,
       flow_threshold: threshold,
       flow_refill: refill

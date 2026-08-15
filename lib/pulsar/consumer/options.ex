@@ -49,13 +49,10 @@ defmodule Pulsar.Consumer.Options do
       type: {:custom, __MODULE__, :validate_flow_policy, []},
       default: :auto,
       doc: """
-      Who decides refills once the consumer is running. `:auto` applies `:flow_threshold` and
-      `:flow_refill`. `:manual` never refills, leaving it to `Pulsar.Consumer.send_flow/2`. A
-      `{module, function, args}` is called after every delivery as
-      `apply(module, function, [flow | args])`, where `flow` is
-      `%{consumed: permits, outstanding: permits}`, and answers `:ok` or `{:grant, permits}`.
-      It runs in the consumer process, so it must not call `Pulsar.Consumer.send_flow/2` on
-      that consumer. See `Pulsar.Consumer` for what `:consumed` counts.
+      What refills permits once the consumer is running. `:auto` grants `:flow_refill` whenever
+      outstanding permits reach `:flow_threshold`. A `{module, function, args}` decides for
+      itself; see `Pulsar.Consumer` for what it is passed, what it may answer, and what it
+      cannot do.
       """
     ],
     flow_initial: [
@@ -238,7 +235,8 @@ defmodule Pulsar.Consumer.Options do
       raise ArgumentError,
             "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
               "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
-              ":flow_initial, or a policy that grants permits itself."
+              ":flow_initial, or a {module, function, args} policy if permits will come from " <>
+              "Pulsar.Consumer.send_flow/3."
     end
 
     opts
@@ -246,7 +244,7 @@ defmodule Pulsar.Consumer.Options do
 
   @doc false
   @spec validate_flow_policy(term()) :: {:ok, term()} | {:error, String.t()}
-  def validate_flow_policy(policy) when policy in [:auto, :manual], do: {:ok, policy}
+  def validate_flow_policy(:auto), do: {:ok, :auto}
 
   # Checked here rather than at the first delivery, where an unloadable policy would take the
   # consumer down once per redelivery.
@@ -260,6 +258,6 @@ defmodule Pulsar.Consumer.Options do
   end
 
   def validate_flow_policy(other) do
-    {:error, "expected :auto, :manual, or a {module, function, args} tuple, got: #{inspect(other)}"}
+    {:error, "expected :auto or a {module, function, args} tuple, got: #{inspect(other)}"}
   end
 end

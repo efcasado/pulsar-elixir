@@ -2,9 +2,8 @@ defmodule Pulsar.Reader.Callback do
   @moduledoc """
   Internal callback module for Pulsar.Reader.
 
-  This module handles messages from the consumer and forwards them to the
-  reader's stream process. It implements the `Pulsar.Consumer.Callback`
-  behaviour.
+  Implements the `Pulsar.Consumer.Callback` behaviour, forwarding messages to the reader's
+  stream process, and hosts the flow policy that reports what each delivery cost.
   """
 
   use Pulsar.Consumer.Callback

@@ -17,10 +17,9 @@ defmodule Pulsar.Consumer do
 
   ## Flow Control
 
-  A consumer grants `:flow_initial` permits when it subscribes, and `:flow_policy` decides
-  what happens from there. `:auto` refills `:flow_refill` whenever outstanding permits reach
-  `:flow_threshold`. `:manual` never refills on its own. A `{module, function, args}` policy
-  is asked after every delivery:
+  A consumer grants `:flow_initial` permits when it subscribes, and `:flow_policy` refills
+  them from there. `:auto` grants `:flow_refill` whenever outstanding permits reach
+  `:flow_threshold`. Name a `{module, function, args}` to decide for yourself:
 
       defmodule MyApp.Flow do
         def decide(%{outstanding: outstanding}, refill) when outstanding <= 20, do: {:grant, refill}
@@ -31,21 +30,26 @@ defmodule Pulsar.Consumer do
         flow_policy: {MyApp.Flow, :decide, [100]}
       )
 
-  It receives `%{consumed: permits, outstanding: permits}` and answers `:ok` or
-  `{:grant, permits}`. `:consumed` is what the delivery cost and `:outstanding` what is left
-  after it, before any grant the policy makes.
+  It is asked after every delivery with `%{consumed: permits, outstanding: permits}`, and
+  answers `:ok` or `{:grant, permits}`. `:consumed` is what the delivery cost and
+  `:outstanding` what is left after it, before any grant the policy makes.
 
   `:consumed` counts every message the broker charged for, not the ones a callback saw. The
   broker also charges for batch members excluded by an `ack_set` on a partially acknowledged
   entry, members compacted away, and deliveries diverted to a dead letter topic — none of
   which reach `c:Pulsar.Consumer.Callback.handle_message/2` or
-  `c:Pulsar.Consumer.Callback.handle_invalid_message/2`. A policy that counts callbacks
-  instead eventually believes the broker holds permits it has already spent.
+  `c:Pulsar.Consumer.Callback.handle_invalid_message/2`. A policy counting callbacks instead
+  eventually believes the broker holds permits it has already spent.
 
-  A policy runs in the consumer process, so it must not call `send_flow/3` on that consumer:
-  that is a call to itself and deadlocks. Handing the decision to another process, which then
-  calls `send_flow/3`, is fine as long as that process is not waiting on this one. Granting
-  does not ask the policy again, and neither does `send_flow/3`.
+  Two things follow from a policy only being asked after a delivery. It cannot grant the
+  first permits, since without them nothing is delivered: those come from `:flow_initial`, or
+  from `send_flow/3` in another process. And it runs in the consumer process, so it must not
+  call `send_flow/3` on that consumer — that is a call to itself and deadlocks. Handing the
+  decision to another process, which then calls `send_flow/3`, is fine as long as that process
+  is not waiting on this one.
+
+  A policy that always answers `:ok` grants nothing, leaving every refill to `send_flow/3`.
+  Granting does not ask the policy again, and neither does `send_flow/3`.
 
   ## Options
 
@@ -216,8 +220,8 @@ defmodule Pulsar.Consumer do
   @doc """
   Grants a consumer more flow permits.
 
-  Only needed under `flow_policy: :manual`, and only for refills a callback module's
-  `handle_permits/2` does not make itself.
+  Needed when the consumer's `:flow_policy` leaves refills to you, and to grant the first
+  permits when `:flow_initial` is `0`, which no policy can do itself.
 
   Takes the stable consumer root, one of its worker pids, or its name. Every live worker behind
   a root is granted the permits, and the first refusal is returned — retrying by name is safe,

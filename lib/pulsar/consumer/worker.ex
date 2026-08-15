@@ -81,7 +81,7 @@ defmodule Pulsar.Consumer.Worker do
           broker_pid: pid(),
           broker_monitor: reference(),
           ready: boolean(),
-          flow_policy: :auto | :manual | flow_mfa(),
+          flow_policy: :auto | flow_mfa(),
           flow_initial: non_neg_integer(),
           flow_threshold: non_neg_integer(),
           flow_refill: non_neg_integer(),
@@ -805,7 +805,6 @@ defmodule Pulsar.Consumer.Worker do
     %{state | flow_outstanding_permits: new_permits}
   end
 
-  # One policy hook sees the exact cost of every broker delivery.
   defp apply_flow_policy(state, consumed) do
     case decide_flow(state, consumed) do
       :ok ->
@@ -819,8 +818,6 @@ defmodule Pulsar.Consumer.Worker do
         state
     end
   end
-
-  defp decide_flow(%__MODULE__{flow_policy: :manual}, _consumed), do: :ok
 
   defp decide_flow(%__MODULE__{flow_policy: :auto} = state, _consumed) do
     if state.flow_outstanding_permits <= state.flow_threshold and state.flow_refill > 0 do

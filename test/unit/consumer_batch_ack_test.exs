@@ -5,6 +5,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   alias Pulsar.Consumer.Ack
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
+  alias Pulsar.Test.Support.Flow
 
   defmodule Callback do
     @moduledoc false
@@ -21,17 +22,6 @@ defmodule Pulsar.Consumer.BatchAckTest do
         :defer -> {:noreply, answers}
         :nack -> {:error, :rejected, answers}
       end
-    end
-
-  end
-
-  # Stands in for a caller's flow policy, reporting what it was asked and answering as told.
-  defmodule Flow do
-    @moduledoc false
-
-    def decide(flow, notify_pid, answer) do
-      send(notify_pid, {:permits, flow})
-      answer
     end
   end
 
@@ -236,7 +226,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     test "still spends a permit on each message the broker sent" do
       state = %{
         worker_state(%{})
-        | flow_policy: :manual,
+        | flow_policy: {Flow, :never, []},
           flow_outstanding_permits: 100
       }
 
@@ -321,7 +311,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     test "charges a permit for every message the broker sent, delivered or not" do
       state = %{
         worker_state(%{})
-        | flow_policy: :manual,
+        | flow_policy: {Flow, :never, []},
           flow_outstanding_permits: 100
       }
 
@@ -393,7 +383,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     test "grants what the policy asks for, without asking it again" do
       state = %{
         worker_state(%{})
-        | flow_policy: {Flow, :decide, [self(), {:grant, 50}]},
+        | flow_policy: {Flow, :grant_fixed, [self(), 50]},
           flow_outstanding_permits: 100
       }
 
@@ -402,7 +392,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert permits_reported() == [%{consumed: 1, outstanding: 99}]
       assert new_state.flow_outstanding_permits == 149
 
-      assert [flow] = Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
+      assert [flow] = flow_commands()
       assert flow.messagePermits == 50
     end
 
@@ -418,7 +408,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       new_state = deliver(state, ["a", "b", "c"])
 
       assert new_state.flow_outstanding_permits == 98
-      assert [%Binary.CommandFlow{messagePermits: 50}] = Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
+      assert [%Binary.CommandFlow{messagePermits: 50}] = flow_commands()
     end
 
     test "the :auto policy leaves a consumer above its threshold alone" do
@@ -433,16 +423,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
       new_state = deliver(state, ["a", "b", "c"])
 
       assert new_state.flow_outstanding_permits == 97
-      assert Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1)) == []
+      assert flow_commands() == []
     end
 
-    test "the :manual policy never refills, however low the window gets" do
-      state = %{worker_state(%{}) | flow_policy: :manual, flow_outstanding_permits: 3}
+    test "a policy that grants nothing never refills, however low the window gets" do
+      state = %{worker_state(%{}) | flow_policy: {Flow, :never, []}, flow_outstanding_permits: 3}
 
       new_state = deliver(state, ["a", "b", "c"])
 
       assert new_state.flow_outstanding_permits == 0
-      assert Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1)) == []
+      assert flow_commands() == []
     end
   end
 
@@ -495,7 +485,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
         callback_state: answers,
         broker_pid: self(),
         consumer_id: 1,
-        flow_policy: {Flow, :decide, [self(), :ok]},
+        flow_policy: {Flow, :report, [self()]},
         flow_initial: 0
       ] ++ opts
     )
@@ -567,6 +557,10 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   defp acks do
     Enum.filter(receive_commands(), &match?(%Binary.CommandAck{}, &1))
+  end
+
+  defp flow_commands do
+    Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
   end
 
   defp delivered_payloads(acc \\ []) do

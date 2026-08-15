@@ -31,10 +31,11 @@ defmodule Pulsar.Consumer.OptionsTest do
       assert validate!([])[:flow_policy] == :auto
     end
 
-    test "keeps flow_initial under the manual policy, so a worker still starts with a window" do
-      opts = validate!(flow_policy: :manual, flow_initial: 25)
+    test "keeps flow_initial under a policy of its own, so a worker still starts with a window" do
+      policy = {Pulsar.Test.Support.Flow, :never, []}
+      opts = validate!(flow_policy: policy, flow_initial: 25)
 
-      assert opts[:flow_policy] == :manual
+      assert opts[:flow_policy] == policy
       assert opts[:flow_initial] == 25
     end
 
@@ -57,7 +58,7 @@ defmodule Pulsar.Consumer.OptionsTest do
     end
 
     test "rejects a flow policy that is neither a known atom nor an MFA" do
-      assert_raise NimbleOptions.ValidationError, ~r/:auto, :manual, or a \{module, function, args\}/, fn ->
+      assert_raise NimbleOptions.ValidationError, ~r/:auto or a \{module, function, args\}/, fn ->
         validate!(flow_policy: :whenever)
       end
     end
