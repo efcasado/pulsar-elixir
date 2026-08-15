@@ -31,20 +31,6 @@ defmodule Pulsar.Consumer.OptionsTest do
       assert validate!([])[:flow_policy] == :auto
     end
 
-    test "reads flow_initial: 0 as the manual policy it selected before :flow_policy existed" do
-      opts =
-        ExUnit.CaptureLog.capture_log(fn ->
-          send(self(), {:opts, validate!(flow_initial: 0)})
-        end)
-        |> then(fn log ->
-          assert log =~ "deprecated"
-          receive do: ({:opts, opts} -> opts)
-        end)
-
-      assert opts[:flow_policy] == :manual
-      assert opts[:flow_initial] == 0
-    end
-
     test "keeps flow_initial under the manual policy, so a worker still starts with a window" do
       opts = validate!(flow_policy: :manual, flow_initial: 25)
 

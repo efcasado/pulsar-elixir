@@ -218,6 +218,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     opts =
       1
       |> subscription_options()
+      |> Keyword.put(:flow_policy, :manual)
       |> Keyword.put(:flow_initial, 0)
       |> Keyword.put(:partition_discovery_interval_ms, false)
 

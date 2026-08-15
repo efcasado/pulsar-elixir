@@ -1,8 +1,6 @@
 defmodule Pulsar.Consumer.Options do
   @moduledoc false
 
-  require Logger
-
   @schema [
     topic: [
       type: :string,
@@ -49,11 +47,11 @@ defmodule Pulsar.Consumer.Options do
     ],
     flow_policy: [
       type: {:in, [:auto, :manual]},
+      default: :auto,
       doc: """
       Who decides refills once the consumer is running. `:auto` applies `:flow_threshold` and
       `:flow_refill` through the callback module's default `handle_permits/2`. `:manual` leaves
-      every refill to you, through that callback or `Pulsar.Consumer.send_flow/2`. Defaults to
-      `:auto`, or to `:manual` when `:flow_initial` is `0`.
+      every refill to you, through that callback or `Pulsar.Consumer.send_flow/2`.
       """
     ],
     flow_initial: [
@@ -229,30 +227,16 @@ defmodule Pulsar.Consumer.Options do
   Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> resolve_flow_policy!()
+  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> validate_flow!()
 
-  # :flow_policy carries no default, so an absent one can still be told apart from a stated one
-  # and read the way 3.0 read :flow_initial.
-  defp resolve_flow_policy!(opts) do
-    case {Keyword.get(opts, :flow_policy), Keyword.fetch!(opts, :flow_initial)} do
-      {nil, 0} ->
-        Logger.warning(
-          "flow_initial: 0 to select manual flow control is deprecated, set flow_policy: :manual instead"
-        )
-
-        Keyword.put(opts, :flow_policy, :manual)
-
-      {nil, _initial} ->
-        Keyword.put(opts, :flow_policy, :auto)
-
-      {:auto, 0} ->
-        raise ArgumentError,
-              "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
-                "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
-                ":flow_initial, or flow_policy: :manual to grant permits yourself."
-
-      {_policy, _initial} ->
-        opts
+  defp validate_flow!(opts) do
+    if Keyword.fetch!(opts, :flow_policy) == :auto and Keyword.fetch!(opts, :flow_initial) == 0 do
+      raise ArgumentError,
+            "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
+              "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
+              ":flow_initial, or flow_policy: :manual to grant permits yourself."
     end
+
+    opts
   end
 end

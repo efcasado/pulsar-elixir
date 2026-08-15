@@ -207,14 +207,15 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     ]
   end
 
-  # Manual flow control (flow_initial: 0 disables automatic permits), so the
-  # test can grant permits explicitly once all consumers are subscribed.
+  # Manual flow control granting nothing on subscribe, so the test can grant permits
+  # explicitly once all consumers are subscribed.
   defp manual_flow_options(type, count) do
     [
       client: @client,
       subscription_type: type,
       initial_position: :earliest,
       consumer_count: count,
+      flow_policy: :manual,
       flow_initial: 0,
       init_args: [notify_pid: self()]
     ]
