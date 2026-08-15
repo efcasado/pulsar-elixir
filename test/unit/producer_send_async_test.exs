@@ -101,6 +101,16 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert Process.alive?(worker), "the send is still the producer's to answer"
     end
 
+    test "belongs to the process that started the send" do
+      worker = start_supervised!({StubWorker, :echo})
+      ref = send_async_to(worker, "a")
+
+      elsewhere = Task.async(fn -> Producer.await(ref, 20) end)
+
+      assert {:error, :timeout} = Task.await(elsewhere)
+      assert {:ok, "a"} = Producer.await(ref), "the answer was here all along"
+    end
+
     test "leaves nothing behind for a send it already answered" do
       worker = start_supervised!({StubWorker, :echo})
 
@@ -110,6 +120,32 @@ defmodule Pulsar.Producer.SendAsyncTest do
       GenServer.stop(worker, :shutdown)
 
       refute_receive {:DOWN, ^ref, :process, _pid, _reason}, 50
+    end
+  end
+
+  # `Topology.kind/1` reads anything that is not a topology or group supervisor as a worker, so a
+  # stub answers `send/3` as a producer would.
+  describe "send/3 over send_async/3" do
+    test "answers with what the producer replied" do
+      worker = start_supervised!({StubWorker, :echo})
+
+      assert {:ok, "a"} = Producer.send(worker, "a")
+    end
+
+    test "gives up with a timeout of its own" do
+      worker = start_supervised!({StubWorker, :silent})
+
+      assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
+    end
+
+    test "reports a producer that goes down" do
+      worker = start_supervised!({StubWorker, :silent})
+      task = Task.async(fn -> Producer.send(worker, "a") end)
+
+      Process.sleep(20)
+      GenServer.stop(worker, :shutdown)
+
+      assert {:error, {:producer_died, :shutdown}} = Task.await(task)
     end
   end
 

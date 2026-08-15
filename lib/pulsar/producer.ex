@@ -175,7 +175,8 @@ defmodule Pulsar.Producer do
           {:ok, send_result()} | {:error, term()}
   def send(producer, message, opts \\ [])
 
-  def send(producer, message, opts) when is_binary(message) do
+  def send(producer, message, opts)
+      when (is_pid(producer) or is_binary(producer) or is_atom(producer)) and is_binary(message) do
     case send_async(producer, message, opts) do
       {:ok, ref} -> await(ref, Keyword.get(opts, :timeout, :infinity))
       {:error, _reason} = error -> error
@@ -197,6 +198,10 @@ defmodule Pulsar.Producer do
 
   Errors that `send/3` returns are delivered to `await/2` instead, so nothing is lost by not
   waiting — but a reference that is never awaited leaves its answer unread in the mailbox.
+
+  The reference belongs to the process that made it: the reply and the producer's `:DOWN` both
+  arrive in that mailbox, so `await/2` has to run there. Handing one to another process gives it
+  nothing to receive.
 
   It answers `{:error, reason}` here only when there is no worker to hand the message to, such as
   a producer still discovering its topology. What the producer itself decides, a full queue
