@@ -6,7 +6,8 @@
       "package-name": "pulsar_elixir",
       "include-component-in-tag": false,
       "extra-files": [
-        { "type": "generic", "path": "README.md" }
+        { "type": "generic", "path": "README.md" },
+        { "type": "generic", "path": "lib/pulsar.ex" }
       ],
       "changelog-sections": [
         { "type": "feat",     "section": "Features" },
