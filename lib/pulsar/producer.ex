@@ -71,7 +71,7 @@ defmodule Pulsar.Producer do
     topic = Keyword.fetch!(opts, :topic)
     opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
 
-    Topology.start_link(Worker, registry, :producer_count, opts)
+    Topology.start_link(Worker, registry, :producers, opts)
   end
 
   @doc """

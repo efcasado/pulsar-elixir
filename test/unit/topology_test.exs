@@ -124,6 +124,7 @@ defmodule Pulsar.TopologyTest do
 
   defp start_async_topology(resolver, opts \\ [], controller_opts \\ []) do
     {worker, controller_opts} = Keyword.pop(controller_opts, :worker, StubWorker)
+    {kind, controller_opts} = Keyword.pop(controller_opts, :kind, :consumers)
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
@@ -133,18 +134,22 @@ defmodule Pulsar.TopologyTest do
           topic: @topic,
           name: @name,
           client: :test,
-          count_key: 1,
           partition_discovery_interval_ms: false
         ],
         opts
       )
+
+    topology_opts =
+      if kind == :consumers,
+        do: Keyword.put_new(topology_opts, :consumer_count, 1),
+        else: topology_opts
 
     root =
       start_supervised!(%{
         id: {:root, System.unique_integer([:positive])},
         start:
           {Topology, :start_link,
-           [worker, registry, :count_key, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
+           [worker, registry, kind, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
         type: :supervisor
       })
 
@@ -215,7 +220,7 @@ defmodule Pulsar.TopologyTest do
         if attempt == 0, do: {:error, :no_broker_available}, else: {:ok, 3}
       end
 
-      {root, _registry} = start_async_topology(resolver, count_key: 2)
+      {root, _registry} = start_async_topology(resolver, consumer_count: 2)
 
       :ok = Topology.await_ready(root, 1_000)
       assert Agent.get(attempts, & &1) >= 2
@@ -237,6 +242,23 @@ defmodule Pulsar.TopologyTest do
       refute_receive :resolved, 150
       assert [{0, group}] = Topology.groups(root)
       assert is_pid(group)
+    end
+
+    test "a producer topology starts one worker per partition" do
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 3} end, [],
+          worker: OptsWorker,
+          kind: :producers
+        )
+
+      :ok = Topology.await_ready(root, 1_000)
+
+      groups = Topology.groups(root)
+      assert length(groups) == 3
+
+      assert Enum.all?(groups, fn {_index, group} ->
+               match?([{_id, pid, :worker, _modules}] when is_pid(pid), Supervisor.which_children(group))
+             end)
     end
 
     @tag telemetry_listen: [
@@ -351,11 +373,10 @@ defmodule Pulsar.TopologyTest do
         topic: @topic,
         name: @name,
         client: :test,
-        count_key: 1,
         partition_discovery_interval_ms: false
       ]
 
-      config = %{worker: PartitionFourFails, count_key: :count_key, opts: opts}
+      config = %{worker: PartitionFourFails, kind: :consumers, worker_count: 1, opts: opts}
 
       assert {:error, {:partition_start_failed, 4, _reason}} =
                Topology.reconcile(root, 6, config)

@@ -43,18 +43,20 @@ defmodule Pulsar.Topology do
     }
   end
 
-  @spec start_link(module(), atom() | nil, atom(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, registry, count_key, opts) do
-    start_link(worker, registry, count_key, opts, [])
+  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword()) ::
+          Supervisor.on_start()
+  def start_link(worker, registry, kind, opts) when kind in [:consumers, :producers] do
+    start_link(worker, registry, kind, opts, [])
   end
 
   # The fifth argument is an internal seam for exercising asynchronous discovery without a
   # broker. Consumer and Producer deliberately keep it out of the API they document.
   @doc false
-  @spec start_link(module(), atom() | nil, atom(), keyword(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, registry, count_key, opts, controller_opts) do
+  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword(), keyword()) ::
+          Supervisor.on_start()
+  def start_link(worker, registry, kind, opts, controller_opts) when kind in [:consumers, :producers] do
     name = Keyword.fetch!(opts, :name)
-    config = %{worker: worker, count_key: count_key, opts: opts}
+    config = %{worker: worker, kind: kind, worker_count: worker_count(kind, opts), opts: opts}
 
     Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
@@ -405,7 +407,7 @@ defmodule Pulsar.Topology do
     discovery =
       {self(), config, controller_opts}
       |> Discovery.child_spec()
-      |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic, hashing_scheme_for_config(config)})
+      |> Map.put(:id, {Discovery, config.kind, topic, hashing_scheme_for_config(config)})
 
     # Companions start before discovery so a worker never observes the tree without them. They
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
@@ -427,10 +429,6 @@ defmodule Pulsar.Topology do
     end
   end
 
-  defp resource_kind_for_config(%{count_key: :consumer_count}), do: :consumers
-  defp resource_kind_for_config(%{count_key: :producer_count}), do: :producers
-  defp resource_kind_for_config(_config), do: :unknown
-
   # Carried on the child id so routing reads it from the same which_children the groups come
   # from, keeping a send to one call. The registry value would be the usual place for this, but
   # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
@@ -438,7 +436,7 @@ defmodule Pulsar.Topology do
   #
   # nil where a resource does not route on a key, and for a producer whose options have not been
   # through Producer.Options; Hash.partition/3 resolves it to the default.
-  defp hashing_scheme_for_config(%{count_key: :producer_count, opts: opts}) do
+  defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
   end
 
@@ -580,13 +578,13 @@ defmodule Pulsar.Topology do
   # :topic is the topic a worker subscribes to and :base_topic the one the resource was
   # configured with; they differ only for a partition. Workers carry both so a callback can
   # tell which partition it handles without inspecting the tree it lives in.
-  defp topic_child_spec(%{worker: worker, count_key: count_key, opts: opts}) do
+  defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
     topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 
-    group_child_spec({:topic, :non_partitioned}, worker, count_key, topic_opts)
+    group_child_spec({:topic, :non_partitioned}, worker, worker_count, topic_opts)
   end
 
-  defp partition_child_spec(partition_index, %{worker: worker, count_key: count_key, opts: opts}) do
+  defp partition_child_spec(partition_index, %{worker: worker, worker_count: worker_count, opts: opts}) do
     base_topic = Keyword.fetch!(opts, :topic)
 
     partition_opts =
@@ -597,13 +595,16 @@ defmodule Pulsar.Topology do
         name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
       )
 
-    group_child_spec({:partition, partition_index}, worker, count_key, partition_opts)
+    group_child_spec({:partition, partition_index}, worker, worker_count, partition_opts)
   end
 
-  defp group_child_spec(id, worker, count_key, opts) do
+  defp worker_count(:consumers, opts), do: Keyword.fetch!(opts, :consumer_count)
+  defp worker_count(:producers, _opts), do: 1
+
+  defp group_child_spec(id, worker, worker_count, opts) do
     %{
       id: id,
-      start: {Group, :start_link, [worker, count_key, opts]},
+      start: {Group, :start_link, [worker, worker_count, opts]},
       restart: :transient,
       type: :supervisor
     }

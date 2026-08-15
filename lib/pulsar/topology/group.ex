@@ -7,13 +7,14 @@ defmodule Pulsar.Topology.Group do
 
   require Logger
 
-  @spec start_link(module(), atom(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, count_key, opts), do: Supervisor.start_link(__MODULE__, {worker, count_key, opts})
+  @spec start_link(module(), pos_integer(), keyword()) :: Supervisor.on_start()
+  def start_link(worker, count, opts) when count > 0 do
+    Supervisor.start_link(__MODULE__, {worker, count, opts})
+  end
 
   @impl true
-  def init({worker, count_key, opts}) do
+  def init({worker, count, opts}) do
     name = Keyword.fetch!(opts, :name)
-    count = Keyword.fetch!(opts, count_key)
 
     Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
@@ -21,7 +22,7 @@ defmodule Pulsar.Topology.Group do
 
     children =
       for i <- 1..count do
-        # Producer epochs are keyed by broker name, so every worker needs its own identity.
+        # Workers need distinct names within a group; producer epochs are keyed by this identity.
         worker_name = "#{name}-#{i}"
 
         %{

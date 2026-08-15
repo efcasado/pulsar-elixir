@@ -198,7 +198,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
            [
              ConsumerWorker,
              registry,
-             :consumer_count,
+             :consumers,
              Keyword.put(opts(overrides), :companions, &DeadLetter.attach/2),
              [resolver: fn _topic, _opts -> Process.sleep(:infinity) end]
            ]}
