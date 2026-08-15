@@ -147,6 +147,10 @@ defmodule Pulsar.Producer do
   A successful send answers with the broker's message id, or with a `t:chunked_message_id/0`
   when `:chunking_enabled` split the payload.
 
+  With `:batch_enabled` it answers when the broker acknowledges the entry the message was
+  batched into, not when the message joins the batch, so the wait includes up to
+  `:flush_interval` before anything is sent at all.
+
   On a topic with deduplication enabled it can instead answer `{:ok, :deduplicated}`: the broker
   recognised the sequence id as one it had already stored, kept the message it had, and assigned
   this call no message id. Deduplication matches on the sequence id alone and never on the
