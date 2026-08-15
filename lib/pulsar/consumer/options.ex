@@ -86,8 +86,9 @@ defmodule Pulsar.Consumer.Options do
       type: :boolean,
       default: false,
       doc: """
-      Read only the latest value per key from a compacted topic. Messages compaction has
-      replaced are filtered out of a batch rather than delivered, whatever this is set to.
+      Read only the latest value per key from a compacted topic. When enabled, messages
+      compaction has replaced are filtered out of a batch rather than delivered. When disabled,
+      the consumer can receive the original history, including superseded values.
       """
     ],
     force_create_topic: [

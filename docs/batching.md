@@ -104,8 +104,9 @@ Pulsar.Message.event_time(message)  # this message's event time
 
 Flow control counts messages, not entries: a batch of 100 spends 100 permits.
 
-On a compacted topic, messages that compaction has replaced are filtered out of the batch
-rather than delivered, so a callback never sees a payload compaction has superseded.
+With `read_compacted: true`, messages that compaction has replaced are filtered out of a batch
+rather than delivered. With the default `false`, the consumer reads the original topic history
+and can receive values that compaction has superseded.
 
 ## Acknowledging a Batch
 
@@ -324,16 +325,20 @@ end
 
 ## Telemetry Events
 
-The producer emits one event per published entry:
+The producer emits one batch event per entry formed from a batch. Messages published outside a
+batch use the regular message event instead:
 
 | Event | Measurements | When |
 | --- | --- | --- |
-| `[:pulsar, :producer, :batch, :published]` | `count` | A batch is published |
+| `[:pulsar, :producer, :batch, :published]` | `count` | A batched entry is published |
+| `[:pulsar, :producer, :message, :published]` | `count` | A message is published outside a batch |
 
-`count` is the messages in that entry, and the event carries `sequence_id` alongside the `topic`,
-`base_topic`, `partition`, `producer_id` and `producer_name` that every producer event carries.
-Under `:key_based` it fires once per key, so a flush of three keys emits three events rather than
-one, and their counts sum to the batch.
+For the batch event, `count` is the messages in that entry; for the message event it is always one.
+A delayed message uses the message event even on a batching producer because it cannot join a
+batch. Both events carry `sequence_id` alongside the `topic`, `base_topic`, `partition`,
+`producer_id` and `producer_name` that every producer event carries. Under `:key_based`, the batch
+event fires once per key, so a flush of three keys emits three events rather than one, and their
+counts sum to the batch.
 
 On the consumer side, `[:pulsar, :consumer, :message, :nacked]` counts messages while
 `[:pulsar, :consumer, :redelivery, :requested]` counts entries, since redelivery is asked for per
