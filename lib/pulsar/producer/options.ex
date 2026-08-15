@@ -18,11 +18,6 @@ defmodule Pulsar.Producer.Options do
       type: {:or, [:string, :atom]},
       doc: "Name the producer is registered under. Defaults to `\"<topic>-producer\"`."
     ],
-    producer_count: [
-      type: :pos_integer,
-      default: 1,
-      doc: "Number of producer processes to start for the topic, or for each partition."
-    ],
     access_mode: [
       type: {:in, [:shared, :exclusive, :wait_for_exclusive, :exclusive_with_fencing]},
       default: :shared,

@@ -12,7 +12,6 @@ defmodule Pulsar.Producer.OptionsTest do
       opts = validate!([])
 
       assert opts[:client] == :default
-      assert opts[:producer_count] == 1
       assert opts[:access_mode] == :shared
       assert opts[:compression] == :none
       assert opts[:batch_enabled] == false
@@ -50,9 +49,9 @@ defmodule Pulsar.Producer.OptionsTest do
       end
     end
 
-    test "rejects a non-integer producer count" do
-      assert_raise NimbleOptions.ValidationError, ~r/:producer_count/, fn ->
-        validate!(producer_count: "two")
+    test "rejects the removed producer count option" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:producer_count/, fn ->
+        validate!(producer_count: 2)
       end
     end
 

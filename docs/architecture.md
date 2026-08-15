@@ -123,20 +123,18 @@ one group per partition:
 stable topology root (:orders)
 ├── topology discovery
 ├── group for partition 0
-│   ├── worker 1
-│   └── worker 2
+│   └── worker
 ├── group for partition 1
-│   ├── worker 1
-│   └── worker 2
+│   └── worker
 └── group for partition 2
-    ├── worker 1
-    └── worker 2
+    └── worker
 ```
 
-The number of workers in each group comes from `:consumer_count` or `:producer_count`.
-Adding partitions changes the children below the root, but not the root itself. This is why
-names, stop operations, client listings, and publishing target the logical resource instead
-of a particular worker.
+Producer groups contain one worker, preserving one ordered send lane and one sequence-id and
+batching domain per partition. Consumer groups may contain several workers, configured with
+`:consumer_count`. Adding partitions changes the children below the root, but not the root
+itself. This is why names, stop operations, client listings, and publishing target the logical
+resource instead of a particular worker.
 
 The stable root represents that logical resource even when none of its groups currently has
 a live worker. It remains registered and appears in client listings while operations report

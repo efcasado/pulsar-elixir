@@ -96,12 +96,12 @@ defmodule Pulsar.ClientTest do
       end
     end
 
-    test "rejects a producer option the producer schema does not accept" do
-      assert_raise NimbleOptions.ValidationError, ~r/invalid value for :producer_count/, fn ->
+    test "rejects the removed producer count option" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:producer_count/, fn ->
         Client.start_link(
           name: :bad_producer,
           host: "pulsar://127.0.0.1:1",
-          producers: [[topic: "t", producer_count: :many]]
+          producers: [[topic: "t", producer_count: 2]]
         )
       end
     end

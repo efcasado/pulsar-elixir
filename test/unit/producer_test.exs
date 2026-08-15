@@ -174,7 +174,6 @@ defmodule Pulsar.ProducerTest do
           topic: "persistent://public/default/routing",
           name: "routing-producer",
           client: :test,
-          producer_count: 1,
           partition_discovery_interval_ms: false
         ],
         extra_opts
@@ -183,7 +182,7 @@ defmodule Pulsar.ProducerTest do
     root =
       start_supervised!(%{
         id: {:routing_topology, System.unique_integer([:positive])},
-        start: {Topology, :start_link, [RoutingWorker, registry, :producer_count, opts, [resolver: resolver]]},
+        start: {Topology, :start_link, [RoutingWorker, registry, :producers, opts, [resolver: resolver]]},
         type: :supervisor
       })
 

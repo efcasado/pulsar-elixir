@@ -1,8 +1,8 @@
 defmodule Pulsar.Producer.Worker do
   @moduledoc false
 
-  # The GenServer behind a single producer. Pulsar.Producer starts these through
-  # Pulsar.Topology.Group, one per partition and per :producer_count.
+  # The GenServer behind a single producer. Pulsar.Producer starts one through
+  # Pulsar.Topology.Group for the topic or for each partition.
 
   use GenServer
 

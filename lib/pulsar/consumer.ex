@@ -48,7 +48,7 @@ defmodule Pulsar.Consumer do
       end)
       |> Keyword.put(:companions, &DeadLetter.attach/2)
 
-    Topology.start_link(Worker, Client.registry(:consumers, client), :consumer_count, opts)
+    Topology.start_link(Worker, Client.registry(:consumers, client), :consumers, opts)
   end
 
   @doc """
