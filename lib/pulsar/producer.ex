@@ -278,12 +278,14 @@ defmodule Pulsar.Producer do
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
   # The monitor's reference doubles as the tag the reply carries, the way `GenServer.call/3`
-  # does it, so `await/2` selects on either the reply or the producer going down.
+  # does it, so `await/2` selects on either the reply or the producer going down. It is an alias
+  # for the same reason: demonitoring deactivates it, so an answer to a wait already given up on
+  # is dropped by the runtime rather than left in the caller's mailbox.
   defp publish_async(producer, message, opts) do
     case resolve_worker(producer, opts) do
       {:ok, worker} ->
-        ref = Process.monitor(worker)
-        GenServer.cast(worker, {:send_message, message, opts, {self(), ref}})
+        ref = Process.monitor(worker, alias: :demonitor)
+        GenServer.cast(worker, {:send_message, message, opts, {ref, ref}})
 
         {:ok, ref}
 

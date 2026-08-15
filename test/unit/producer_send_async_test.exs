@@ -27,6 +27,18 @@ defmodule Pulsar.Producer.SendAsyncTest do
     end
 
     def handle_cast({:send_message, _payload, _opts, _from}, :silent = state), do: {:noreply, state}
+
+    # Answers late, so a caller that has already given up would be the one to receive it.
+    def handle_cast({:send_message, payload, _opts, from}, {:echo_after, delay} = state) do
+      Process.send_after(self(), {:answer, from, payload}, delay)
+      {:noreply, state}
+    end
+
+    @impl true
+    def handle_info({:answer, from, payload}, state) do
+      GenServer.reply(from, {:ok, payload})
+      {:noreply, state}
+    end
   end
 
   setup do
@@ -138,6 +150,17 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
     end
 
+    # `send/3` never hands back the reference, so an answer arriving after it gave up would be
+    # one its caller could not reach. Demonitoring the alias has the runtime drop it instead.
+    test "leaves no answer behind when it gives up" do
+      worker = start_supervised!({StubWorker, {:echo_after, 60}})
+
+      assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
+
+      Process.sleep(100)
+      assert {:messages, []} = Process.info(self(), :messages)
+    end
+
     test "reports a producer that goes down" do
       worker = start_supervised!({StubWorker, :silent})
       task = Task.async(fn -> Producer.send(worker, "a") end)
@@ -153,8 +176,8 @@ defmodule Pulsar.Producer.SendAsyncTest do
 
   # What `Pulsar.Producer.send_async/3` does once it has resolved a worker.
   defp send_async_to(worker, payload) do
-    ref = Process.monitor(worker)
-    GenServer.cast(worker, {:send_message, payload, [], {self(), ref}})
+    ref = Process.monitor(worker, alias: :demonitor)
+    GenServer.cast(worker, {:send_message, payload, [], {ref, ref}})
 
     ref
   end
