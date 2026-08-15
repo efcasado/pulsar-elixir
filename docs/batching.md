@@ -13,7 +13,8 @@ from that single fact:
 - The broker **acknowledges** entries, so an ack names the entry a message arrived in
 - The broker **dispatches** entries, so `Key_Shared` reads one key per entry
 - The broker **delays** entries, so a delayed message cannot ride in a batch
-- The broker **redelivers** entries, so a nack brings back everything batched alongside it
+- The broker **redelivers** entries, so configured nack redelivery brings back everything batched
+  alongside it
 
 Batching is off by default. A producer with `batch_enabled: false` publishes one entry per
 message, and none of the above applies.
@@ -129,8 +130,9 @@ Three consequences:
 - **A message left unacked holds the ones batched with it.** A callback that returns
   `{:noreply, state}` and never acks keeps its entry's bookkeeping for the life of the consumer,
   and the entry stays in the subscription backlog.
-- **A nack brings the whole entry back**, including messages already acked from it. Your callback
-  sees those again. Delivery was always at-least-once; a batch widens what one failure repeats.
+- **With `:redelivery_interval` configured, a nack brings the whole entry back**, including
+  messages already acked from it. Your callback sees those again. Without an interval the entry
+  remains unacknowledged and normally returns only after the consumer restarts.
 - **A partially acked batch can leave backlog metrics unchanged.** The subscription cursor cannot
   advance past the entry until every message in it is acknowledged, so the backlog moves at entry
   boundaries rather than after each processed message.
@@ -280,6 +282,25 @@ accepted before it, then publishes it as its own entry. This is what the Java an
 ```elixir
 {:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
 
+defmodule Billing do
+  use Pulsar.Consumer.Callback
+
+  def handle_message(%Pulsar.Message{} = message, state) do
+    # One call per order, with that order's own key.
+    :ok = charge(Pulsar.Message.key(message), message.payload)
+
+    # Counted off against its entry; the entry is acked once all of its orders are.
+    {:ok, state}
+  end
+end
+
+{:ok, consumer} = Pulsar.Consumer.start("orders", "billing", Billing,
+  subscription_type: :key_shared,
+  redelivery_interval: 5_000
+)
+
+:ok = Pulsar.Consumer.await_ready(consumer)
+
 {:ok, producer} = Pulsar.Producer.start(
   "orders",
   batch_enabled: true,
@@ -299,23 +320,6 @@ refs =
 for ref <- refs do
   {:ok, _msg_id} = Pulsar.Producer.await(ref)
 end
-
-defmodule Billing do
-  use Pulsar.Consumer.Callback
-
-  def handle_message(%Pulsar.Message{} = message, state) do
-    # One call per order, with that order's own key.
-    :ok = charge(Pulsar.Message.key(message), message.payload)
-
-    # Counted off against its entry; the entry is acked once all of its orders are.
-    {:ok, state}
-  end
-end
-
-{:ok, _consumer} = Pulsar.Consumer.start("orders", "billing", Billing,
-  subscription_type: :key_shared,
-  redelivery_interval: 5_000
-)
 ```
 
 ## Telemetry Events
