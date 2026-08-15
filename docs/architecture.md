@@ -117,17 +117,24 @@ That is the pid returned to the caller, registered under its public name, and re
 `Pulsar.Client.consumers/1` or `Pulsar.Client.producers/1`.
 
 A non-partitioned topic has one internal <code>Pulsar.Topology.Group</code>. A partitioned topic has
-one group per partition:
+one group per partition. What lives inside each group depends on the resource:
 
 ```text
-stable topology root (:orders)
+producer topology root (:orders-producer)
 ├── topology discovery
 ├── group for partition 0
-│   └── worker
-├── group for partition 1
-│   └── worker
-└── group for partition 2
-    └── worker
+│   └── producer worker
+└── group for partition 1
+    └── producer worker
+
+consumer topology root (:orders-billing, consumer_count: 2)
+├── topology discovery
+├── group for partition 0
+│   ├── consumer worker 1
+│   └── consumer worker 2
+└── group for partition 1
+    ├── consumer worker 1
+    └── consumer worker 2
 ```
 
 Producer groups contain one worker, preserving one ordered send lane and one sequence-id and
@@ -142,8 +149,8 @@ that no workers are available. This lets reconciliation recover the resource wit
 the pid applications use to address it.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
-one of that group's workers. Consumer workers receive broker messages and invoke the
-configured `Pulsar.Consumer.Callback` in the worker process.
+that group's worker. Consumer workers receive broker messages and invoke the configured
+`Pulsar.Consumer.Callback` in the worker process.
 
 ## Startup Is Asynchronous
 
