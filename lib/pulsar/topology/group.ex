@@ -8,7 +8,9 @@ defmodule Pulsar.Topology.Group do
   require Logger
 
   @spec start_link(module(), pos_integer(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, count, opts), do: Supervisor.start_link(__MODULE__, {worker, count, opts})
+  def start_link(worker, count, opts) when count > 0 do
+    Supervisor.start_link(__MODULE__, {worker, count, opts})
+  end
 
   @impl true
   def init({worker, count, opts}) do

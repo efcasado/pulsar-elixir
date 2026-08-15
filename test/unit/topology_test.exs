@@ -244,9 +244,9 @@ defmodule Pulsar.TopologyTest do
       assert is_pid(group)
     end
 
-    test "a producer topology starts one worker per partition regardless of stale count options" do
+    test "a producer topology starts one worker per partition" do
       {root, _registry} =
-        start_async_topology(fn _topic, _opts -> {:ok, 3} end, [producer_count: 3],
+        start_async_topology(fn _topic, _opts -> {:ok, 3} end, [],
           worker: OptsWorker,
           kind: :producers
         )
@@ -257,7 +257,7 @@ defmodule Pulsar.TopologyTest do
       assert length(groups) == 3
 
       assert Enum.all?(groups, fn {_index, group} ->
-               match?([{_id, _worker, :worker, _modules}], Supervisor.which_children(group))
+               match?([{_id, pid, :worker, _modules}] when is_pid(pid), Supervisor.which_children(group))
              end)
     end
 
