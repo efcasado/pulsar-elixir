@@ -40,7 +40,7 @@ defmodule Pulsar do
   A client started directly is all a script needs:
 
   <!-- x-release-please-start-version -->
-      Mix.install([{:pulsar, "~> 3.0.0", hex: :pulsar_elixir}])
+      Mix.install([{:pulsar, "~> 3.0.1", hex: :pulsar_elixir}])
   <!-- x-release-please-end -->
 
       defmodule Tail do
