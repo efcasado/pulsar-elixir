@@ -45,24 +45,34 @@ defmodule Pulsar.Consumer.Options do
       default: [],
       doc: "Passed to the callback module's `init/1`."
     ],
+    flow_policy: [
+      type: {:custom, __MODULE__, :validate_flow_policy, []},
+      default: :auto,
+      doc: """
+      What refills permits once the consumer is running. `:auto` grants `:flow_refill` whenever
+      outstanding permits reach `:flow_threshold`. A `{module, function, args}` decides for
+      itself; see `Pulsar.Consumer` for what it is passed, what it may answer, and what it
+      cannot do.
+      """
+    ],
     flow_initial: [
       type: :non_neg_integer,
       default: 100,
       doc: """
-      Permits granted to the broker on subscribe. `0` disables automatic flow control,
-      leaving it to `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
-      replacement workers also start with `0` and must be granted permits again.
+      Permits granted to the broker when a consumer subscribes, under either policy. Every
+      worker instance grants them, so a replacement comes back with its window rather than
+      waiting to be given one.
       """
     ],
     flow_threshold: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Outstanding permits at which more are requested. Ignored when `:flow_initial` is 0."
+      doc: "Outstanding permits at which the default `:auto` policy requests more."
     ],
     flow_refill: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Permits requested on each refill. Ignored when `:flow_initial` is 0."
+      doc: "Permits requested by each refill the default `:auto` policy makes."
     ],
     initial_position: [
       type: {:in, [:earliest, :latest]},
@@ -218,5 +228,36 @@ defmodule Pulsar.Consumer.Options do
   Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
+  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> validate_flow!()
+
+  defp validate_flow!(opts) do
+    if Keyword.fetch!(opts, :flow_policy) == :auto and Keyword.fetch!(opts, :flow_initial) == 0 do
+      raise ArgumentError,
+            "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
+              "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
+              ":flow_initial, or a {module, function, args} policy if permits will come from " <>
+              "Pulsar.Consumer.send_flow/3."
+    end
+
+    opts
+  end
+
+  @doc false
+  @spec validate_flow_policy(term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_flow_policy(:auto), do: {:ok, :auto}
+
+  # Checked here rather than at the first delivery, where an unloadable policy would take the
+  # consumer down once per redelivery.
+  def validate_flow_policy({module, function, args} = policy)
+      when is_atom(module) and is_atom(function) and is_list(args) do
+    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args) + 1) do
+      {:ok, policy}
+    else
+      {:error, "expected #{inspect(module)} to export #{function}/#{length(args) + 1}"}
+    end
+  end
+
+  def validate_flow_policy(other) do
+    {:error, "expected :auto or a {module, function, args} tuple, got: #{inspect(other)}"}
+  end
 end

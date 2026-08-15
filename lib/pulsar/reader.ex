@@ -69,6 +69,7 @@ defmodule Pulsar.Reader do
   """
 
   alias Pulsar.Consumer
+  alias Pulsar.Reader.Callback
   alias Pulsar.Topology
 
   @default_startup_timeout 5_000
@@ -193,7 +194,8 @@ defmodule Pulsar.Reader do
       consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
-      flow_initial: 0,
+      flow_policy: {Callback, :report_permits, [self(), reader_ref]},
+      flow_initial: flow_permits,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms,
       init_args: [self(), reader_ref]
@@ -205,7 +207,7 @@ defmodule Pulsar.Reader do
       |> maybe_put(:start_message_id, start_message_id)
       |> maybe_put(:start_timestamp, start_timestamp)
 
-    case Consumer.start(topic, subscription_name, Pulsar.Reader.Callback, consumer_opts) do
+    case Consumer.start(topic, subscription_name, Callback, consumer_opts) do
       {:ok, consumer} ->
         case build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
           {:ok, state} ->
@@ -222,7 +224,7 @@ defmodule Pulsar.Reader do
   end
 
   defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
-    case wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+    case wait_for_consumers_ready(consumer, startup_timeout) do
       {:ok, consumer_pids} ->
         permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
@@ -251,27 +253,44 @@ defmodule Pulsar.Reader do
     {:halt, :halted}
   end
 
-  defp next_message(state) do
+  defp next_message(state), do: next_message(state, deadline(state.timeout))
+
+  # A delivery's permits arrive after its messages and are charged once the stream has read past
+  # them, so the window tracks what has been consumed rather than what the broker has sent. They
+  # keep their own deadline: :timeout measures time without a message, and a delivery that
+  # yielded none must not extend it.
+  defp next_message(state, deadline) do
     case :queue.out(state.buffer) do
-      {{:value, {consumer_pid, message}}, new_buffer} ->
-        new_state = %{state | buffer: new_buffer}
-        new_state = decrement_permits(new_state, consumer_pid)
-        new_state = maybe_refill_flow(new_state, consumer_pid)
-        {[message], new_state}
+      {{:value, {:message, message}}, new_buffer} ->
+        {[message], %{state | buffer: new_buffer}}
+
+      {{:value, {:permits, consumer_pid, consumed}}, new_buffer} ->
+        %{state | buffer: new_buffer}
+        |> decrement_permits(consumer_pid, consumed)
+        |> maybe_refill_flow(consumer_pid)
+        |> next_message(deadline)
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
 
         receive do
-          {:pulsar_message, ^reader_ref, consumer_pid, message} ->
-            new_buffer = :queue.in({consumer_pid, message}, state.buffer)
-            next_message(%{state | buffer: new_buffer})
+          {:pulsar_message, ^reader_ref, _consumer_pid, message} ->
+            next_message(%{state | buffer: :queue.in({:message, message}, state.buffer)}, deadline)
+
+          {:pulsar_permits, ^reader_ref, consumer_pid, consumed} ->
+            next_message(%{state | buffer: :queue.in({:permits, consumer_pid, consumed}, state.buffer)}, deadline)
         after
-          state.timeout ->
+          time_left(deadline) ->
             {:halt, state}
         end
     end
   end
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp time_left(:infinity), do: :infinity
+  defp time_left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
   defp stop_reader(:halted), do: :ok
 
@@ -291,28 +310,40 @@ defmodule Pulsar.Reader do
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
-  defp decrement_permits(state, consumer_pid) do
-    current = Map.get(state.permits_by_consumer, consumer_pid, 0)
-    new_permits = Map.put(state.permits_by_consumer, consumer_pid, max(current - 1, 0))
+  # A worker not seen before granted itself :flow_initial when it subscribed, so its window
+  # starts there rather than at zero. Counting it from zero would refill a worker that is
+  # already full, leaving it holding twice what the reader means to have outstanding.
+  #
+  # The count is left signed: one entry can carry more messages than the window has permits,
+  # and the broker charges every one of them. Clamping at zero would forget the excess and
+  # under-grant by exactly that much on the next refill.
+  defp decrement_permits(state, consumer_pid, consumed) do
+    current = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
+    new_permits = Map.put(state.permits_by_consumer, consumer_pid, current - consumed)
     %{state | permits_by_consumer: new_permits}
   end
 
+  # Refills one window at a time until the worker is back above the threshold, so a delivery
+  # that overdrew several windows is answered by as many grants. :flow_permits is a positive
+  # integer, so this always terminates.
   defp maybe_refill_flow(state, consumer_pid) do
-    current_permits = Map.get(state.permits_by_consumer, consumer_pid, 0)
+    current_permits = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
     threshold = div(state.flow_permits, 2)
 
     if current_permits <= threshold do
       :ok = Consumer.send_flow(consumer_pid, state.flow_permits)
       new_permits = Map.put(state.permits_by_consumer, consumer_pid, current_permits + state.flow_permits)
-      %{state | permits_by_consumer: new_permits}
+
+      maybe_refill_flow(%{state | permits_by_consumer: new_permits}, consumer_pid)
     else
       state
     end
   end
 
-  defp wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+  # Each worker grants :flow_initial for itself when it subscribes, so a partition discovered
+  # later, or a worker that restarts, starts with a window instead of waiting to be given one.
+  defp wait_for_consumers_ready(consumer, startup_timeout) do
     with :ok <- Consumer.await_ready(consumer, timeout: startup_timeout),
-         :ok <- Consumer.send_flow(consumer, flow_permits),
          [_ | _] = consumer_pids <- Topology.workers(consumer) do
       {:ok, consumer_pids}
     else

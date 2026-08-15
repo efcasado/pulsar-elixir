@@ -42,6 +42,7 @@ defmodule Pulsar.Consumer.Worker do
     :broker_pid,
     :broker_monitor,
     {:ready, false},
+    :flow_policy,
     :flow_initial,
     :flow_threshold,
     :flow_refill,
@@ -65,6 +66,8 @@ defmodule Pulsar.Consumer.Worker do
     :schema_version
   ]
 
+  @type flow_mfa :: {module(), atom(), [term()]}
+
   @type t :: %__MODULE__{
           topic: String.t(),
           base_topic: String.t(),
@@ -78,6 +81,7 @@ defmodule Pulsar.Consumer.Worker do
           broker_pid: pid(),
           broker_monitor: reference(),
           ready: boolean(),
+          flow_policy: :auto | flow_mfa(),
           flow_initial: non_neg_integer(),
           flow_threshold: non_neg_integer(),
           flow_refill: non_neg_integer(),
@@ -405,7 +409,7 @@ defmodule Pulsar.Consumer.Worker do
         :deliver -> process_messages_normally(new_state, messages)
       end
 
-    {:noreply, check_and_refill_permits(new_state)}
+    {:noreply, apply_flow_policy(new_state, permits_consumed)}
   end
 
   @impl true
@@ -801,30 +805,41 @@ defmodule Pulsar.Consumer.Worker do
     %{state | flow_outstanding_permits: new_permits}
   end
 
-  defp check_and_refill_permits(%{flow_initial: 0} = state) do
-    state
-  end
+  defp apply_flow_policy(state, consumed) do
+    case decide_flow(state, consumed) do
+      :ok ->
+        state
 
-  defp check_and_refill_permits(state) do
-    refill_threshold = state.flow_threshold
-    refill_amount = state.flow_refill
-    current_permits = state.flow_outstanding_permits
+      {:grant, permits} when is_integer(permits) and permits > 0 ->
+        grant_permits(state, permits)
 
-    if current_permits <= refill_threshold do
-      do_refill_permits(state, refill_amount, current_permits)
-    else
-      state
+      unexpected_result ->
+        Logger.warning("Unexpected flow policy result: #{inspect(unexpected_result)}, granting no permits")
+        state
     end
   end
 
-  defp do_refill_permits(state, refill_amount, current_permits) do
-    case send_flow_command(state, refill_amount) do
-      :ok ->
-        %{state | flow_outstanding_permits: current_permits + refill_amount}
+  defp decide_flow(%__MODULE__{flow_policy: :auto} = state, _consumed) do
+    if state.flow_outstanding_permits <= state.flow_threshold and state.flow_refill > 0 do
+      {:grant, state.flow_refill}
+    else
+      :ok
+    end
+  end
 
-      error ->
-        Logger.error("Failed to send flow command: #{inspect(error)}")
-        state
+  defp decide_flow(%__MODULE__{flow_policy: {module, function, args}} = state, consumed) do
+    flow = %{consumed: consumed, outstanding: state.flow_outstanding_permits}
+
+    apply(module, function, [flow | args])
+  end
+
+  defp grant_permits(state, permits) do
+    case send_flow_command(state, permits) do
+      :ok ->
+        %{state | flow_outstanding_permits: state.flow_outstanding_permits + permits}
+
+      {:error, reason} ->
+        exit({:send_flow_failed, reason})
     end
   end
 
