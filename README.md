@@ -5,11 +5,23 @@
 [![Package Version](https://img.shields.io/hexpm/v/pulsar_elixir.svg)](https://hex.pm/packages/pulsar_elixir)
 [![hexdocs.pm](https://img.shields.io/badge/hex-docs-purple.svg)](https://hexdocs.pm/pulsar_elixir/)
 
-
-> [!TIP]
-> Using [Broadway](https://github.com/dashbitco/broadway)? Check out the companion project: [off_broadway_pulsar](https://github.com/efcasado/off_broadway_pulsar).
-
 An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
+
+
+## Features
+
+- ⭐ Works with [Broadway](https://github.com/dashbitco/broadway) (see [off_broadway_pulsar](https://github.com/efcasado/off_broadway_pulsar))
+- 🔐 SSL encryption
+- 🔑 Authentication
+- 📥 Consumers (including stream-friendly Reader interface; see [guide](https://hexdocs.pm/pulsar_elixir/reader.html))
+- 📤 Producers
+- 🪾 Partitioned topics
+- 🏎️ Compacted topics
+- 📝 Schemas (see [guide](https://hexdocs.pm/pulsar_elixir/schemas.html))
+- 🔪 Chunking (see [guide](https://hexdocs.pm/pulsar_elixir/chunking.html))
+- 🍱 Batching (including batch-index ACK; see [guide](https://hexdocs.pm/pulsar_elixir/batching.html))
+- 🗜️ Compression
+- ☠️ NACK and dead-letter topics (see [guide](https://hexdocs.pm/pulsar_elixir/dead_letter_policies.html))
 
 
 ## Installation
@@ -171,41 +183,3 @@ For example:
 ```
 mix run examples/bingo.exs
 ```
-
-
-## Features
-
-The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apache.org/client-feature-matrix/).
-
-| Component | Feature                            | Supported |
-|-----------|------------------------------------|-----------|
-| Client    | TLS encryption                     | ✅        |
-| Client    | Authentication                     | ⚠️        |
-| Client    | Transaction                        | ❌        |
-| Client    | Statistics                         | ❌        |
-| Producer  | Sync send                          | ✅        |
-| Producer  | Async send                         | ✅        |
-| Producer  | Batching                           | ✅        |
-| Producer  | Chunking                           | ✅        |
-| Producer  | Compression                        | ✅        |
-| Producer  | Schema                             | ✅        |
-| Producer  | Partitioned topics                 | ✅        |
-| Producer  | Access modes                       | ✅        |
-| Consumer  | ACK                                | ✅        |
-| Consumer  | Batch-index ACK                    | ✅        |
-| Consumer  | NACK                               | ✅        |
-| Consumer  | NACK back-off                      | ❌        |
-| Consumer  | Batching                           | ✅        |
-| Consumer  | Partitioned topics                 | ✅        |
-| Consumer  | Chunking                           | ✅        |
-| Consumer  | Seek                               | ✅        |
-| Consumer  | Subscription types                 | ✅        |
-| Consumer  | Subscription modes                 | ✅        |
-| Consumer  | Retry letter topic                 | ❌        |
-| Consumer  | Dead letter topic                  | ✅        |
-| Consumer  | Compression                        | ✅        |
-| Consumer  | Compaction                         | ✅        |
-| Consumer  | Schema                             | ✅        |
-| Consumer  | Configurable flow control settings | ✅        |
-| Reader    |                                    | ✅        |
-| TableView |                                    | ❌        |
