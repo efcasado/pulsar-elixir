@@ -313,12 +313,19 @@ defmodule Pulsar.Reader do
   # A worker not seen before granted itself :flow_initial when it subscribed, so its window
   # starts there rather than at zero. Counting it from zero would refill a worker that is
   # already full, leaving it holding twice what the reader means to have outstanding.
+  #
+  # The count is left signed: one entry can carry more messages than the window has permits,
+  # and the broker charges every one of them. Clamping at zero would forget the excess and
+  # under-grant by exactly that much on the next refill.
   defp decrement_permits(state, consumer_pid, consumed) do
     current = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
-    new_permits = Map.put(state.permits_by_consumer, consumer_pid, max(current - consumed, 0))
+    new_permits = Map.put(state.permits_by_consumer, consumer_pid, current - consumed)
     %{state | permits_by_consumer: new_permits}
   end
 
+  # Refills one window at a time until the worker is back above the threshold, so a delivery
+  # that overdrew several windows is answered by as many grants. :flow_permits is a positive
+  # integer, so this always terminates.
   defp maybe_refill_flow(state, consumer_pid) do
     current_permits = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
     threshold = div(state.flow_permits, 2)
@@ -326,7 +333,8 @@ defmodule Pulsar.Reader do
     if current_permits <= threshold do
       :ok = Consumer.send_flow(consumer_pid, state.flow_permits)
       new_permits = Map.put(state.permits_by_consumer, consumer_pid, current_permits + state.flow_permits)
-      %{state | permits_by_consumer: new_permits}
+
+      maybe_refill_flow(%{state | permits_by_consumer: new_permits}, consumer_pid)
     else
       state
     end
