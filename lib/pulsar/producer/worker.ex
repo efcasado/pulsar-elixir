@@ -127,24 +127,6 @@ defmodule Pulsar.Producer.Worker do
   @spec ready?(pid(), timeout()) :: boolean()
   def ready?(producer, timeout), do: GenServer.call(producer, :ready?, timeout)
 
-  @doc """
-  Publishes a message and waits for the broker to acknowledge it. Backs
-  `Pulsar.Producer.send/3`, which documents the message options.
-
-  Two are not part of that public surface: `:timeout`, the call timeout in milliseconds, and
-  `:ordering_key`, which orders within a `:key_shared` subscription without affecting which
-  partition the message lands on.
-
-  `:timeout` defaults to `:infinity` because `:send_timeout` is the deadline: a call giving up
-  first would replace `{:error, :send_timeout}` with an exit. Pass one here if `:send_timeout`
-  is off.
-  """
-  @spec send_message(pid(), binary(), keyword()) :: {:ok, map() | :deduplicated} | {:error, term()}
-  def send_message(producer_pid, message, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
-    GenServer.call(producer_pid, {:send_message, message, opts}, timeout)
-  end
-
   ## GenServer Callbacks
 
   @impl true
@@ -246,17 +228,29 @@ defmodule Pulsar.Producer.Worker do
   @impl true
   def handle_call(:ready?, _from, state), do: {:reply, state.ready, state}
 
-  def handle_call({:send_message, _, _}, _from, %{ready: false} = state) do
-    Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
-    {:reply, {:error, :producer_waiting}, state}
+  @impl true
+  def handle_cast({:send_message, payload, opts, from}, state) do
+    {:noreply, do_send(payload, opts, from, state)}
   end
 
-  def handle_call({:send_message, payload, opts}, from, state) do
+  defp do_send(_payload, _opts, from, %__MODULE__{ready: false} = state) do
+    Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
+
+    refuse(state, from, :producer_waiting)
+  end
+
+  defp do_send(payload, opts, from, state) do
     if queue_full?(state) do
-      {:reply, {:error, :producer_queue_full}, state}
+      refuse(state, from, :producer_queue_full)
     else
       publish_or_batch(payload, opts, from, state)
     end
+  end
+
+  defp refuse(state, from, reason) do
+    GenServer.reply(from, {:error, reason})
+
+    state
   end
 
   defp queue_full?(%__MODULE__{max_pending_messages: limit}) when limit in [false, nil], do: false
@@ -318,9 +312,9 @@ defmodule Pulsar.Producer.Worker do
     state = %{state | batch: new_batch, batched: new_batched, batch_started_at: started_at}
 
     if new_batched >= state.batch_size do
-      {:noreply, do_flush_batch(state)}
+      do_flush_batch(state)
     else
-      {:noreply, maybe_schedule_send_timeout(state)}
+      maybe_schedule_send_timeout(state)
     end
   end
 
@@ -332,7 +326,7 @@ defmodule Pulsar.Producer.Worker do
 
     case maybe_chunk(compressed_payload, base_metadata, state) do
       {:ok, messages} -> publish_messages(messages, base_metadata, from, state)
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} -> refuse(state, from, reason)
     end
   end
 
@@ -368,13 +362,13 @@ defmodule Pulsar.Producer.Worker do
 
     case result do
       {:ok, new_state} ->
-        {:noreply, new_state |> park_send() |> maybe_schedule_send_timeout()}
+        new_state |> park_send() |> maybe_schedule_send_timeout()
 
       # Rolling the counter back would reissue sequence ids still in flight, which the
       # broker's deduplication reads as repeats. The pending entries do go: a message missing
       # chunks can never complete, and its caller already has an error.
       {:error, reason, acc_state} ->
-        {:reply, {:error, reason}, %{acc_state | pending_frames: state.pending_frames}}
+        refuse(%{acc_state | pending_frames: state.pending_frames}, from, reason)
     end
   end
 

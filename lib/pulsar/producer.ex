@@ -137,6 +137,8 @@ defmodule Pulsar.Producer do
   A producer already carrying `:max_pending_messages` refuses with
   `{:error, :producer_queue_full}` rather than taking on more.
 
+  Calling `send/3` from the selected producer worker returns `{:error, :calling_self}`.
+
   `{:error, :send_timeout}` is the other shape: the broker did not acknowledge the message
   within `:send_timeout`. **It does not say the message was not published**, only that nothing
   came back in time. A retry publishes under a fresh sequence id, which the broker's
@@ -160,10 +162,11 @@ defmodule Pulsar.Producer do
   - `:event_time` - the message's event time, in milliseconds
   - `:deliver_at_time` / `:deliver_after` - delayed delivery. The broker delays whole entries, so
     a delayed message is published on its own rather than joining a batch
-  - `:timeout` - how long to wait for the call itself, in milliseconds. Defaults to `:infinity`,
-    leaving `:send_timeout` as the deadline. `:send_timeout` is counted from when the producer
-    takes the message, so a producer that has not finished registering has not started it: this
-    is what bounds that wait
+  - `:timeout` - how long to wait, in milliseconds, answering `{:error, :timeout}` if it passes.
+    Defaults to `:infinity`. With the default producer settings, `:send_timeout` remains the
+    deadline; if `:send_timeout` is disabled, the wait can be unbounded. `:send_timeout` is counted
+    from when the producer takes the message, so it does not bound the wait for a producer that has
+    not finished registering. Giving up here does not cancel the send
   - `:client` - the client to resolve a producer name against
 
   ## Examples
@@ -175,12 +178,71 @@ defmodule Pulsar.Producer do
           {:ok, send_result()} | {:error, term()}
   def send(producer, message, opts \\ [])
 
-  def send(producer, message, opts) when is_pid(producer) and is_binary(message), do: publish(producer, message, opts)
+  def send(producer, message, opts)
+      when (is_pid(producer) or is_binary(producer) or is_atom(producer)) and is_binary(message) do
+    case send_async(producer, message, opts) do
+      {:ok, ref} -> await(ref, Keyword.get(opts, :timeout, :infinity))
+      {:error, _reason} = error -> error
+    end
+  end
 
-  def send(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
+  @doc """
+  Starts publishing without waiting for the broker and returns a reference for `await/2`.
+
+  Takes the same options as `send/3`, except `:timeout`, which belongs to `await/2`. Calls from
+  one process that route to the same partition are handed to the producer in order.
+
+      {:ok, first} = Pulsar.Producer.send_async(:audit, "one")
+      {:ok, second} = Pulsar.Producer.send_async(:audit, "two")
+
+      {:ok, _message_id} = Pulsar.Producer.await(first)
+      {:ok, _message_id} = Pulsar.Producer.await(second)
+
+  The process that calls `send_async/3` must also call `await/2`, because the reply and the
+  producer's `:DOWN` message arrive in its mailbox. If the reference is never awaited, the reply
+  remains unread there.
+
+  Routing failures, such as a producer still discovering its topology, are returned immediately.
+  Once a worker accepts the send, producer errors such as a full queue are returned by `await/2`.
+  """
+  @spec send_async(pid() | String.t() | atom(), binary(), keyword()) ::
+          {:ok, reference()} | {:error, term()}
+  def send_async(producer, message, opts \\ [])
+
+  def send_async(producer, message, opts) when is_pid(producer) and is_binary(message) do
+    publish_async(producer, message, opts)
+  end
+
+  def send_async(name, message, opts) when (is_binary(name) or is_atom(name)) and is_binary(message) do
     case Client.lookup(:producers, name, Keyword.get(opts, :client, :default)) do
-      {:ok, pid} -> publish(pid, message, opts)
+      {:ok, pid} -> publish_async(pid, message, opts)
       {:error, :not_found} = error -> error
+    end
+  end
+
+  @doc """
+  Waits for a send started by `send_async/3`, answering as `send/3` would have.
+
+  A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`.
+
+  Each reference can be awaited once. The default timeout is `:infinity`; when the producer's
+  `:send_timeout` is disabled, this can wait indefinitely. A finite timeout abandons the wait
+  without cancelling the send, so the message may still be published. It also consumes the
+  reference: a late answer is dropped and cannot be recovered by calling `await/2` again.
+  """
+  @spec await(reference(), timeout()) :: {:ok, send_result()} | {:error, term()}
+  def await(ref, timeout \\ :infinity) when is_reference(ref) do
+    receive do
+      {^ref, reply} ->
+        Process.demonitor(ref, [:flush])
+        reply
+
+      {:DOWN, ^ref, :process, _pid, reason} ->
+        {:error, {:producer_died, reason}}
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+        {:error, :timeout}
     end
   end
 
@@ -214,26 +276,44 @@ defmodule Pulsar.Producer do
 
   # Resolving the partition here keeps topology knowledge in one module: the partition
   # supervisors below only build child specs.
-  defp publish(producer, message, opts) do
+  # Use the monitor alias as the reply tag so `await/2` receives either the reply or `:DOWN`.
+  # Demonitoring deactivates the alias, which drops replies that arrive after a timeout.
+  defp publish_async(producer, message, opts) do
+    case resolve_worker(producer, opts) do
+      # Prevent `send/3` from awaiting a cast that only this worker can process.
+      {:ok, worker} when worker == self() ->
+        {:error, :calling_self}
+
+      {:ok, worker} ->
+        ref = Process.monitor(worker, alias: :demonitor)
+        GenServer.cast(worker, {:send_message, message, opts, {ref, ref}})
+
+        {:ok, ref}
+
+      {:error, _reason} = error ->
+        error
+    end
+  catch
+    :exit, reason -> {:error, {:producer_died, reason}}
+  end
+
+  defp resolve_worker(producer, opts) do
     case Topology.kind(producer) do
       :worker ->
-        Worker.send_message(producer, message, opts)
+        {:ok, producer}
 
       :group ->
         {:error, :not_found}
 
       :topology ->
         {groups, hashing_scheme} = Topology.routing(producer)
-        route(groups, hashing_scheme, message, opts)
+        route(groups, hashing_scheme, opts)
     end
-  catch
-    # A stale root and a worker that dies mid-send have the same public result.
-    :exit, reason -> {:error, {:producer_died, reason}}
   end
 
-  defp route([], _hashing_scheme, _message, _opts), do: {:error, :not_ready}
+  defp route([], _hashing_scheme, _opts), do: {:error, :not_ready}
 
-  defp route(groups, hashing_scheme, message, opts) do
+  defp route(groups, hashing_scheme, opts) do
     # Missing partitions are added highest-first, so the contiguous width stays at the old
     # modulus until every new slot exists. Restarting groups remain present and retain their
     # slot, avoiding a temporary key remap during either growth or recovery.
@@ -245,7 +325,7 @@ defmodule Pulsar.Producer do
         index = select_partition(opts, hashing_scheme, partitions)
 
         case List.keyfind(groups, index, 0) do
-          {_index, group} when is_pid(group) -> send_to_worker(Topology.workers(group), message, opts)
+          {_index, group} when is_pid(group) -> pick_worker(Topology.workers(group))
           {_index, _restarting} -> {:error, :no_producers_available}
           nil -> {:error, {:partition_not_found, index}}
         end
@@ -268,11 +348,8 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp send_to_worker([], _message, _opts), do: {:error, :no_producers_available}
-
-  defp send_to_worker([worker | _rest], message, opts) do
-    Worker.send_message(worker, message, opts)
-  end
+  defp pick_worker([]), do: {:error, :no_producers_available}
+  defp pick_worker([worker | _rest]), do: {:ok, worker}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.

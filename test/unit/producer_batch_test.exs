@@ -138,7 +138,7 @@ defmodule Pulsar.Producer.BatchTest do
         [froms, ["a", "b", "a"], 0..2]
         |> Enum.zip()
         |> Enum.reduce(state, fn {from, key, index}, acc ->
-          {:noreply, next} = Worker.handle_call({:send_message, "msg-#{index}", [partition_key: key]}, from, acc)
+          {:noreply, next} = Worker.handle_cast({:send_message, "msg-#{index}", [partition_key: key], from}, acc)
           next
         end)
 
@@ -239,7 +239,7 @@ defmodule Pulsar.Producer.BatchTest do
   ## Helpers
 
   defp send_message(state, payload, opts) do
-    Worker.handle_call({:send_message, payload, opts}, {self(), make_ref()}, state)
+    Worker.handle_cast({:send_message, payload, opts, {self(), make_ref()}}, state)
   end
 
   defp key_based(state), do: %{state | batch_builder: :key_based}
