@@ -244,9 +244,9 @@ defmodule Pulsar.TopologyTest do
       assert is_pid(group)
     end
 
-    test "a producer topology starts one worker per partition" do
+    test "a producer topology starts one worker per partition regardless of stale count options" do
       {root, _registry} =
-        start_async_topology(fn _topic, _opts -> {:ok, 3} end, [],
+        start_async_topology(fn _topic, _opts -> {:ok, 3} end, [producer_count: 3],
           worker: OptsWorker,
           kind: :producers
         )
@@ -373,11 +373,10 @@ defmodule Pulsar.TopologyTest do
         topic: @topic,
         name: @name,
         client: :test,
-        consumer_count: 1,
         partition_discovery_interval_ms: false
       ]
 
-      config = %{worker: PartitionFourFails, kind: :consumers, opts: opts}
+      config = %{worker: PartitionFourFails, kind: :consumers, worker_count: 1, opts: opts}
 
       assert {:error, {:partition_start_failed, 4, _reason}} =
                Topology.reconcile(root, 6, config)

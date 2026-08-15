@@ -56,7 +56,7 @@ defmodule Pulsar.Topology do
           Supervisor.on_start()
   def start_link(worker, registry, kind, opts, controller_opts) when kind in [:consumers, :producers] do
     name = Keyword.fetch!(opts, :name)
-    config = %{worker: worker, kind: kind, opts: opts}
+    config = %{worker: worker, kind: kind, worker_count: worker_count(kind, opts), opts: opts}
 
     Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
@@ -578,13 +578,13 @@ defmodule Pulsar.Topology do
   # :topic is the topic a worker subscribes to and :base_topic the one the resource was
   # configured with; they differ only for a partition. Workers carry both so a callback can
   # tell which partition it handles without inspecting the tree it lives in.
-  defp topic_child_spec(%{worker: worker, opts: opts} = config) do
+  defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
     topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 
-    group_child_spec({:topic, :non_partitioned}, worker, worker_count(config), topic_opts)
+    group_child_spec({:topic, :non_partitioned}, worker, worker_count, topic_opts)
   end
 
-  defp partition_child_spec(partition_index, %{worker: worker, opts: opts} = config) do
+  defp partition_child_spec(partition_index, %{worker: worker, worker_count: worker_count, opts: opts}) do
     base_topic = Keyword.fetch!(opts, :topic)
 
     partition_opts =
@@ -595,11 +595,11 @@ defmodule Pulsar.Topology do
         name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
       )
 
-    group_child_spec({:partition, partition_index}, worker, worker_count(config), partition_opts)
+    group_child_spec({:partition, partition_index}, worker, worker_count, partition_opts)
   end
 
-  defp worker_count(%{kind: :consumers, opts: opts}), do: Keyword.fetch!(opts, :consumer_count)
-  defp worker_count(%{kind: :producers}), do: 1
+  defp worker_count(:consumers, opts), do: Keyword.fetch!(opts, :consumer_count)
+  defp worker_count(:producers, _opts), do: 1
 
   defp group_child_spec(id, worker, worker_count, opts) do
     %{
