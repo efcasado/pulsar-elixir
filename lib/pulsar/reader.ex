@@ -253,9 +253,13 @@ defmodule Pulsar.Reader do
     {:halt, :halted}
   end
 
+  defp next_message(state), do: next_message(state, deadline(state.timeout))
+
   # A delivery's permits arrive after its messages and are charged once the stream has read past
-  # them, so the window tracks what has been consumed rather than what the broker has sent.
-  defp next_message(state) do
+  # them, so the window tracks what has been consumed rather than what the broker has sent. They
+  # keep their own deadline: :timeout measures time without a message, and a delivery that
+  # yielded none must not extend it.
+  defp next_message(state, deadline) do
     case :queue.out(state.buffer) do
       {{:value, {:message, message}}, new_buffer} ->
         {[message], %{state | buffer: new_buffer}}
@@ -264,23 +268,29 @@ defmodule Pulsar.Reader do
         %{state | buffer: new_buffer}
         |> decrement_permits(consumer_pid, consumed)
         |> maybe_refill_flow(consumer_pid)
-        |> next_message()
+        |> next_message(deadline)
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
 
         receive do
           {:pulsar_message, ^reader_ref, _consumer_pid, message} ->
-            next_message(%{state | buffer: :queue.in({:message, message}, state.buffer)})
+            next_message(%{state | buffer: :queue.in({:message, message}, state.buffer)}, deadline)
 
           {:pulsar_permits, ^reader_ref, consumer_pid, consumed} ->
-            next_message(%{state | buffer: :queue.in({:permits, consumer_pid, consumed}, state.buffer)})
+            next_message(%{state | buffer: :queue.in({:permits, consumer_pid, consumed}, state.buffer)}, deadline)
         after
-          state.timeout ->
+          time_left(deadline) ->
             {:halt, state}
         end
     end
   end
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp time_left(:infinity), do: :infinity
+  defp time_left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
   defp stop_reader(:halted), do: :ok
 
@@ -300,14 +310,17 @@ defmodule Pulsar.Reader do
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
+  # A worker not seen before granted itself :flow_initial when it subscribed, so its window
+  # starts there rather than at zero. Counting it from zero would refill a worker that is
+  # already full, leaving it holding twice what the reader means to have outstanding.
   defp decrement_permits(state, consumer_pid, consumed) do
-    current = Map.get(state.permits_by_consumer, consumer_pid, 0)
+    current = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
     new_permits = Map.put(state.permits_by_consumer, consumer_pid, max(current - consumed, 0))
     %{state | permits_by_consumer: new_permits}
   end
 
   defp maybe_refill_flow(state, consumer_pid) do
-    current_permits = Map.get(state.permits_by_consumer, consumer_pid, 0)
+    current_permits = Map.get(state.permits_by_consumer, consumer_pid, state.flow_permits)
     threshold = div(state.flow_permits, 2)
 
     if current_permits <= threshold do
