@@ -225,9 +225,10 @@ defmodule Pulsar.Producer do
 
   A producer that goes down before answering is reported as `{:error, {:producer_died, reason}}`.
 
-  The default is `:infinity`; when the producer's `:send_timeout` is disabled, this can wait
-  indefinitely. A finite timeout abandons the wait without cancelling the send: the message may
-  still be published, and its answer remains unread in the caller's mailbox.
+  Each reference can be awaited once. The default timeout is `:infinity`; when the producer's
+  `:send_timeout` is disabled, this can wait indefinitely. A finite timeout abandons the wait
+  without cancelling the send, so the message may still be published. It also consumes the
+  reference: a late answer is dropped and cannot be recovered by calling `await/2` again.
   """
   @spec await(reference(), timeout()) :: {:ok, send_result()} | {:error, term()}
   def await(ref, timeout \\ :infinity) when is_reference(ref) do

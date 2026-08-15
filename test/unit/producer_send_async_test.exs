@@ -28,20 +28,14 @@ defmodule Pulsar.Producer.SendAsyncTest do
 
     def handle_cast({:send_message, _payload, _opts, _from}, :silent = state), do: {:noreply, state}
 
-    def handle_cast({:send_message, payload, _opts, from}, {:echo_after, delay} = state) do
-      Process.send_after(self(), {:answer, from, payload}, delay)
+    def handle_cast({:send_message, payload, _opts, from}, {:hold, owner} = state) do
+      send(owner, {:held_send, from, payload})
       {:noreply, state}
     end
 
     @impl true
     def handle_call({:publish_to_self, payload}, _from, state) do
       {:reply, Producer.send(self(), payload, timeout: 100), state}
-    end
-
-    @impl true
-    def handle_info({:answer, from, payload}, state) do
-      GenServer.reply(from, {:ok, payload})
-      {:noreply, state}
     end
   end
 
@@ -117,6 +111,19 @@ defmodule Pulsar.Producer.SendAsyncTest do
       assert Process.alive?(worker), "the send is still the producer's to answer"
     end
 
+    test "cannot recover an answer after timing out" do
+      worker = start_supervised!({StubWorker, {:hold, self()}})
+      ref = send_async_to(worker, "a")
+
+      assert_receive {:held_send, from, "a"}
+      assert {:error, :timeout} = Producer.await(ref, 0)
+
+      GenServer.reply(from, {:ok, "a"})
+
+      refute_receive {^ref, _reply}
+      assert {:error, :timeout} = Producer.await(ref, 0)
+    end
+
     test "belongs to the process that started the send" do
       worker = start_supervised!({StubWorker, :echo})
       ref = send_async_to(worker, "a")
@@ -152,15 +159,6 @@ defmodule Pulsar.Producer.SendAsyncTest do
       worker = start_supervised!({StubWorker, :silent})
 
       assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
-    end
-
-    test "leaves no answer behind when it gives up" do
-      worker = start_supervised!({StubWorker, {:echo_after, 60}})
-
-      assert {:error, :timeout} = Producer.send(worker, "a", timeout: 20)
-
-      Process.sleep(100)
-      assert {:messages, []} = Process.info(self(), :messages)
     end
 
     test "refuses to publish to the producer it is already running in" do

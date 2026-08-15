@@ -89,4 +89,28 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     close_stats = Utils.collect_producer_closed_stats(producer_names: [producer_group_name])
     assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
   end
+
+  test "send multiple messages asynchronously" do
+    {:ok, producer} =
+      Pulsar.Producer.start(@topic,
+        client: @client,
+        name: "async-producer"
+      )
+
+    assert :ok = Pulsar.Producer.await_ready(producer)
+
+    refs =
+      Enum.map(["one", "two", "three"], fn payload ->
+        assert {:ok, ref} = Pulsar.Producer.send_async(producer, payload)
+        ref
+      end)
+
+    for ref <- Enum.reverse(refs) do
+      assert {:ok, message_id} = Pulsar.Producer.await(ref)
+      assert message_id.ledgerId
+      assert message_id.entryId
+    end
+
+    assert :ok = Pulsar.Producer.stop(producer, client: @client)
+  end
 end
