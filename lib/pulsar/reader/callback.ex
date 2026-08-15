@@ -20,13 +20,18 @@ defmodule Pulsar.Reader.Callback do
     {:ok, state}
   end
 
-  # Reported rather than granted here: the stream process refills as it consumes, which is what
-  # keeps the broker from sending further ahead than the stream has read.
-  @impl true
-  def handle_permits(%{consumed: 0}, state), do: {:ok, state}
+  @doc """
+  Flow policy for a reader's consumer, configured as
+  `{Pulsar.Reader.Callback, :report_permits, [stream_pid, reader_ref]}`.
 
-  def handle_permits(%{consumed: consumed}, state) do
-    send(state.stream_pid, {:pulsar_permits, state.reader_ref, self(), consumed})
-    {:ok, state}
+  Reports rather than grants: the stream process refills as it consumes, which is what keeps
+  the broker from sending further ahead than the stream has read.
+  """
+  @spec report_permits(map(), pid(), reference()) :: :ok
+  def report_permits(%{consumed: 0}, _stream_pid, _reader_ref), do: :ok
+
+  def report_permits(%{consumed: consumed}, stream_pid, reader_ref) do
+    send(stream_pid, {:pulsar_permits, reader_ref, self(), consumed})
+    :ok
   end
 end

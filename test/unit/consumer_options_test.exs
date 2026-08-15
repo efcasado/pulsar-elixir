@@ -44,6 +44,24 @@ defmodule Pulsar.Consumer.OptionsTest do
       end
     end
 
+    test "accepts a flow policy the given module can answer" do
+      policy = {Kernel, :inspect, [[]]}
+
+      assert validate!(flow_policy: policy, flow_initial: 0)[:flow_policy] == policy
+    end
+
+    test "rejects a flow policy whose function does not take the flow it would be given" do
+      assert_raise NimbleOptions.ValidationError, ~r|inspect/3|, fn ->
+        validate!(flow_policy: {Kernel, :inspect, [1, 2]})
+      end
+    end
+
+    test "rejects a flow policy that is neither a known atom nor an MFA" do
+      assert_raise NimbleOptions.ValidationError, ~r/:auto, :manual, or a \{module, function, args\}/, fn ->
+        validate!(flow_policy: :whenever)
+      end
+    end
+
     test "accepts a name as either a string or an atom" do
       assert validate!(name: "a-group")[:name] == "a-group"
       assert validate!(name: MyApp.Consumer)[:name] == MyApp.Consumer

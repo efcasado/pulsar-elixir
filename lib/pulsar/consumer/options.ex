@@ -46,12 +46,16 @@ defmodule Pulsar.Consumer.Options do
       doc: "Passed to the callback module's `init/1`."
     ],
     flow_policy: [
-      type: {:in, [:auto, :manual]},
+      type: {:custom, __MODULE__, :validate_flow_policy, []},
       default: :auto,
       doc: """
       Who decides refills once the consumer is running. `:auto` applies `:flow_threshold` and
-      `:flow_refill` through the callback module's default `handle_permits/2`. `:manual` leaves
-      every refill to you, through that callback or `Pulsar.Consumer.send_flow/2`.
+      `:flow_refill`. `:manual` never refills, leaving it to `Pulsar.Consumer.send_flow/2`. A
+      `{module, function, args}` is called after every delivery as
+      `apply(module, function, [flow | args])`, where `flow` is
+      `%{consumed: permits, outstanding: permits}`, and answers `:ok` or `{:grant, permits}`.
+      It runs in the consumer process, so it must not call `Pulsar.Consumer.send_flow/2` on
+      that consumer. See `Pulsar.Consumer` for what `:consumed` counts.
       """
     ],
     flow_initial: [
@@ -234,9 +238,28 @@ defmodule Pulsar.Consumer.Options do
       raise ArgumentError,
             "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
               "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
-              ":flow_initial, or flow_policy: :manual to grant permits yourself."
+              ":flow_initial, or a policy that grants permits itself."
     end
 
     opts
+  end
+
+  @doc false
+  @spec validate_flow_policy(term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_flow_policy(policy) when policy in [:auto, :manual], do: {:ok, policy}
+
+  # Checked here rather than at the first delivery, where an unloadable policy would take the
+  # consumer down once per redelivery.
+  def validate_flow_policy({module, function, args} = policy)
+      when is_atom(module) and is_atom(function) and is_list(args) do
+    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args) + 1) do
+      {:ok, policy}
+    else
+      {:error, "expected #{inspect(module)} to export #{function}/#{length(args) + 1}"}
+    end
+  end
+
+  def validate_flow_policy(other) do
+    {:error, "expected :auto, :manual, or a {module, function, args} tuple, got: #{inspect(other)}"}
   end
 end

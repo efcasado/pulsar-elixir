@@ -193,7 +193,7 @@ defmodule Pulsar.Reader do
       consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
-      flow_policy: :manual,
+      flow_policy: {Pulsar.Reader.Callback, :report_permits, [self(), reader_ref]},
       flow_initial: flow_permits,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms,

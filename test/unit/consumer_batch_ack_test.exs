@@ -23,14 +23,15 @@ defmodule Pulsar.Consumer.BatchAckTest do
       end
     end
 
-    def handle_permits(flow, answers) do
-      send(self(), {:permits, flow})
+  end
 
-      case Map.fetch(answers, :grant) do
-        :error -> super(flow, answers)
-        {:ok, :none} -> {:ok, answers}
-        {:ok, permits} -> {:grant, permits, answers}
-      end
+  # Stands in for a caller's flow policy, reporting what it was asked and answering as told.
+  defmodule Flow do
+    @moduledoc false
+
+    def decide(flow, notify_pid, answer) do
+      send(notify_pid, {:permits, flow})
+      answer
     end
   end
 
@@ -235,9 +236,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     test "still spends a permit on each message the broker sent" do
       state = %{
         worker_state(%{})
-        | flow_policy: :auto,
-          flow_initial: 100,
-          flow_threshold: 0,
+        | flow_policy: :manual,
           flow_outstanding_permits: 100
       }
 
@@ -322,9 +321,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     test "charges a permit for every message the broker sent, delivered or not" do
       state = %{
         worker_state(%{})
-        | flow_policy: :auto,
-          flow_initial: 100,
-          flow_threshold: 0,
+        | flow_policy: :manual,
           flow_outstanding_permits: 100
       }
 
@@ -363,18 +360,14 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
-  describe "handling permit consumption" do
+  describe "applying the flow policy" do
     test "reports one total for callback-visible and hidden consumption" do
       state = %{worker_state(%{}) | flow_outstanding_permits: 100}
 
       deliver(state, ["a", "b", "c"], compacted_out: [1], ack_set: [0b011])
 
       assert delivered_payloads() == ["a"]
-
-      assert [flow] = permits_reported()
-      assert flow.consumed == 3
-      assert flow.outstanding == 97
-      assert flow.mode == :manual
+      assert permits_reported() == [%{consumed: 3, outstanding: 97}]
     end
 
     test "counts a delivery diverted in full, which reaches no callback at all" do
@@ -384,10 +377,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
       assert delivered_payloads() == []
       assert diverted_payloads() == ["a", "b", "c"]
-
-      assert [flow] = permits_reported()
-      assert flow.consumed == 3
-      assert flow.outstanding == 97
+      assert permits_reported() == [%{consumed: 3, outstanding: 97}]
     end
 
     test "counts a delivery in full even when part of it fails to divert and is nacked" do
@@ -397,29 +387,29 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
       assert delivered_payloads() == []
       assert diverted_payloads() == ["a", "c"]
-
-      assert [flow] = permits_reported()
-      assert flow.consumed == 3
-      assert flow.outstanding == 97
+      assert permits_reported() == [%{consumed: 3, outstanding: 97}]
     end
 
-    test "grants what the callback asks for, without reporting again" do
-      state = %{worker_state(%{grant: 50}) | flow_outstanding_permits: 100}
+    test "grants what the policy asks for, without asking it again" do
+      state = %{
+        worker_state(%{})
+        | flow_policy: {Flow, :decide, [self(), {:grant, 50}]},
+          flow_outstanding_permits: 100
+      }
 
       new_state = deliver(state, ["a"])
 
-      assert [%{consumed: 1, outstanding: 99, mode: :manual}] = permits_reported()
+      assert permits_reported() == [%{consumed: 1, outstanding: 99}]
       assert new_state.flow_outstanding_permits == 149
 
       assert [flow] = Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
       assert flow.messagePermits == 50
     end
 
-    test "the default callback refills an automatic consumer that has reached its threshold" do
+    test "the :auto policy refills a consumer that has reached its threshold" do
       state = %{
         worker_state(%{})
         | flow_policy: :auto,
-          flow_initial: 100,
           flow_threshold: 50,
           flow_refill: 50,
           flow_outstanding_permits: 51
@@ -427,25 +417,31 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
       new_state = deliver(state, ["a", "b", "c"])
 
-      assert [flow] = permits_reported()
-      assert flow == %{consumed: 3, outstanding: 48, threshold: 50, refill: 50, mode: :auto}
       assert new_state.flow_outstanding_permits == 98
+      assert [%Binary.CommandFlow{messagePermits: 50}] = Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
     end
 
-    test "overriding the callback replaces the automatic refill policy" do
+    test "the :auto policy leaves a consumer above its threshold alone" do
       state = %{
-        worker_state(%{grant: :none})
+        worker_state(%{})
         | flow_policy: :auto,
-          flow_initial: 100,
           flow_threshold: 50,
           flow_refill: 50,
-          flow_outstanding_permits: 51
+          flow_outstanding_permits: 100
       }
 
       new_state = deliver(state, ["a", "b", "c"])
 
-      assert [%{consumed: 3, outstanding: 48, mode: :auto}] = permits_reported()
-      assert new_state.flow_outstanding_permits == 48
+      assert new_state.flow_outstanding_permits == 97
+      assert Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1)) == []
+    end
+
+    test "the :manual policy never refills, however low the window gets" do
+      state = %{worker_state(%{}) | flow_policy: :manual, flow_outstanding_permits: 3}
+
+      new_state = deliver(state, ["a", "b", "c"])
+
+      assert new_state.flow_outstanding_permits == 0
       assert Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1)) == []
     end
   end
@@ -499,7 +495,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
         callback_state: answers,
         broker_pid: self(),
         consumer_id: 1,
-        flow_policy: :manual,
+        flow_policy: {Flow, :decide, [self(), :ok]},
         flow_initial: 0
       ] ++ opts
     )
