@@ -2,6 +2,7 @@ defmodule Pulsar.Consumer.OptionsTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Consumer.Options
+  alias Pulsar.Test.Support.Flow
 
   @required [topic: "t", subscription_name: "s", callback_module: MyApp.Handler]
 
@@ -32,7 +33,7 @@ defmodule Pulsar.Consumer.OptionsTest do
     end
 
     test "keeps flow_initial under a policy of its own, so a worker still starts with a window" do
-      policy = {Pulsar.Test.Support.Flow, :never, []}
+      policy = {Flow, :never, []}
       opts = validate!(flow_policy: policy, flow_initial: 25)
 
       assert opts[:flow_policy] == policy
@@ -45,19 +46,19 @@ defmodule Pulsar.Consumer.OptionsTest do
       end
     end
 
-    test "accepts a flow policy the given module can answer" do
-      policy = {Kernel, :inspect, [[]]}
+    test "allows a policy of its own to start with nothing, since permits can come from elsewhere" do
+      policy = {Flow, :never, []}
 
       assert validate!(flow_policy: policy, flow_initial: 0)[:flow_policy] == policy
     end
 
-    test "rejects a flow policy whose function does not take the flow it would be given" do
-      assert_raise NimbleOptions.ValidationError, ~r|inspect/3|, fn ->
-        validate!(flow_policy: {Kernel, :inspect, [1, 2]})
+    test "rejects a policy whose function cannot take the flow it would be given" do
+      assert_raise NimbleOptions.ValidationError, ~r|never/2|, fn ->
+        validate!(flow_policy: {Flow, :never, [:extra]})
       end
     end
 
-    test "rejects a flow policy that is neither a known atom nor an MFA" do
+    test "rejects a policy that is neither :auto nor an MFA" do
       assert_raise NimbleOptions.ValidationError, ~r/:auto or a \{module, function, args\}/, fn ->
         validate!(flow_policy: :whenever)
       end
