@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/efcasado/pulsar-elixir/compare/v3.0.0...v3.0.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **consumer:** manual flow control stalled on uncounted permits ([#191](https://github.com/efcasado/pulsar-elixir/issues/191)) ([994385b](https://github.com/efcasado/pulsar-elixir/commit/994385b50142821dd0b93d2d722d67fbb58cae92))
+
 ## [3.0.0](https://github.com/efcasado/pulsar-elixir/compare/v2.11.1...v3.0.0) (2026-08-15)
 
 
