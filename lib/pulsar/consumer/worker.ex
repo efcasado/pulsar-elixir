@@ -405,7 +405,7 @@ defmodule Pulsar.Consumer.Worker do
         :deliver -> process_messages_normally(new_state, messages)
       end
 
-    {:noreply, check_and_refill_permits(new_state)}
+    {:noreply, notify_permits(new_state, permits_consumed)}
   end
 
   @impl true
@@ -801,30 +801,36 @@ defmodule Pulsar.Consumer.Worker do
     %{state | flow_outstanding_permits: new_permits}
   end
 
-  defp check_and_refill_permits(%{flow_initial: 0} = state) do
-    state
-  end
+  # One policy hook sees the exact cost of every broker delivery.
+  defp notify_permits(state, consumed) do
+    flow = %{
+      consumed: consumed,
+      outstanding: state.flow_outstanding_permits,
+      threshold: state.flow_threshold,
+      refill: state.flow_refill,
+      mode: if(state.flow_initial > 0, do: :automatic, else: :manual)
+    }
 
-  defp check_and_refill_permits(state) do
-    refill_threshold = state.flow_threshold
-    refill_amount = state.flow_refill
-    current_permits = state.flow_outstanding_permits
+    case state.callback_module.handle_permits(flow, state.callback_state) do
+      {:ok, callback_state} ->
+        %{state | callback_state: callback_state}
 
-    if current_permits <= refill_threshold do
-      do_refill_permits(state, refill_amount, current_permits)
-    else
-      state
+      {:grant, permits, callback_state} when is_integer(permits) and permits > 0 ->
+        grant_permits(%{state | callback_state: callback_state}, permits)
+
+      unexpected_result ->
+        Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, granting no permits")
+        state
     end
   end
 
-  defp do_refill_permits(state, refill_amount, current_permits) do
-    case send_flow_command(state, refill_amount) do
+  defp grant_permits(state, permits) do
+    case send_flow_command(state, permits) do
       :ok ->
-        %{state | flow_outstanding_permits: current_permits + refill_amount}
+        %{state | flow_outstanding_permits: state.flow_outstanding_permits + permits}
 
-      error ->
-        Logger.error("Failed to send flow command: #{inspect(error)}")
-        state
+      {:error, reason} ->
+        exit({:send_flow_failed, reason})
     end
   end
 

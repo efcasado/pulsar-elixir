@@ -49,20 +49,22 @@ defmodule Pulsar.Consumer.Options do
       type: :non_neg_integer,
       default: 100,
       doc: """
-      Permits granted to the broker on subscribe. `0` disables automatic flow control,
-      leaving it to `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
+      Permits granted to the broker on subscribe. A positive value selects automatic mode,
+      whose default `handle_permits/2` implementation applies `:flow_threshold` and
+      `:flow_refill`. `0` selects manual mode, whose default grants nothing; override the
+      callback or use `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
       replacement workers also start with `0` and must be granted permits again.
       """
     ],
     flow_threshold: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Outstanding permits at which more are requested. Ignored when `:flow_initial` is 0."
+      doc: "Outstanding permits at which the default automatic flow policy requests more."
     ],
     flow_refill: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Permits requested on each refill. Ignored when `:flow_initial` is 0."
+      doc: "Permits requested by each default automatic refill."
     ],
     initial_position: [
       type: {:in, [:earliest, :latest]},

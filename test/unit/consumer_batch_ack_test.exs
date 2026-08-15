@@ -22,6 +22,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
         :nack -> {:error, :rejected, answers}
       end
     end
+
+    def handle_permits(flow, answers) do
+      send(self(), {:permits, flow})
+
+      case Map.fetch(answers, :grant) do
+        :error -> super(flow, answers)
+        {:ok, :none} -> {:ok, answers}
+        {:ok, permits} -> {:grant, permits, answers}
+      end
+    end
   end
 
   # Stands in for the dead letter producer. `Pulsar.Producer.send/3` routes a bare pid through
@@ -341,6 +351,91 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "handling permit consumption" do
+    test "reports one total for callback-visible and hidden consumption" do
+      state = %{worker_state(%{}) | flow_outstanding_permits: 100}
+
+      deliver(state, ["a", "b", "c"], compacted_out: [1], ack_set: [0b011])
+
+      assert delivered_payloads() == ["a"]
+
+      assert [flow] = permits_reported()
+      assert flow.consumed == 3
+      assert flow.outstanding == 97
+      assert flow.mode == :manual
+    end
+
+    test "counts a delivery diverted in full, which reaches no callback at all" do
+      state = %{diverting_state(refuse: []) | flow_outstanding_permits: 100}
+
+      deliver(state, ["a", "b", "c"], redelivery_count: 1)
+
+      assert delivered_payloads() == []
+      assert diverted_payloads() == ["a", "b", "c"]
+
+      assert [flow] = permits_reported()
+      assert flow.consumed == 3
+      assert flow.outstanding == 97
+    end
+
+    test "counts a delivery in full even when part of it fails to divert and is nacked" do
+      state = %{diverting_state(refuse: ["b"]) | flow_outstanding_permits: 100}
+
+      deliver(state, ["a", "b", "c"], redelivery_count: 1)
+
+      assert delivered_payloads() == []
+      assert diverted_payloads() == ["a", "c"]
+
+      assert [flow] = permits_reported()
+      assert flow.consumed == 3
+      assert flow.outstanding == 97
+    end
+
+    test "grants what the callback asks for, without reporting again" do
+      state = %{worker_state(%{grant: 50}) | flow_outstanding_permits: 100}
+
+      new_state = deliver(state, ["a"])
+
+      assert [%{consumed: 1, outstanding: 99, mode: :manual}] = permits_reported()
+      assert new_state.flow_outstanding_permits == 149
+
+      assert [flow] = Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1))
+      assert flow.messagePermits == 50
+    end
+
+    test "the default callback refills an automatic consumer that has reached its threshold" do
+      state = %{
+        worker_state(%{})
+        | flow_initial: 100,
+          flow_threshold: 50,
+          flow_refill: 50,
+          flow_outstanding_permits: 51
+      }
+
+      new_state = deliver(state, ["a", "b", "c"])
+
+      assert [flow] = permits_reported()
+      assert flow == %{consumed: 3, outstanding: 48, threshold: 50, refill: 50, mode: :automatic}
+      assert new_state.flow_outstanding_permits == 98
+    end
+
+    test "overriding the callback replaces the automatic refill policy" do
+      state = %{
+        worker_state(%{grant: :none})
+        | flow_initial: 100,
+          flow_threshold: 50,
+          flow_refill: 50,
+          flow_outstanding_permits: 51
+      }
+
+      new_state = deliver(state, ["a", "b", "c"])
+
+      assert [%{consumed: 3, outstanding: 48, mode: :automatic}] = permits_reported()
+      assert new_state.flow_outstanding_permits == 48
+      assert Enum.filter(receive_commands(), &match?(%Binary.CommandFlow{}, &1)) == []
+    end
+  end
+
   ## Helpers
 
   # A consumer whose dead letter producer is the stub above, past its redelivery limit.
@@ -466,6 +561,14 @@ defmodule Pulsar.Consumer.BatchAckTest do
   defp delivered_payloads(acc \\ []) do
     receive do
       {:delivered, payload} -> delivered_payloads([payload | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp permits_reported(acc \\ []) do
+    receive do
+      {:permits, flow} -> permits_reported([flow | acc])
     after
       0 -> Enum.reverse(acc)
     end

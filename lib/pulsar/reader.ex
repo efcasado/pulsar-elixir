@@ -251,21 +251,28 @@ defmodule Pulsar.Reader do
     {:halt, :halted}
   end
 
+  # A delivery's permits arrive after its messages and are charged once the stream has read past
+  # them, so the window tracks what has been consumed rather than what the broker has sent.
   defp next_message(state) do
     case :queue.out(state.buffer) do
-      {{:value, {consumer_pid, message}}, new_buffer} ->
-        new_state = %{state | buffer: new_buffer}
-        new_state = decrement_permits(new_state, consumer_pid)
-        new_state = maybe_refill_flow(new_state, consumer_pid)
-        {[message], new_state}
+      {{:value, {:message, message}}, new_buffer} ->
+        {[message], %{state | buffer: new_buffer}}
+
+      {{:value, {:permits, consumer_pid, consumed}}, new_buffer} ->
+        %{state | buffer: new_buffer}
+        |> decrement_permits(consumer_pid, consumed)
+        |> maybe_refill_flow(consumer_pid)
+        |> next_message()
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
 
         receive do
-          {:pulsar_message, ^reader_ref, consumer_pid, message} ->
-            new_buffer = :queue.in({consumer_pid, message}, state.buffer)
-            next_message(%{state | buffer: new_buffer})
+          {:pulsar_message, ^reader_ref, _consumer_pid, message} ->
+            next_message(%{state | buffer: :queue.in({:message, message}, state.buffer)})
+
+          {:pulsar_permits, ^reader_ref, consumer_pid, consumed} ->
+            next_message(%{state | buffer: :queue.in({:permits, consumer_pid, consumed}, state.buffer)})
         after
           state.timeout ->
             {:halt, state}
@@ -291,9 +298,9 @@ defmodule Pulsar.Reader do
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
-  defp decrement_permits(state, consumer_pid) do
+  defp decrement_permits(state, consumer_pid, consumed) do
     current = Map.get(state.permits_by_consumer, consumer_pid, 0)
-    new_permits = Map.put(state.permits_by_consumer, consumer_pid, max(current - 1, 0))
+    new_permits = Map.put(state.permits_by_consumer, consumer_pid, max(current - consumed, 0))
     %{state | permits_by_consumer: new_permits}
   end
 

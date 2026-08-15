@@ -19,4 +19,14 @@ defmodule Pulsar.Reader.Callback do
     send(state.stream_pid, {:pulsar_message, state.reader_ref, self(), message})
     {:ok, state}
   end
+
+  # Reported rather than granted here: the stream process refills as it consumes, which is what
+  # keeps the broker from sending further ahead than the stream has read.
+  @impl true
+  def handle_permits(%{consumed: 0}, state), do: {:ok, state}
+
+  def handle_permits(%{consumed: consumed}, state) do
+    send(state.stream_pid, {:pulsar_permits, state.reader_ref, self(), consumed})
+    {:ok, state}
+  end
 end

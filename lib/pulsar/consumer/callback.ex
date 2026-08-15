@@ -45,6 +45,15 @@ defmodule Pulsar.Consumer.Callback do
     redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
     for what they contain. Because they are routed here, `handle_message/2` only ever
     receives messages that arrived intact.
+  - `handle_permits/2` - Called after every delivery with the permits it consumed and the
+    consumer's flow window before any refill. Its default implementation applies the configured
+    automatic refill policy; overriding it replaces that policy. See `## Flow Control`.
+
+  These defaults come from `use Pulsar.Consumer.Callback`. A module taking the behaviour without
+  it has to write them itself, since the consumer calls each one directly. `handle_permits/2` is
+  the one it cannot skip — every delivery goes through it, so it is left out of
+  `@optional_callbacks` and the compiler says so rather than letting the consumer fail on its
+  first message.
 
   ## Message Format
 
@@ -136,6 +145,15 @@ defmodule Pulsar.Consumer.Callback do
   - `{:noreply, new_state}` - Message processed, but don't automatically ACK/NACK. Use `Pulsar.Consumer.ack/2` or `Pulsar.Consumer.nack/2` for manual acknowledgment
   - `{:stop, new_state}` - Message processed successfully, acknowledge, then stop consumer
 
+  ### `handle_permits/2` (Optional)
+
+  Takes a `t:flow_context/0` and the current state. The default implementation grants
+  `:refill` when an automatic consumer's `:outstanding` permits reach `:threshold`; call
+  `super(flow, state)` to observe flow without replacing it. See `## Flow Control`.
+
+  - `{:ok, new_state}` - Grant nothing
+  - `{:grant, permits, new_state}` - Grant `permits` more to the broker
+
   ### `terminate/2` (Optional)
 
   If not implemented, defaults to `:ok`.
@@ -218,6 +236,44 @@ defmodule Pulsar.Consumer.Callback do
 
         {:noreply, state}
       end
+
+  ## Flow Control
+
+  After every broker delivery the consumer calls `handle_permits/2` once, with the total
+  permits that delivery consumed, however many message callbacks it triggered — including none.
+  `:outstanding` is the window after that consumption and before any grant returned here.
+
+  This matters for batches and dead-letter policies. The broker also charges for batch members
+  excluded by an `ack_set`, messages compacted away, and deliveries diverted to a dead letter
+  topic. Counting only callback-visible messages eventually overestimates the broker's window.
+
+  The default implementation provides automatic flow control. Override it to replace the
+  configured threshold/refill policy:
+
+      defmodule MyApp.PacedConsumer do
+        use Pulsar.Consumer.Callback
+
+        def handle_permits(%{outstanding: outstanding}, state) when outstanding <= 20 do
+          {:grant, 50, state}
+        end
+
+        def handle_permits(_flow, state), do: {:ok, state}
+
+        def handle_message(_message, state), do: {:ok, state}
+      end
+
+  A consumer configured with `flow_initial: 0` is in manual mode, so the default grants nothing
+  and the decision is yours. An override can answer here with `{:grant, permits, state}`, or
+  forward `flow.consumed` to its owning process, return `{:ok, state}`, and have that process
+  grant later with `Pulsar.Consumer.send_flow/2`.
+
+  Grant through the return value rather than `Pulsar.Consumer.send_flow/2`. This callback runs
+  in the consumer process, so calling `send_flow/2` on that consumer from here deadlocks.
+  Handing the decision to another process, which then calls `send_flow/2`, is fine as long as
+  that process is not itself waiting on this one.
+
+  Neither granting from this callback nor `Pulsar.Consumer.send_flow/2` calls it again: it
+  reports broker consumption, not grants.
   """
 
   @type message_args :: Pulsar.Message.t()
@@ -225,6 +281,24 @@ defmodule Pulsar.Consumer.Callback do
   @type init_arg :: term()
   @type state :: term()
   @type reason :: term()
+
+  @typedoc """
+  Flow accounting for one broker delivery, passed to `c:handle_permits/2`.
+
+  - `:consumed` - total broker permits consumed by the delivery, including messages no message
+    callback received
+  - `:outstanding` - permits left after that consumption and before a callback-requested grant
+  - `:threshold` - configured automatic refill threshold
+  - `:refill` - configured automatic refill amount
+  - `:mode` - `:automatic` when `:flow_initial` is positive, otherwise `:manual`
+  """
+  @type flow_context :: %{
+          consumed: non_neg_integer(),
+          outstanding: non_neg_integer(),
+          threshold: non_neg_integer(),
+          refill: non_neg_integer(),
+          mode: :automatic | :manual
+        }
 
   @typedoc """
   The consumer's resolved identity, passed to `c:init/2`.
@@ -291,6 +365,9 @@ defmodule Pulsar.Consumer.Callback do
               {:ok, state}
               | {:error, reason, state}
               | {:noreply, state}
+  @callback handle_permits(flow_context, state) ::
+              {:ok, state}
+              | {:grant, pos_integer(), state}
 
   defmacro __using__(_opts) do
     quote do
@@ -330,6 +407,15 @@ defmodule Pulsar.Consumer.Callback do
         {:ok, state}
       end
 
+      def handle_permits(%{mode: :automatic, outstanding: outstanding, threshold: threshold, refill: refill}, state)
+          when outstanding <= threshold and refill > 0 do
+        {:grant, refill, state}
+      end
+
+      def handle_permits(_flow, state) do
+        {:ok, state}
+      end
+
       defoverridable init: 2,
                      terminate: 2,
                      handle_call: 3,
@@ -337,7 +423,8 @@ defmodule Pulsar.Consumer.Callback do
                      handle_info: 2,
                      became_active: 1,
                      became_passive: 1,
-                     handle_invalid_message: 2
+                     handle_invalid_message: 2,
+                     handle_permits: 2
     end
   end
 
