@@ -124,7 +124,7 @@ defmodule Pulsar.TopologyTest do
 
   defp start_async_topology(resolver, opts \\ [], controller_opts \\ []) do
     {worker, controller_opts} = Keyword.pop(controller_opts, :worker, StubWorker)
-    {kind, controller_opts} = Keyword.pop(controller_opts, :kind, :unknown)
+    {kind, controller_opts} = Keyword.pop(controller_opts, :kind, :consumers)
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
@@ -140,8 +140,8 @@ defmodule Pulsar.TopologyTest do
       )
 
     topology_opts =
-      if kind == :unknown,
-        do: Keyword.put_new(topology_opts, :worker_count, 1),
+      if kind == :consumers,
+        do: Keyword.put_new(topology_opts, :consumer_count, 1),
         else: topology_opts
 
     root =
@@ -220,7 +220,7 @@ defmodule Pulsar.TopologyTest do
         if attempt == 0, do: {:error, :no_broker_available}, else: {:ok, 3}
       end
 
-      {root, _registry} = start_async_topology(resolver, worker_count: 2)
+      {root, _registry} = start_async_topology(resolver, consumer_count: 2)
 
       :ok = Topology.await_ready(root, 1_000)
       assert Agent.get(attempts, & &1) >= 2
@@ -253,7 +253,10 @@ defmodule Pulsar.TopologyTest do
 
       :ok = Topology.await_ready(root, 1_000)
 
-      assert Enum.all?(Topology.groups(root), fn {_index, group} ->
+      groups = Topology.groups(root)
+      assert length(groups) == 3
+
+      assert Enum.all?(groups, fn {_index, group} ->
                match?([{_id, _worker, :worker, _modules}], Supervisor.which_children(group))
              end)
     end
@@ -370,11 +373,11 @@ defmodule Pulsar.TopologyTest do
         topic: @topic,
         name: @name,
         client: :test,
-        worker_count: 1,
+        consumer_count: 1,
         partition_discovery_interval_ms: false
       ]
 
-      config = %{worker: PartitionFourFails, kind: :unknown, opts: opts}
+      config = %{worker: PartitionFourFails, kind: :consumers, opts: opts}
 
       assert {:error, {:partition_start_failed, 4, _reason}} =
                Topology.reconcile(root, 6, config)

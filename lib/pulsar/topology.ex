@@ -43,18 +43,18 @@ defmodule Pulsar.Topology do
     }
   end
 
-  @spec start_link(module(), atom() | nil, :consumers | :producers | :unknown, keyword()) ::
+  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword()) ::
           Supervisor.on_start()
-  def start_link(worker, registry, kind, opts) do
+  def start_link(worker, registry, kind, opts) when kind in [:consumers, :producers] do
     start_link(worker, registry, kind, opts, [])
   end
 
   # The fifth argument is an internal seam for exercising asynchronous discovery without a
   # broker. Consumer and Producer deliberately keep it out of the API they document.
   @doc false
-  @spec start_link(module(), atom() | nil, :consumers | :producers | :unknown, keyword(), keyword()) ::
+  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword(), keyword()) ::
           Supervisor.on_start()
-  def start_link(worker, registry, kind, opts, controller_opts) do
+  def start_link(worker, registry, kind, opts, controller_opts) when kind in [:consumers, :producers] do
     name = Keyword.fetch!(opts, :name)
     config = %{worker: worker, kind: kind, opts: opts}
 
@@ -407,7 +407,7 @@ defmodule Pulsar.Topology do
     discovery =
       {self(), config, controller_opts}
       |> Discovery.child_spec()
-      |> Map.put(:id, {Discovery, resource_kind_for_config(config), topic, hashing_scheme_for_config(config)})
+      |> Map.put(:id, {Discovery, config.kind, topic, hashing_scheme_for_config(config)})
 
     # Companions start before discovery so a worker never observes the tree without them. They
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
@@ -428,9 +428,6 @@ defmodule Pulsar.Topology do
         {%{config | opts: opts}, specs}
     end
   end
-
-  defp resource_kind_for_config(%{kind: kind}) when kind in [:consumers, :producers], do: kind
-  defp resource_kind_for_config(_config), do: :unknown
 
   # Carried on the child id so routing reads it from the same which_children the groups come
   # from, keeping a send to one call. The registry value would be the usual place for this, but
@@ -603,7 +600,6 @@ defmodule Pulsar.Topology do
 
   defp worker_count(%{kind: :consumers, opts: opts}), do: Keyword.fetch!(opts, :consumer_count)
   defp worker_count(%{kind: :producers}), do: 1
-  defp worker_count(%{opts: opts}), do: Keyword.fetch!(opts, :worker_count)
 
   defp group_child_spec(id, worker, worker_count, opts) do
     %{

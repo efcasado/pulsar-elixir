@@ -90,7 +90,7 @@ MyApp.Supervisor
             │   └── stable producer root(s)
             │       ├── topology discovery
             │       └── partition group(s)
-            │           └── producer worker(s)
+            │           └── producer worker (one per group)
             └── Bootstrap
 ```
 
