@@ -3,7 +3,7 @@
 ## What is Batching?
 
 [Batching](https://pulsar.apache.org/docs/next/concepts-messaging/#batching) collects several
-messages in the producer and publishes them together as a single unit. It trades a little latency
+messages in the producer and publishes them together in fewer entries. It trades a little latency
 for throughput: fewer, larger writes to the broker instead of one per message.
 
 The unit it publishes is an **entry** — one position on the topic, named by a ledger id and an
@@ -38,6 +38,8 @@ With batching enabled, a send no longer publishes immediately:
   batch_size: 100,       # Flush once 100 messages are waiting
   flush_interval: 10     # ...or every 10ms, whichever comes first
 )
+
+:ok = Pulsar.Producer.await_ready(producer)
 ```
 
 `send/3` adds a message to the pending batch and **keeps its caller waiting**. It does not return
@@ -48,9 +50,9 @@ ended up in. The batch is flushed when:
 2. **The interval fires** — `flush_interval` milliseconds have passed
 3. **A delayed message arrives** — it cannot join a batch, so it publishes what is pending first
 
-On flush, the messages are framed into one payload, compressed as a whole when `:compression` is
-set, and published as a single entry. Every send in that batch receives its result when the
-broker's receipt for the entry comes back.
+On flush, the messages are framed into one payload and compressed as a whole when `:compression`
+is set. The default builder publishes one entry; `:key_based` publishes one entry per key. Every
+send receives its result when the broker's receipt for its entry comes back.
 
 > #### Fill a batch without blocking on each receipt {: .info}
 >
@@ -69,6 +71,10 @@ broker's receipt for the entry comes back.
 >   {:ok, _message_id} = Pulsar.Producer.await(ref)
 > end
 > ```
+>
+> Async sends still count against `:max_pending_messages` until they finish. A full producer
+> reports `{:error, :producer_queue_full}` through `await/2`. The producer's `:send_timeout` also
+> covers time spent in a batch and waiting for its receipt.
 >
 > Call `await/2` from the same process that called `send_async/3`. A finite await timeout does not
 > cancel the send; the message may still be published.
@@ -125,8 +131,9 @@ Three consequences:
   and the entry stays in the subscription backlog.
 - **A nack brings the whole entry back**, including messages already acked from it. Your callback
   sees those again. Delivery was always at-least-once; a batch widens what one failure repeats.
-- **A partially acked batch stays in the backlog.** The backlog reflects what has actually been
-  processed, which is what you want, but it moves differently than it did before batching.
+- **A partially acked batch can leave backlog metrics unchanged.** The subscription cursor cannot
+  advance past the entry until every message in it is acknowledged, so the backlog moves at entry
+  boundaries rather than after each processed message.
 
 ### Narrowing redelivery with `:batch_index_ack_enabled`
 
@@ -176,6 +183,8 @@ ordering is not preserved.
   batch_enabled: true,
   batch_builder: :key_based
 )
+
+:ok = Pulsar.Producer.await_ready(producer)
 ```
 
 Messages are grouped on their ordering key, falling back to their partition key — the same order
@@ -221,7 +230,9 @@ accepted before it, then publishes it as its own entry. This is what the Java an
     batch_enabled: true,        # Enable batching (default: false)
     batch_size: 100,            # Messages before a flush (default: 100)
     flush_interval: 10,         # Milliseconds between flushes (default: 10)
-    batch_builder: :default     # or :key_based (default: :default)
+    batch_builder: :default,    # or :key_based (default: :default)
+    send_timeout: 30_000,       # Buffer-to-receipt deadline (default: 30 seconds)
+    max_pending_messages: 1000  # Sends accepted but not completed (default: 1000)
    ]
  ]}
 ```
@@ -236,7 +247,7 @@ accepted before it, then publishes it as its own entry. This is what the Java an
     subscription_name: "billing",
     callback_module: MyConsumer,
 
-    batch_index_ack_enabled: false,  # Ack individual messages of an entry (default: false)
+    batch_index_ack_enabled: false,  # Ask the broker to track per-message acks (default: false)
     redelivery_interval: 5_000       # Needed for a nack to bring anything back
    ]
  ]}
@@ -248,10 +259,18 @@ accepted before it, then publishes it as its own entry. This is what the Java an
   `:key_based`, where the messages may end up spread across several entries.
 
 - **`flush_interval`**: Milliseconds between flushes. This is the latency batching costs you, and
-  it is part of how long `send/3` or `await/2` waits for a low-volume batch.
+  it is part of how long `send/3` or `await/2` waits for a low-volume batch. Keep it comfortably
+  below `:send_timeout`.
 
 - **`batch_builder`**: How a flushed batch is divided into entries. `:default` publishes one
   entry; `:key_based` publishes one per key.
+
+- **`send_timeout`**: Milliseconds from the producer accepting a send until it gives up waiting
+  for a broker receipt. Defaults to 30 seconds and includes time spent waiting in a batch. A
+  timeout does not prove that the broker did not publish the message.
+
+- **`max_pending_messages`**: Sends the producer can carry before refusing more. Defaults to
+  1,000 and counts messages both before and after a batch is flushed, until their sends finish.
 
 - **`batch_index_ack_enabled`**: Whether acks name individual messages of an entry. Requires
   broker support, as described above.
@@ -268,6 +287,8 @@ accepted before it, then publishes it as its own entry. This is what the Java an
   flush_interval: 20,
   batch_builder: :key_based
 )
+
+:ok = Pulsar.Producer.await_ready(producer)
 
 refs =
   for {tenant, order} <- orders do

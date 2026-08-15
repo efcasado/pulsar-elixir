@@ -184,7 +184,7 @@ The full feature matrix for Apache Pulsar can be found [here](https://pulsar.apa
 | Client    | Transaction                        | ❌        |
 | Client    | Statistics                         | ❌        |
 | Producer  | Sync send                          | ✅        |
-| Producer  | Async send                         | ❌        |
+| Producer  | Async send                         | ✅        |
 | Producer  | Batching                           | ✅        |
 | Producer  | Chunking                           | ✅        |
 | Producer  | Compression                        | ✅        |
