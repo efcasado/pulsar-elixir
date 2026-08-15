@@ -1,6 +1,8 @@
 defmodule Pulsar.Consumer.Options do
   @moduledoc false
 
+  require Logger
+
   @schema [
     topic: [
       type: :string,
@@ -45,26 +47,33 @@ defmodule Pulsar.Consumer.Options do
       default: [],
       doc: "Passed to the callback module's `init/1`."
     ],
+    flow_policy: [
+      type: {:in, [:auto, :manual]},
+      doc: """
+      Who decides refills once the consumer is running. `:auto` applies `:flow_threshold` and
+      `:flow_refill` through the callback module's default `handle_permits/2`. `:manual` leaves
+      every refill to you, through that callback or `Pulsar.Consumer.send_flow/2`. Defaults to
+      `:auto`, or to `:manual` when `:flow_initial` is `0`.
+      """
+    ],
     flow_initial: [
       type: :non_neg_integer,
       default: 100,
       doc: """
-      Permits granted to the broker on subscribe. A positive value selects automatic mode,
-      whose default `handle_permits/2` implementation applies `:flow_threshold` and
-      `:flow_refill`. `0` selects manual mode, whose default grants nothing; override the
-      callback or use `Pulsar.Consumer.send_flow/2`. Permits belong to a worker instance, so
-      replacement workers also start with `0` and must be granted permits again.
+      Permits granted to the broker when a consumer subscribes, under either policy. Every
+      worker instance grants them, so a replacement comes back with its window rather than
+      waiting to be given one.
       """
     ],
     flow_threshold: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Outstanding permits at which the default automatic flow policy requests more."
+      doc: "Outstanding permits at which the default `:auto` policy requests more."
     ],
     flow_refill: [
       type: :non_neg_integer,
       default: 50,
-      doc: "Permits requested by each default automatic refill."
+      doc: "Permits requested by each refill the default `:auto` policy makes."
     ],
     initial_position: [
       type: {:in, [:earliest, :latest]},
@@ -220,5 +229,30 @@ defmodule Pulsar.Consumer.Options do
   Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: NimbleOptions.validate!(opts, @schema)
+  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> resolve_flow_policy!()
+
+  # :flow_policy carries no default, so an absent one can still be told apart from a stated one
+  # and read the way 3.0 read :flow_initial.
+  defp resolve_flow_policy!(opts) do
+    case {Keyword.get(opts, :flow_policy), Keyword.fetch!(opts, :flow_initial)} do
+      {nil, 0} ->
+        Logger.warning(
+          "flow_initial: 0 to select manual flow control is deprecated, set flow_policy: :manual instead"
+        )
+
+        Keyword.put(opts, :flow_policy, :manual)
+
+      {nil, _initial} ->
+        Keyword.put(opts, :flow_policy, :auto)
+
+      {:auto, 0} ->
+        raise ArgumentError,
+              "flow_policy: :auto with flow_initial: 0 never receives a message: the broker is " <>
+                "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
+                ":flow_initial, or flow_policy: :manual to grant permits yourself."
+
+      {_policy, _initial} ->
+        opts
+    end
+  end
 end

@@ -42,6 +42,7 @@ defmodule Pulsar.Consumer.Worker do
     :broker_pid,
     :broker_monitor,
     {:ready, false},
+    :flow_policy,
     :flow_initial,
     :flow_threshold,
     :flow_refill,
@@ -78,6 +79,7 @@ defmodule Pulsar.Consumer.Worker do
           broker_pid: pid(),
           broker_monitor: reference(),
           ready: boolean(),
+          flow_policy: :auto | :manual,
           flow_initial: non_neg_integer(),
           flow_threshold: non_neg_integer(),
           flow_refill: non_neg_integer(),
@@ -808,7 +810,7 @@ defmodule Pulsar.Consumer.Worker do
       outstanding: state.flow_outstanding_permits,
       threshold: state.flow_threshold,
       refill: state.flow_refill,
-      mode: if(state.flow_initial > 0, do: :automatic, else: :manual)
+      mode: state.flow_policy
     }
 
     case state.callback_module.handle_permits(flow, state.callback_state) do

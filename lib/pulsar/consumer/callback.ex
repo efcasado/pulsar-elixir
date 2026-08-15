@@ -148,7 +148,7 @@ defmodule Pulsar.Consumer.Callback do
   ### `handle_permits/2` (Optional)
 
   Takes a `t:flow_context/0` and the current state. The default implementation grants
-  `:refill` when an automatic consumer's `:outstanding` permits reach `:threshold`; call
+  `:refill` when an `:auto` consumer's `:outstanding` permits reach `:threshold`; call
   `super(flow, state)` to observe flow without replacing it. See `## Flow Control`.
 
   - `{:ok, new_state}` - Grant nothing
@@ -247,8 +247,8 @@ defmodule Pulsar.Consumer.Callback do
   excluded by an `ack_set`, messages compacted away, and deliveries diverted to a dead letter
   topic. Counting only callback-visible messages eventually overestimates the broker's window.
 
-  The default implementation provides automatic flow control. Override it to replace the
-  configured threshold/refill policy:
+  The default implementation is the `flow_policy: :auto` policy. Override it to replace the
+  configured threshold/refill rule:
 
       defmodule MyApp.PacedConsumer do
         use Pulsar.Consumer.Callback
@@ -262,10 +262,11 @@ defmodule Pulsar.Consumer.Callback do
         def handle_message(_message, state), do: {:ok, state}
       end
 
-  A consumer configured with `flow_initial: 0` is in manual mode, so the default grants nothing
-  and the decision is yours. An override can answer here with `{:grant, permits, state}`, or
-  forward `flow.consumed` to its owning process, return `{:ok, state}`, and have that process
-  grant later with `Pulsar.Consumer.send_flow/2`.
+  Under `flow_policy: :manual` the default grants nothing and every refill is yours. `:flow_initial`
+  is still granted on subscribe under either policy, so a manual consumer can start with a window
+  and manage it from there, and a replacement worker comes back with the same one. An override can
+  answer here with `{:grant, permits, state}`, or forward `flow.consumed` to its owning process,
+  return `{:ok, state}`, and have that process grant later with `Pulsar.Consumer.send_flow/2`.
 
   Grant through the return value rather than `Pulsar.Consumer.send_flow/2`. This callback runs
   in the consumer process, so calling `send_flow/2` on that consumer from here deadlocks.
@@ -290,14 +291,14 @@ defmodule Pulsar.Consumer.Callback do
   - `:outstanding` - permits left after that consumption and before a callback-requested grant
   - `:threshold` - configured automatic refill threshold
   - `:refill` - configured automatic refill amount
-  - `:mode` - `:automatic` when `:flow_initial` is positive, otherwise `:manual`
+  - `:mode` - the consumer's `:flow_policy`, `:auto` or `:manual`
   """
   @type flow_context :: %{
           consumed: non_neg_integer(),
           outstanding: non_neg_integer(),
           threshold: non_neg_integer(),
           refill: non_neg_integer(),
-          mode: :automatic | :manual
+          mode: :auto | :manual
         }
 
   @typedoc """
@@ -407,7 +408,7 @@ defmodule Pulsar.Consumer.Callback do
         {:ok, state}
       end
 
-      def handle_permits(%{mode: :automatic, outstanding: outstanding, threshold: threshold, refill: refill}, state)
+      def handle_permits(%{mode: :auto, outstanding: outstanding, threshold: threshold, refill: refill}, state)
           when outstanding <= threshold and refill > 0 do
         {:grant, refill, state}
       end

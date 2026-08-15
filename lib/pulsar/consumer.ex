@@ -184,7 +184,8 @@ defmodule Pulsar.Consumer do
   @doc """
   Grants a consumer more flow permits.
 
-  Only needed when `:flow_initial` is `0`, which turns off automatic flow control.
+  Only needed under `flow_policy: :manual`, and only for refills a callback module's
+  `handle_permits/2` does not make itself.
 
   Takes the stable consumer root, one of its worker pids, or its name. Every live worker behind
   a root is granted the permits, and the first refusal is returned — retrying by name is safe,
@@ -194,9 +195,9 @@ defmodule Pulsar.Consumer do
   returned.
 
   A consumer with no workers is an error rather than a silent success: nothing was granted,
-  so nothing will be delivered. Permits belong to individual worker instances; a replacement
-  starts with the configured `:flow_initial` and therefore needs another grant when that value
-  is `0`.
+  so nothing will be delivered. Permits belong to individual worker instances, and each grants
+  `:flow_initial` for itself on subscribe, so a replacement needs another grant only for
+  whatever it had been given on top of that.
   """
   @spec send_flow(pid() | String.t() | atom(), pos_integer(), keyword()) :: :ok | {:error, term()}
   def send_flow(consumer, permits, opts \\ [])

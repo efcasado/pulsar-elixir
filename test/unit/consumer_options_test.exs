@@ -27,6 +27,37 @@ defmodule Pulsar.Consumer.OptionsTest do
       assert opts[:partition_discovery_interval_ms] == 60_000
     end
 
+    test "defaults the flow policy to :auto" do
+      assert validate!([])[:flow_policy] == :auto
+    end
+
+    test "reads flow_initial: 0 as the manual policy it selected before :flow_policy existed" do
+      opts =
+        ExUnit.CaptureLog.capture_log(fn ->
+          send(self(), {:opts, validate!(flow_initial: 0)})
+        end)
+        |> then(fn log ->
+          assert log =~ "deprecated"
+          receive do: ({:opts, opts} -> opts)
+        end)
+
+      assert opts[:flow_policy] == :manual
+      assert opts[:flow_initial] == 0
+    end
+
+    test "keeps flow_initial under the manual policy, so a worker still starts with a window" do
+      opts = validate!(flow_policy: :manual, flow_initial: 25)
+
+      assert opts[:flow_policy] == :manual
+      assert opts[:flow_initial] == 25
+    end
+
+    test "rejects an automatic consumer that would be granted nothing to start with" do
+      assert_raise ArgumentError, ~r/never receives a message/, fn ->
+        validate!(flow_policy: :auto, flow_initial: 0)
+      end
+    end
+
     test "accepts a name as either a string or an atom" do
       assert validate!(name: "a-group")[:name] == "a-group"
       assert validate!(name: MyApp.Consumer)[:name] == MyApp.Consumer

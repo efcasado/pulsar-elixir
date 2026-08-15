@@ -193,7 +193,8 @@ defmodule Pulsar.Reader do
       consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
-      flow_initial: 0,
+      flow_policy: :manual,
+      flow_initial: flow_permits,
       startup_delay_ms: startup_delay_ms,
       startup_jitter_ms: startup_jitter_ms,
       init_args: [self(), reader_ref]
@@ -222,7 +223,7 @@ defmodule Pulsar.Reader do
   end
 
   defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
-    case wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+    case wait_for_consumers_ready(consumer, startup_timeout) do
       {:ok, consumer_pids} ->
         permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
@@ -317,9 +318,10 @@ defmodule Pulsar.Reader do
     end
   end
 
-  defp wait_for_consumers_ready(consumer, flow_permits, startup_timeout) do
+  # Each worker grants :flow_initial for itself when it subscribes, so a partition discovered
+  # later, or a worker that restarts, starts with a window instead of waiting to be given one.
+  defp wait_for_consumers_ready(consumer, startup_timeout) do
     with :ok <- Consumer.await_ready(consumer, timeout: startup_timeout),
-         :ok <- Consumer.send_flow(consumer, flow_permits),
          [_ | _] = consumer_pids <- Topology.workers(consumer) do
       {:ok, consumer_pids}
     else
