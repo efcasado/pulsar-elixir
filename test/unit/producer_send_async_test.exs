@@ -34,6 +34,12 @@ defmodule Pulsar.Producer.SendAsyncTest do
       {:noreply, state}
     end
 
+    # Runs `send/3` in the worker's own process, as a synchronous telemetry handler would.
+    @impl true
+    def handle_call({:publish_to_self, payload}, _from, state) do
+      {:reply, Producer.send(self(), payload, timeout: 100), state}
+    end
+
     @impl true
     def handle_info({:answer, from, payload}, state) do
       GenServer.reply(from, {:ok, payload})
@@ -159,6 +165,15 @@ defmodule Pulsar.Producer.SendAsyncTest do
 
       Process.sleep(100)
       assert {:messages, []} = Process.info(self(), :messages)
+    end
+
+    # A worker awaiting its own cast would wedge mid-callback and stop draining its mailbox, so
+    # neither the reply nor its own `:send_timeout` could ever reach it.
+    test "refuses to publish to the producer it is already running in" do
+      worker = start_supervised!({StubWorker, :echo})
+
+      assert {:error, :calling_self} = GenServer.call(worker, {:publish_to_self, "a"})
+      assert Process.alive?(worker)
     end
 
     test "reports a producer that goes down" do

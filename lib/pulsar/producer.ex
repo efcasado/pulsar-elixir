@@ -137,6 +137,9 @@ defmodule Pulsar.Producer do
   A producer already carrying `:max_pending_messages` refuses with
   `{:error, :producer_queue_full}` rather than taking on more.
 
+  Publishing to a producer from inside its own worker — a synchronous telemetry handler, say —
+  answers `{:error, :calling_self}` rather than waiting on a reply the worker cannot get to.
+
   `{:error, :send_timeout}` is the other shape: the broker did not acknowledge the message
   within `:send_timeout`. **It does not say the message was not published**, only that nothing
   came back in time. A retry publishes under a fresh sequence id, which the broker's
@@ -283,6 +286,11 @@ defmodule Pulsar.Producer do
   # is dropped by the runtime rather than left in the caller's mailbox.
   defp publish_async(producer, message, opts) do
     case resolve_worker(producer, opts) do
+      # A worker cannot take its own cast while it is waiting for the answer, and it is holding
+      # up its whole mailbox while it waits. `GenServer.call/3` refuses this for the same reason.
+      {:ok, worker} when worker == self() ->
+        {:error, :calling_self}
+
       {:ok, worker} ->
         ref = Process.monitor(worker, alias: :demonitor)
         GenServer.cast(worker, {:send_message, message, opts, {ref, ref}})
