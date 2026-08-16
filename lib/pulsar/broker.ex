@@ -476,56 +476,15 @@ defmodule Pulsar.Broker do
 
   # Automatic cleanup when monitored processes exit
   def connected(:info, {:DOWN, monitor_ref, :process, pid, reason}, broker) do
-    # Find and remove the consumer/producer that died
-    {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref, pid)
-    {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref, pid)
+    {consumer_id, new_consumers} = remove_by_monitor_ref(broker.consumers, monitor_ref)
+    {producer_id, new_producers} = remove_by_monitor_ref(broker.producers, monitor_ref)
 
-    broker_after_consumer =
-      if consumer_id do
-        Logger.info("Consumer #{consumer_id} exited: #{inspect(reason)}, sending CloseConsumer to server")
+    broker =
+      broker
+      |> close_after_exit(:consumer, consumer_id, pid, reason)
+      |> close_after_exit(:producer, producer_id, pid, reason)
 
-        close_consumer_command = %Binary.CommandCloseConsumer{
-          consumer_id: consumer_id,
-          request_id: System.unique_integer([:positive, :monotonic])
-        }
-
-        case send_command_internal(close_consumer_command, broker) do
-          {:ok, updated_broker} ->
-            updated_broker
-
-          {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send CloseConsumer for consumer #{consumer_id}: #{inspect(send_error)}")
-
-            updated_broker
-        end
-      else
-        broker
-      end
-
-    broker_after_producer =
-      if producer_id do
-        Logger.info("Producer #{producer_id} exited: #{inspect(reason)}, sending CloseProducer to server")
-
-        close_producer_command = %Binary.CommandCloseProducer{
-          producer_id: producer_id,
-          request_id: System.unique_integer([:positive, :monotonic])
-        }
-
-        case send_command_internal(close_producer_command, broker_after_consumer) do
-          {:ok, updated_broker} ->
-            updated_broker
-
-          {{:error, send_error}, updated_broker} ->
-            Logger.warning("Failed to send CloseProducer for producer #{producer_id}: #{inspect(send_error)}")
-
-            updated_broker
-        end
-      else
-        broker_after_consumer
-      end
-
-    new_broker = %{broker_after_producer | consumers: new_consumers, producers: new_producers}
-    {:keep_state, new_broker}
+    {:keep_state, %{broker | consumers: new_consumers, producers: new_producers}}
   end
 
   def connected(:info, message, _broker) do
@@ -1000,16 +959,44 @@ defmodule Pulsar.Broker do
     _ -> :ok
   end
 
-  # Helper to find and remove entries by monitor reference
-  defp remove_by_monitor_ref(map, target_monitor_ref, target_pid) do
-    Enum.reduce(map, {nil, map}, fn
-      {id, {pid, monitor_ref}}, {found_id, acc_map} ->
-        if monitor_ref == target_monitor_ref and pid == target_pid do
-          # Found the matching entry, remove it
-          {id, Map.delete(acc_map, id)}
-        else
-          {found_id, acc_map}
-        end
-    end)
+  # A registered consumer or producer that exits owes the server a close. A failed send is
+  # dropped rather than retried: the entry goes either way, so a reconnect never carries a stale one.
+  defp close_after_exit(broker, _kind, nil, _pid, _reason), do: broker
+
+  defp close_after_exit(broker, kind, id, pid, reason) do
+    label = kind |> Atom.to_string() |> String.capitalize()
+    request_id = System.unique_integer([:positive, :monotonic])
+    timestamp = System.monotonic_time(:millisecond)
+
+    # The reply is addressed to the process that just exited, so sending it is a no-op. Registering
+    # it anyway keeps one bookkeeping path: the ack clears the entry, or the sweeper times it out.
+    new_requests = Map.put(broker.requests, request_id, {{pid, make_ref()}, timestamp})
+    broker = %{broker | requests: new_requests}
+
+    Logger.info("#{label} #{id} exited: #{inspect(reason)}, sending Close#{label} to server")
+
+    case send_command_internal(close_command(kind, id, request_id), broker) do
+      {:ok, updated_broker} ->
+        updated_broker
+
+      {{:error, send_error}, updated_broker} ->
+        Logger.warning("Failed to send Close#{label} for #{kind} #{id}: #{inspect(send_error)}")
+        updated_broker
+    end
+  end
+
+  defp close_command(:consumer, consumer_id, request_id) do
+    %Binary.CommandCloseConsumer{consumer_id: consumer_id, request_id: request_id}
+  end
+
+  defp close_command(:producer, producer_id, request_id) do
+    %Binary.CommandCloseProducer{producer_id: producer_id, request_id: request_id}
+  end
+
+  defp remove_by_monitor_ref(map, monitor_ref) do
+    case Enum.find(map, fn {_id, {_pid, ref}} -> ref == monitor_ref end) do
+      nil -> {nil, map}
+      {id, _entry} -> {id, Map.delete(map, id)}
+    end
   end
 end
