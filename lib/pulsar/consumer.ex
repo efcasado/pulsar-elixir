@@ -202,6 +202,16 @@ defmodule Pulsar.Consumer do
 
   Every message must be acked eventually, or nacked with a `:redelivery_interval` configured to
   bring it back. One that is neither holds its entry's bookkeeping for the life of the consumer.
+
+  ## Cumulative acknowledgement
+
+  `ack_type: :cumulative` acknowledges everything up to and including the message instead,
+  moving the subscription cursor in one command rather than one per message. None of the
+  above applies to it: nothing is counted off, a message left unacked is acknowledged by the
+  next ack that passes it, and a batched message acknowledges its whole entry.
+
+  It is only available on `:exclusive` and `:failover` subscriptions. See the `:ack_type`
+  option for what it covers.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)

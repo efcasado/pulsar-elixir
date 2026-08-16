@@ -15,7 +15,11 @@ defmodule Pulsar.Consumer.Ack do
   # layout Java's `BitSet.toLongArray/0` produces: 64 bits per signed word, lowest index first.
   @word_bits 64
 
-  defstruct acked: %{}, nacked: MapSet.new(), batch_index_ack_enabled: false
+  defstruct acked: %{},
+            nacked: MapSet.new(),
+            batch_index_ack_enabled: false,
+            ack_type: :individual,
+            cumulative: nil
 
   @type entry_key :: {non_neg_integer(), non_neg_integer()}
 
@@ -27,14 +31,19 @@ defmodule Pulsar.Consumer.Ack do
   @type t :: %__MODULE__{
           acked: %{optional(entry_key()) => bitset()},
           nacked: MapSet.t(message_id()),
-          batch_index_ack_enabled: boolean()
+          batch_index_ack_enabled: boolean(),
+          ack_type: :individual | :cumulative,
+          cumulative: entry_key() | nil
         }
 
-  @type opt :: {:batch_index_ack_enabled, boolean()}
+  @type opt :: {:batch_index_ack_enabled, boolean()} | {:ack_type, :individual | :cumulative}
 
   @spec new([opt()]) :: t()
   def new(opts \\ []) do
-    %__MODULE__{batch_index_ack_enabled: Keyword.get(opts, :batch_index_ack_enabled, false)}
+    %__MODULE__{
+      batch_index_ack_enabled: Keyword.get(opts, :batch_index_ack_enabled, false),
+      ack_type: Keyword.get(opts, :ack_type, :individual)
+    }
   end
 
   @doc """
@@ -74,8 +83,35 @@ defmodule Pulsar.Consumer.Ack do
       iex> {[acked], _acks} = Ack.record_ack(Ack.new(batch_index_ack_enabled: true), [id])
       iex> {acked.ack_set, acked.batch_size}
       {[0b110], 3}
+
+  A `:cumulative` ledger counts nothing off, since one ack covers everything up to the entry it
+  names. Only the furthest id of the batch goes out, and it names its entry:
+
+      iex> alias Pulsar.Consumer.Ack
+      iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+      iex> ids = for entry <- [42, 41], do: %MessageIdData{ledgerId: 7, entryId: entry}
+      iex> {[id], _acks} = Ack.record_ack(Ack.new(ack_type: :cumulative), ids)
+      iex> {id.entryId, id.batch_index}
+      {42, -1}
+
+  An id no further along than one already acknowledged is dropped rather than sent, since the
+  broker only ever moves the cursor forwards:
+
+      iex> alias Pulsar.Consumer.Ack
+      iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+      iex> at = fn entry -> %MessageIdData{ledgerId: 7, entryId: entry} end
+      iex> {[_id], acks} = Ack.record_ack(Ack.new(ack_type: :cumulative), [at.(42)])
+      iex> Ack.record_ack(acks, [at.(41)])
+      {[], acks}
   """
   @spec record_ack(t(), [message_id()]) :: {[message_id()], t()}
+  def record_ack(%__MODULE__{ack_type: :cumulative} = ack, message_ids) do
+    case furthest(ack, message_ids) do
+      nil -> {[], ack}
+      {position, message_id} -> {[message_id], %{ack | cumulative: position}}
+    end
+  end
+
   def record_ack(%__MODULE__{} = ack, message_ids) do
     {to_send, new_ack} =
       Enum.reduce(message_ids, {[], ack}, fn message_id, {to_send, acc} ->
@@ -158,6 +194,22 @@ defmodule Pulsar.Consumer.Ack do
   def deliverable?(outstanding, index), do: (outstanding &&& 1 <<< index) != 0
 
   ## Private
+
+  # The entry furthest along in the broker's ordering, unless it is one the cumulative cursor
+  # has already passed. A batch member collapses to its entry, so a cumulative ack of one
+  # message acknowledges the entry it arrived in along with everything before it.
+  defp furthest(_ack, []), do: nil
+
+  defp furthest(ack, message_ids) do
+    message_id = Enum.max_by(message_ids, &position/1)
+    position = position(message_id)
+
+    if ack.cumulative == nil or position > ack.cumulative do
+      {position, entry_id(message_id)}
+    end
+  end
+
+  defp position(%Binary.MessageIdData{ledgerId: ledger, entryId: entry}), do: {ledger, entry}
 
   # A redelivered entry has to be dealt with in full again before it can be acknowledged, so
   # what it counted off before is dropped rather than counted on from.

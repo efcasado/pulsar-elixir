@@ -106,6 +106,25 @@ defmodule Pulsar.Consumer.Options do
       default: true,
       doc: "Create the topic if it does not exist."
     ],
+    ack_type: [
+      type: {:in, [:individual, :cumulative]},
+      default: :individual,
+      doc: """
+      What an acknowledgement covers. `:individual` acknowledges the messages it names.
+      `:cumulative` acknowledges everything up to and including them, sending only the
+      furthest one, which moves the subscription cursor in one command instead of one per
+      message.
+
+      **Only `:exclusive` and `:failover` subscriptions may ack cumulatively**, since a shared
+      subscription has no single cursor to move; the broker rejects it otherwise, so this is
+      refused at startup instead.
+
+      Cumulative acknowledgement covers messages that were never acked, and a nacked message
+      the cursor passes is acknowledged along with the rest. It also acknowledges whole
+      entries, so acking one message of a batch acknowledges the messages batched with it;
+      `:batch_index_ack_enabled` does not narrow that.
+      """
+    ],
     batch_index_ack_enabled: [
       type: :boolean,
       default: false,
@@ -228,7 +247,7 @@ defmodule Pulsar.Consumer.Options do
   Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> validate_flow!()
+  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> validate_flow!() |> validate_ack_type!()
 
   defp validate_flow!(opts) do
     if Keyword.fetch!(opts, :flow_policy) == :auto and Keyword.fetch!(opts, :flow_initial) == 0 do
@@ -237,6 +256,21 @@ defmodule Pulsar.Consumer.Options do
               "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
               ":flow_initial, or a {module, function, args} policy if permits will come from " <>
               "Pulsar.Consumer.send_flow/3."
+    end
+
+    opts
+  end
+
+  @cumulative_subscription_types [:exclusive, :failover]
+
+  defp validate_ack_type!(opts) do
+    subscription_type = Keyword.fetch!(opts, :subscription_type)
+
+    if Keyword.fetch!(opts, :ack_type) == :cumulative and subscription_type not in @cumulative_subscription_types do
+      raise ArgumentError,
+            "ack_type: :cumulative is not supported on a #{inspect(subscription_type)} subscription, which " <>
+              "has no single cursor to move: the broker rejects the acknowledgement. Use " <>
+              ":exclusive or :failover, or ack individually."
     end
 
     opts

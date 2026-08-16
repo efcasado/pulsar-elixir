@@ -20,6 +20,53 @@ defmodule Pulsar.Consumer.AckTest do
     end
   end
 
+  describe "record_ack/2 when cumulative" do
+    setup do: %{ack: Ack.new(ack_type: :cumulative)}
+
+    test "sends only the furthest of the ids it is given", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [id(41), id(43), id(42)])
+
+      assert acked.entryId == 43
+    end
+
+    test "orders by ledger before entry, so a new ledger wins a lower entry id", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [%{id(99) | ledgerId: 7}, %{id(1) | ledgerId: 8}])
+
+      assert {acked.ledgerId, acked.entryId} == {8, 1}
+    end
+
+    test "counts nothing off, since one ack covers the messages before it", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert ack.acked == %{}
+    end
+
+    test "acknowledges a batched message by its entry, along with the messages batched with it",
+         %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [%{batch_id(1, 3) | ack_set: [0b101]}])
+
+      assert {acked.batch_index, acked.batch_size, acked.ack_set} == {-1, nil, []}
+    end
+
+    test "sends nothing for an id the cursor has already passed", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+
+      assert {[], ^ack} = Ack.record_ack(ack, [id(42)])
+      assert {[], ^ack} = Ack.record_ack(ack, [id(43)])
+    end
+
+    test "sends again once an id moves the cursor on", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+      {[acked], _ack} = Ack.record_ack(ack, [id(44)])
+
+      assert acked.entryId == 44
+    end
+
+    test "has nothing to send for no ids at all", %{ack: ack} do
+      assert {[], ^ack} = Ack.record_ack(ack, [])
+    end
+  end
+
   describe "entry_id/1" do
     test "leaves an id that names no batch untouched" do
       assert Ack.entry_id(id()) == id()

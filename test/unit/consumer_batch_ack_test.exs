@@ -175,6 +175,50 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "acking cumulatively" do
+    defp cumulative(answers, opts \\ []) do
+      worker_state(answers, Keyword.merge([ack_type: :cumulative, subscription_type: :failover], opts))
+    end
+
+    test "sends the wire ack type the subscription cursor moves on" do
+      deliver_unbatched(cumulative(%{}), "solo")
+
+      assert [%Binary.CommandAck{ack_type: :Cumulative}] = acks()
+    end
+
+    test "acknowledges the whole entry on the first message of a batch, not once it is complete" do
+      deliver(cumulative(%{"b" => :defer, "c" => :defer}), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: @entry, batch_index: -1}] = ack.message_id
+    end
+
+    test "leaves a deferred entry unacknowledged until something passes it" do
+      state = deliver_unbatched(cumulative(%{"a" => :defer}), "a")
+      assert [] == acks()
+
+      deliver_unbatched(state, "b", entry: @entry + 1)
+
+      assert [ack] = acks()
+      assert [%{entryId: 43}] = ack.message_id
+    end
+
+    test "sends one command per entry rather than one per message in it" do
+      deliver(cumulative(%{}), ["a", "b", "c"])
+
+      assert [_one] = acks()
+    end
+
+    test "does not ack an entry the cursor has already passed" do
+      state = deliver_unbatched(cumulative(%{}), "b", entry: @entry + 1)
+      assert [%{message_id: [%{entryId: 43}]}] = acks()
+
+      deliver_unbatched(state, "a")
+
+      assert [] == acks()
+    end
+  end
+
   describe "batch index acking" do
     test "reports what is still outstanding in the entry as each message is acked" do
       deliver(worker_state(%{}, batch_index_ack_enabled: true), ["a", "b", "c"])
@@ -471,7 +515,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   defp worker_state(answers, opts \\ []) do
-    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled])
+    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled, :ack_type])
 
     struct(
       Worker,

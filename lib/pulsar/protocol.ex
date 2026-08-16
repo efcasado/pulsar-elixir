@@ -364,6 +364,8 @@ defmodule Pulsar.Protocol do
 
   @compressions %{none: :NONE, lz4: :LZ4, zlib: :ZLIB, zstd: :ZSTD, snappy: :SNAPPY}
 
+  @ack_types %{individual: :Individual, cumulative: :Cumulative}
+
   @doc """
   Translates a `:subscription_type` option to the wire's subscription type.
   """
@@ -381,4 +383,10 @@ defmodule Pulsar.Protocol do
   """
   @spec to_compression(atom()) :: atom()
   def to_compression(compression), do: Map.fetch!(@compressions, compression)
+
+  @doc """
+  Translates an `:ack_type` option to the wire's ack type.
+  """
+  @spec to_ack_type(atom()) :: atom()
+  def to_ack_type(ack_type), do: Map.fetch!(@ack_types, ack_type)
 end

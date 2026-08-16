@@ -90,6 +90,40 @@ defmodule Pulsar.Consumer.OptionsTest do
     end
   end
 
+  describe "validate!/1 ack type" do
+    test "acknowledges individually by default" do
+      assert validate!([])[:ack_type] == :individual
+    end
+
+    for subscription_type <- [:exclusive, :failover] do
+      test "allows cumulative acks on a #{subscription_type} subscription, which has one cursor" do
+        opts = validate!(ack_type: :cumulative, subscription_type: unquote(subscription_type))
+
+        assert opts[:ack_type] == :cumulative
+      end
+    end
+
+    for subscription_type <- [:shared, :key_shared] do
+      test "refuses cumulative acks on a #{subscription_type} subscription the broker would reject" do
+        assert_raise ArgumentError, ~r/no single cursor/, fn ->
+          validate!(ack_type: :cumulative, subscription_type: unquote(subscription_type))
+        end
+      end
+    end
+
+    test "refuses cumulative acks on the default subscription type rather than defaulting around it" do
+      assert_raise ArgumentError, ~r/:shared subscription/, fn ->
+        validate!(ack_type: :cumulative)
+      end
+    end
+
+    test "rejects an unknown ack type" do
+      assert_raise NimbleOptions.ValidationError, ~r/:ack_type/, fn ->
+        validate!(ack_type: :Cumulative)
+      end
+    end
+  end
+
   describe "validate!/1 with a dead letter policy" do
     test "is absent unless asked for" do
       refute Keyword.has_key?(validate!([]), :dead_letter_policy)
