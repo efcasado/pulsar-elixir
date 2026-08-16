@@ -147,7 +147,8 @@ defmodule Pulsar.Consumer do
   acknowledgement are not consumer roots and return `{:error, :not_found}` here.
 
   A root started as a static child will be restarted by its supervisor; remove that child
-  from the supervision tree instead.
+  from the supervision tree instead. A consumer declared on a client is not a static child:
+  stopping it removes it until the client restarts.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
