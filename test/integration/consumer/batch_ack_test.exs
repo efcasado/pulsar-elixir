@@ -58,12 +58,12 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
     subscription = "index-sub"
     :ok = produce_one_batch(topic, "index")
 
-    consumer = start_consumer(topic, subscription, [ack: ["msg-1"]], batch_index_ack_enabled: true)
+    consumer = start_consumer(topic, subscription, [ack: ["msg-1"]], ack_type: :batch_index)
     for payload <- @batch, do: assert_receive({:received, ^payload}, 10_000)
     :ok = Pulsar.Consumer.stop(consumer, client: @client)
 
     # The broker was told which message the ack was for, so it does not come back.
-    _consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
+    _consumer = start_consumer(topic, subscription, [ack: :all], ack_type: :batch_index)
     for payload <- tl(@batch), do: assert_receive({:received, ^payload}, 10_000)
     refute_receive {:received, "msg-1"}, 2_000
   end
@@ -75,15 +75,15 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
     subscription = "index-complete-sub"
     :ok = produce_one_batch(topic, "index-complete")
 
-    consumer = start_consumer(topic, subscription, [ack: ["msg-1"]], batch_index_ack_enabled: true)
+    consumer = start_consumer(topic, subscription, [ack: ["msg-1"]], ack_type: :batch_index)
     for payload <- @batch, do: assert_receive({:received, ^payload}, 10_000)
     :ok = Pulsar.Consumer.stop(consumer, client: @client)
 
-    consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
+    consumer = start_consumer(topic, subscription, [ack: :all], ack_type: :batch_index)
     for payload <- tl(@batch), do: assert_receive({:received, ^payload}, 10_000)
     :ok = Pulsar.Consumer.stop(consumer, client: @client)
 
-    _consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
+    _consumer = start_consumer(topic, subscription, [ack: :all], ack_type: :batch_index)
     refute_receive {:received, _payload}, 3_000
   end
 

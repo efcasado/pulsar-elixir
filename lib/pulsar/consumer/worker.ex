@@ -181,7 +181,7 @@ defmodule Pulsar.Consumer.Worker do
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
-        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled, :ack_type])),
+        acks: Ack.new(Keyword.take(opts, [:ack_type])),
         schema: build_schema(Keyword.get(opts, :schema)),
         max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }

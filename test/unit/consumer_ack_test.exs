@@ -64,37 +64,24 @@ defmodule Pulsar.Consumer.AckTest do
   # asked for directly. Acknowledging the entry instead would take the messages batched after
   # the acked one, which may be deferred, nacked, or still being processed.
   describe "record_ack/2 when cumulative, stopping inside a batch" do
-    setup do
-      %{
-        plain: Ack.new(ack_type: :cumulative),
-        indexed: Ack.new(ack_type: :cumulative, batch_index_ack_enabled: true)
-      }
-    end
+    setup do: %{ack: Ack.new(ack_type: :cumulative)}
 
-    test "goes no further than the entry before, rather than acknowledging the rest", %{plain: ack} do
+    # No ack_set goes out to narrow this: the broker honours one on an individual ack but not on
+    # a cumulative one, where it acknowledges the entry regardless.
+    test "goes no further than the entry before, rather than acknowledging the rest", %{ack: ack} do
       {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 3)])
 
-      assert {acked.entryId, acked.batch_index, acked.ack_set} == {41, -1, []}
+      assert {acked.entryId, acked.batch_index} == {41, -1}
+      assert {acked.ack_set, acked.batch_size} == {[], nil}
     end
 
-    # The broker honours an ack_set on an individual ack but not on a cumulative one, where it
-    # acknowledges the entry regardless. Carrying one would acknowledge the rest of the batch
-    # unread, which is exactly what stopping at the entry before avoids.
-    test "carries no ack set even when batch index acking is on", %{indexed: ack} do
-      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+    test "acknowledges the entry whole once its last message is acked", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
 
-      assert {acked.entryId, acked.ack_set, acked.batch_size} == {41, [], nil}
+      assert {acked.entryId, acked.batch_index, acked.ack_set} == {42, -1, []}
     end
 
-    test "acknowledges the entry whole once its last message is acked", %{plain: plain, indexed: indexed} do
-      for ack <- [plain, indexed] do
-        {[acked], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
-
-        assert {acked.entryId, acked.batch_index, acked.ack_set} == {42, -1, []}
-      end
-    end
-
-    test "moves on to the entry itself once the batch is complete", %{plain: ack} do
+    test "moves on to the entry itself once the batch is complete", %{ack: ack} do
       {[before], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
       {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
       {[whole], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
@@ -102,14 +89,14 @@ defmodule Pulsar.Consumer.AckTest do
       assert {before.entryId, whole.entryId} == {41, 42}
     end
 
-    test "stays put while the same message is acked again", %{plain: ack} do
+    test "stays put while the same message is acked again", %{ack: ack} do
       {[_acked], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
 
       assert {[], ^ack} = Ack.record_ack(ack, [batch_id(1, 3)])
       assert {[], ^ack} = Ack.record_ack(ack, [batch_id(0, 3)])
     end
 
-    test "treats a batch of one as a whole entry, since there is nothing to stop before", %{plain: ack} do
+    test "treats a batch of one as a whole entry, since there is nothing to stop before", %{ack: ack} do
       {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 1)])
 
       assert {acked.entryId, acked.batch_index} == {42, -1}
@@ -202,7 +189,7 @@ defmodule Pulsar.Consumer.AckTest do
     acked = Enum.reject(0..(size - 1), &(&1 in owed))
 
     {ids, _ack} =
-      Enum.reduce(acked, {[], Ack.new(batch_index_ack_enabled: true)}, fn index, {ids, ack} ->
+      Enum.reduce(acked, {[], Ack.new(ack_type: :batch_index)}, fn index, {ids, ack} ->
         {ackable, ack} = Ack.record_ack(ack, [batch_id(index, size)])
         {ids ++ ackable, ack}
       end)

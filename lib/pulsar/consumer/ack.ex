@@ -5,7 +5,8 @@ defmodule Pulsar.Consumer.Ack do
   #
   # An ack names the entry it lands in, so acking one message of a batch acknowledges its
   # siblings unless it carries an `ack_set` — which only a broker with
-  # `acknowledgmentAtBatchIndexLevelEnabled` honours.
+  # `acknowledgmentAtBatchIndexLevelEnabled` honours. `:ack_type` picks between that, counting
+  # a batch off locally, and moving a cursor.
 
   import Bitwise
 
@@ -15,11 +16,7 @@ defmodule Pulsar.Consumer.Ack do
   # layout Java's `BitSet.toLongArray/0` produces: 64 bits per signed word, lowest index first.
   @word_bits 64
 
-  defstruct acked: %{},
-            nacked: MapSet.new(),
-            batch_index_ack_enabled: false,
-            ack_type: :individual,
-            cumulative: nil
+  defstruct acked: %{}, nacked: MapSet.new(), ack_type: :individual, cumulative: nil
 
   @type entry_key :: {non_neg_integer(), non_neg_integer()}
 
@@ -33,24 +30,22 @@ defmodule Pulsar.Consumer.Ack do
   """
   @type cursor :: {non_neg_integer(), integer(), non_neg_integer() | :whole}
 
+  @type ack_type :: :individual | :batch_index | :cumulative
+
   @type message_id :: Binary.MessageIdData.t()
 
   @type t :: %__MODULE__{
           acked: %{optional(entry_key()) => bitset()},
           nacked: MapSet.t(message_id()),
-          batch_index_ack_enabled: boolean(),
-          ack_type: :individual | :cumulative,
+          ack_type: ack_type(),
           cumulative: cursor() | nil
         }
 
-  @type opt :: {:batch_index_ack_enabled, boolean()} | {:ack_type, :individual | :cumulative}
+  @type opt :: {:ack_type, ack_type()}
 
   @spec new([opt()]) :: t()
   def new(opts \\ []) do
-    %__MODULE__{
-      batch_index_ack_enabled: Keyword.get(opts, :batch_index_ack_enabled, false),
-      ack_type: Keyword.get(opts, :ack_type, :individual)
-    }
+    %__MODULE__{ack_type: Keyword.get(opts, :ack_type, :individual)}
   end
 
   @doc """
@@ -81,13 +76,13 @@ defmodule Pulsar.Consumer.Ack do
       iex> {entry.entryId, entry.batch_index}
       {42, -1}
 
-  With `:batch_index_ack_enabled` every ack goes out instead, carrying the entry's still
-  outstanding messages as a bitset:
+  Under `:batch_index` every ack goes out instead, carrying the entry's still outstanding
+  messages as a bitset:
 
       iex> alias Pulsar.Consumer.Ack
       iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
       iex> id = %MessageIdData{ledgerId: 7, entryId: 42, batch_index: 0, batch_size: 3}
-      iex> {[acked], _acks} = Ack.record_ack(Ack.new(batch_index_ack_enabled: true), [id])
+      iex> {[acked], _acks} = Ack.record_ack(Ack.new(ack_type: :batch_index), [id])
       iex> {acked.ack_set, acked.batch_size}
       {[0b110], 3}
 
@@ -290,7 +285,7 @@ defmodule Pulsar.Consumer.Ack do
           acked == every_message(size) ->
             {entry_id(message_id), %{ack | acked: Map.delete(ack.acked, key)}}
 
-          ack.batch_index_ack_enabled ->
+          ack.ack_type == :batch_index ->
             {batch_index_ack_id(message_id, acked, size), %{ack | acked: Map.put(ack.acked, key, acked)}}
 
           true ->

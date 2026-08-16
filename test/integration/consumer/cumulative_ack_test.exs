@@ -97,22 +97,6 @@ defmodule Pulsar.Integration.Consumer.CumulativeAckTest do
     for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
   end
 
-  # The broker applies an ack_set to individual acknowledgements only. Narrowing a cumulative
-  # ack with one would move the cursor past the whole entry anyway, so the entry before stays
-  # the stopping point and the batch is still redelivered whole.
-  test "does not narrow to a batch index even when batch index acking is on" do
-    topic = @topic <> "-batch-index"
-    subscription = "batch-index-sub"
-    :ok = produce_one_batch(topic, "batch-index")
-
-    consumer = start_consumer(topic, subscription, [ack: ["msg-2"]], batch_index_ack_enabled: true)
-    for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
-    :ok = Pulsar.Consumer.stop(consumer, client: @client)
-
-    _consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
-    for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
-  end
-
   test "refuses a subscription the broker would reject the acknowledgement on" do
     assert_raise ArgumentError, ~r/no single cursor/, fn ->
       Pulsar.Consumer.start(@topic, "shared-sub", SelectiveAckConsumer,

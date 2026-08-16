@@ -364,7 +364,9 @@ defmodule Pulsar.Protocol do
 
   @compressions %{none: :NONE, lz4: :LZ4, zlib: :ZLIB, zstd: :ZSTD, snappy: :SNAPPY}
 
-  @ack_types %{individual: :Individual, cumulative: :Cumulative}
+  # `:batch_index` is not a wire ack type of its own: it is an individual acknowledgement that
+  # carries an `ack_set` naming the messages of the entry it was for.
+  @ack_types %{individual: :Individual, batch_index: :Individual, cumulative: :Cumulative}
 
   @doc """
   Translates a `:subscription_type` option to the wire's subscription type.

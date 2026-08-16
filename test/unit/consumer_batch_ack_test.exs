@@ -202,15 +202,6 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert [%{ledgerId: @ledger, entryId: @entry, batch_index: -1}] = ack.message_id
     end
 
-    # The broker acknowledges the whole entry for a cumulative ack whatever set it carries, so
-    # narrowing one would acknowledge the rest of the batch unread.
-    test "carries no ack set even when batch index acking is on" do
-      deliver(cumulative(%{"c" => :defer}, batch_index_ack_enabled: true), ["a", "b", "c"])
-
-      assert [ack] = acks()
-      assert [%{entryId: 41, ack_set: [], batch_size: nil}] = ack.message_id
-    end
-
     test "leaves a deferred entry unacknowledged until something passes it" do
       state = deliver_unbatched(cumulative(%{"a" => :defer}), "a")
       assert [] == acks()
@@ -242,7 +233,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   describe "batch index acking" do
     test "reports what is still outstanding in the entry as each message is acked" do
-      deliver(worker_state(%{}, batch_index_ack_enabled: true), ["a", "b", "c"])
+      deliver(worker_state(%{}, ack_type: :batch_index), ["a", "b", "c"])
 
       # Set bits are the messages still owed, clearing as the acks come in.
       assert [first, second, third] = Enum.map(acks(), fn ack -> hd(ack.message_id) end)
@@ -266,7 +257,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       # Everything but message 0 is deferred, so one ack goes out reporting the other 69.
       answers = Map.new(tl(payloads), &{&1, :defer})
 
-      deliver(worker_state(answers, batch_index_ack_enabled: true), payloads)
+      deliver(worker_state(answers, ack_type: :batch_index), payloads)
 
       assert [ack] = acks()
       assert [%{ack_set: [low, high], batch_size: 70}] = ack.message_id
@@ -336,7 +327,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
 
     test "keeps its full width under batch index acking, so it can still complete" do
-      state = worker_state(%{}, batch_index_ack_enabled: true)
+      state = worker_state(%{}, ack_type: :batch_index)
 
       # "a" was acked by whoever held the entry before, so only "b" and "c" are delivered.
       state = deliver(state, ["a", "b", "c"], ack_set: [0b110])
@@ -536,7 +527,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   defp worker_state(answers, opts \\ []) do
-    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled, :ack_type])
+    {ack_opts, opts} = Keyword.split(opts, [:ack_type])
 
     struct(
       Worker,
