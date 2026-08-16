@@ -186,11 +186,29 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert [%Binary.CommandAck{ack_type: :Cumulative}] = acks()
     end
 
-    test "acknowledges the whole entry on the first message of a batch, not once it is complete" do
+    test "does not acknowledge the entry while messages batched after the acked one are deferred" do
       deliver(cumulative(%{"b" => :defer, "c" => :defer}), ["a", "b", "c"])
+
+      # Acking the entry would take "b" and "c" with it, which nothing has processed. The entry
+      # before is as far as the cursor can go, and it moves the rest of the way once "c" is acked.
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: 41, batch_index: -1}] = ack.message_id
+    end
+
+    test "acknowledges the entry once its last message is acked" do
+      deliver(cumulative(%{"a" => :defer, "b" => :defer}), ["a", "b", "c"])
 
       assert [ack] = acks()
       assert [%{ledgerId: @ledger, entryId: @entry, batch_index: -1}] = ack.message_id
+    end
+
+    # The broker acknowledges the whole entry for a cumulative ack whatever set it carries, so
+    # narrowing one would acknowledge the rest of the batch unread.
+    test "carries no ack set even when batch index acking is on" do
+      deliver(cumulative(%{"c" => :defer}, batch_index_ack_enabled: true), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{entryId: 41, ack_set: [], batch_size: nil}] = ack.message_id
     end
 
     test "leaves a deferred entry unacknowledged until something passes it" do
@@ -203,10 +221,13 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert [%{entryId: 43}] = ack.message_id
     end
 
-    test "sends one command per entry rather than one per message in it" do
-      deliver(cumulative(%{}), ["a", "b", "c"])
+    test "sends nothing for a message that does not move the cursor on" do
+      # "a" and "b" both take the cursor to the entry before this one, so only the first of them
+      # is worth a command; "c" then covers the entry itself.
+      deliver(cumulative(%{"c" => :defer}), ["a", "b", "c"])
 
-      assert [_one] = acks()
+      assert [ack] = acks()
+      assert [%{entryId: 41}] = ack.message_id
     end
 
     test "does not ack an entry the cursor has already passed" do

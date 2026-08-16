@@ -120,9 +120,15 @@ defmodule Pulsar.Consumer.Options do
       refused at startup instead.
 
       Cumulative acknowledgement covers messages that were never acked, and a nacked message
-      the cursor passes is acknowledged along with the rest. It also acknowledges whole
-      entries, so acking one message of a batch acknowledges the messages batched with it;
-      `:batch_index_ack_enabled` does not narrow that.
+      the cursor passes is acknowledged along with the rest.
+
+      A cursor names entries, so acking part of a batch is the one place it cannot stop where
+      it was told to. It stops at the entry before instead, leaving the whole batch to be
+      redelivered rather than acknowledging the messages batched after the acked one.
+      `:batch_index_ack_enabled` does not change this: the broker honours an `ack_set` on an
+      individual acknowledgement but not on a cumulative one, where it acknowledges the entry
+      whatever set the ack carries. Ack individually if a partly consumed batch must not be
+      redelivered whole.
       """
     ],
     batch_index_ack_enabled: [

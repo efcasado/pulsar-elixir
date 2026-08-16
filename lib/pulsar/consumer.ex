@@ -206,9 +206,13 @@ defmodule Pulsar.Consumer do
   ## Cumulative acknowledgement
 
   `ack_type: :cumulative` acknowledges everything up to and including the message instead,
-  moving the subscription cursor in one command rather than one per message. None of the
-  above applies to it: nothing is counted off, a message left unacked is acknowledged by the
-  next ack that passes it, and a batched message acknowledges its whole entry.
+  moving the subscription cursor in one command rather than one per message. Nothing is
+  counted off, and a message left unacked is acknowledged by the next ack that passes it.
+
+  Batching is the exception, because a cursor names entries. Acking part of a batch moves the
+  cursor only to the entry before, so the rest of the entry is redelivered rather than
+  acknowledged unread. `:batch_index_ack_enabled` does not narrow that, since the broker
+  applies an `ack_set` to individual acknowledgements only.
 
   It is only available on `:exclusive` and `:failover` subscriptions. See the `:ack_type`
   option for what it covers.

@@ -26,6 +26,13 @@ defmodule Pulsar.Consumer.Ack do
   @typedoc "Messages of an entry, one bit per batch index."
   @type bitset :: non_neg_integer()
 
+  @typedoc """
+  How far a cumulative cursor has been moved: an entry, and either a batch index within it or
+  `:whole` for the entry in full. `:whole` sorts above every index, so a partial ack of an
+  entry never reads as further along than an ack of all of it.
+  """
+  @type cursor :: {non_neg_integer(), integer(), non_neg_integer() | :whole}
+
   @type message_id :: Binary.MessageIdData.t()
 
   @type t :: %__MODULE__{
@@ -33,7 +40,7 @@ defmodule Pulsar.Consumer.Ack do
           nacked: MapSet.t(message_id()),
           batch_index_ack_enabled: boolean(),
           ack_type: :individual | :cumulative,
-          cumulative: entry_key() | nil
+          cumulative: cursor() | nil
         }
 
   @type opt :: {:batch_index_ack_enabled, boolean()} | {:ack_type, :individual | :cumulative}
@@ -84,8 +91,8 @@ defmodule Pulsar.Consumer.Ack do
       iex> {acked.ack_set, acked.batch_size}
       {[0b110], 3}
 
-  A `:cumulative` ledger counts nothing off, since one ack covers everything up to the entry it
-  names. Only the furthest id of the batch goes out, and it names its entry:
+  A `:cumulative` ledger counts nothing off, since one ack covers everything up to the message
+  it names. Only the furthest id it is given goes out, and it names that message's entry:
 
       iex> alias Pulsar.Consumer.Ack
       iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
@@ -103,12 +110,40 @@ defmodule Pulsar.Consumer.Ack do
       iex> {[_id], acks} = Ack.record_ack(Ack.new(ack_type: :cumulative), [at.(42)])
       iex> Ack.record_ack(acks, [at.(41)])
       {[], acks}
+
+  Stopping part-way through a batch is the hard case, since a cursor names entries.
+  Acknowledging the entry would take the messages batched after this one with it, so the entry
+  before is as far as the cursor can go and the batch is redelivered whole:
+
+      iex> alias Pulsar.Consumer.Ack
+      iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+      iex> id = %MessageIdData{ledgerId: 7, entryId: 42, batch_index: 0, batch_size: 3}
+      iex> {[acked], _acks} = Ack.record_ack(Ack.new(ack_type: :cumulative), [id])
+      iex> {acked.entryId, acked.batch_index}
+      {41, -1}
+
+  Acking the last message of the entry covers it in full, so it goes out whole either way:
+
+      iex> alias Pulsar.Consumer.Ack
+      iex> alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
+      iex> id = %MessageIdData{ledgerId: 7, entryId: 42, batch_index: 2, batch_size: 3}
+      iex> {[acked], _acks} = Ack.record_ack(Ack.new(ack_type: :cumulative), [id])
+      iex> {acked.entryId, acked.batch_index, acked.ack_set}
+      {42, -1, []}
   """
   @spec record_ack(t(), [message_id()]) :: {[message_id()], t()}
+  def record_ack(%__MODULE__{ack_type: :cumulative} = ack, []), do: {[], ack}
+
   def record_ack(%__MODULE__{ack_type: :cumulative} = ack, message_ids) do
-    case furthest(ack, message_ids) do
-      nil -> {[], ack}
-      {position, message_id} -> {[message_id], %{ack | cumulative: position}}
+    {position, message_id} =
+      message_ids
+      |> Enum.max_by(&position/1)
+      |> cumulative_target()
+
+    if ack.cumulative == nil or position > ack.cumulative do
+      {[message_id], %{ack | cumulative: position}}
+    else
+      {[], ack}
     end
   end
 
@@ -195,21 +230,39 @@ defmodule Pulsar.Consumer.Ack do
 
   ## Private
 
-  # The entry furthest along in the broker's ordering, unless it is one the cumulative cursor
-  # has already passed. A batch member collapses to its entry, so a cumulative ack of one
-  # message acknowledges the entry it arrived in along with everything before it.
-  defp furthest(_ack, []), do: nil
+  # How far a cumulative ack of `message_id` can move the cursor, and the id that says so.
+  #
+  # A cursor names entries, so a message part-way through a batch is the awkward case: the entry
+  # cannot be acknowledged without taking the messages batched after it, which may be deferred,
+  # nacked, or still being processed. An `ack_set` is no help — the broker honours one on an
+  # individual ack but not on a cumulative one, where it acknowledges the entry regardless — so
+  # the entry before is as far as the cursor can go, and the batch is redelivered whole.
+  defp cumulative_target(message_id) do
+    case batch_entry(message_id) do
+      # Not batched, or the last message of its batch: the entry is covered in full.
+      nil ->
+        {whole_entry(message_id), entry_id(message_id)}
 
-  defp furthest(ack, message_ids) do
-    message_id = Enum.max_by(message_ids, &position/1)
-    position = position(message_id)
+      {_key, index, size} when index == size - 1 ->
+        {whole_entry(message_id), entry_id(message_id)}
 
-    if ack.cumulative == nil or position > ack.cumulative do
-      {position, entry_id(message_id)}
+      {_key, _index, _size} ->
+        previous = %{entry_id(message_id) | entryId: message_id.entryId - 1}
+
+        {whole_entry(previous), previous}
     end
   end
 
-  defp position(%Binary.MessageIdData{ledgerId: ledger, entryId: entry}), do: {ledger, entry}
+  # An entry acknowledged whole outranks any message within it, which `:whole` sorting above
+  # every integer index gives for free.
+  defp whole_entry(%Binary.MessageIdData{} = message_id), do: {message_id.ledgerId, message_id.entryId, :whole}
+
+  defp position(%Binary.MessageIdData{} = message_id) do
+    case batch_entry(message_id) do
+      nil -> whole_entry(message_id)
+      {_key, index, _size} -> {message_id.ledgerId, message_id.entryId, index}
+    end
+  end
 
   # A redelivered entry has to be dealt with in full again before it can be acknowledged, so
   # what it counted off before is dropped rather than counted on from.
