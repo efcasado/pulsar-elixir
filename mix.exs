@@ -23,17 +23,34 @@ defmodule Pulsar.MixProject do
         main: "Pulsar",
         extras: [
           "README.md",
+          "CHANGELOG.md",
           "docs/architecture.md",
           "docs/batching.md",
           "docs/chunking.md",
           "docs/dead_letter_policies.md",
           "docs/schemas.md",
-          "docs/reader.md"
+          "docs/reader.md",
+          "docs/upgrading_to_3.0.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
         ],
         skip_code_autolink_to: [
+          # 2.x entry points, named by the upgrade guide but gone from 3.x
+          "Pulsar.ack/3",
+          "Pulsar.get_consumers/2",
+          "Pulsar.get_producers/2",
+          "Pulsar.nack/3",
+          "Pulsar.send/3",
+          "Pulsar.send_flow/2",
+          "Pulsar.start/1",
+          "Pulsar.start_broker/2",
+          "Pulsar.start_client/1",
+          "Pulsar.start_consumer/4",
+          "Pulsar.start_producer/2",
+          "Pulsar.stop/1",
+          "Pulsar.stop_consumer/2",
+          "Pulsar.stop_producer/2",
           "Pulsar.Backoff",
           "Pulsar.Client.Bootstrap",
           "Pulsar.Consumer.Worker",
