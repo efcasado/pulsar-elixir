@@ -128,20 +128,4 @@ defmodule Pulsar.Test.Support.Utils do
       0 -> Enum.reverse(acc)
     end
   end
-
-  @doc """
-  The pids of `count` consumers, in the order they announced themselves ready.
-
-  A consumer announces itself by sending `{:consumer_ready, pid}`, which
-  `Pulsar.Test.Support.DummyConsumer` does when started with `notify_pid: self()`.
-  """
-  def wait_for_consumer_ready(count, timeout \\ 5000) do
-    Enum.map(1..count, fn _ ->
-      receive do
-        {:consumer_ready, pid} -> pid
-      after
-        timeout -> flunk("Timeout waiting for consumer to be ready")
-      end
-    end)
-  end
 end

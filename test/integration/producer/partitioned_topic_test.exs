@@ -64,11 +64,11 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         subscription,
         DummyConsumer,
         client: @client,
-        initial_position: :latest,
-        init_args: [notify_pid: self()]
+        initial_position: :latest
       )
 
-    consumers = Utils.wait_for_consumer_ready(3)
+    :ok = Pulsar.Consumer.await_ready(consumer_pid)
+    consumers = Topology.workers(consumer_pid)
 
     partition_key = "same-partition-key-#{test_id}"
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
@@ -123,11 +123,11 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         subscription,
         DummyConsumer,
         client: @client,
-        initial_position: :latest,
-        init_args: [notify_pid: self()]
+        initial_position: :latest
       )
 
-    consumers = Utils.wait_for_consumer_ready(3)
+    :ok = Pulsar.Consumer.await_ready(consumer_pid)
+    consumers = Topology.workers(consumer_pid)
 
     messages =
       for i <- 1..30 do

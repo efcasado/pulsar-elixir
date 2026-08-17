@@ -39,16 +39,8 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     GenServer.call(consumer_pid, :get_messages)
   end
 
-  def clear_messages(consumer_pid) do
-    GenServer.cast(consumer_pid, :clear_messages)
-  end
-
   def count_messages(consumer_pid) do
     GenServer.call(consumer_pid, :count_messages)
-  end
-
-  def get_state(consumer_pid) do
-    GenServer.call(consumer_pid, :get_state)
   end
 
   def context(consumer_pid) do
@@ -79,15 +71,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     {:reply, state.count, state}
   end
 
-  def handle_call(:get_state, _from, state) do
-    {:reply, state, state}
-  end
-
   def handle_call(:context, _from, state) do
     {:reply, state.context, state}
-  end
-
-  def handle_cast(:clear_messages, state) do
-    {:noreply, %{state | messages: [], count: 0}}
   end
 end

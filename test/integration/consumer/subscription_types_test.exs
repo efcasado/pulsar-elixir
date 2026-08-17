@@ -51,7 +51,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   end
 
   test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do
-    {:ok, _shared_group} =
+    {:ok, shared_group} =
       Pulsar.Consumer.start(
         @topic,
         "shared",
@@ -59,7 +59,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         manual_flow_options(:shared, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(shared_group)
+    [consumer1, consumer2] = Topology.workers(shared_group)
 
     # With manual flow control, grant one permit to each consumer per round so
     # the broker dispatches exactly one message to each. This makes the Shared
@@ -82,7 +83,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   end
 
   test "key_shared subscription partitions by key", %{expected_count: expected_count} do
-    {:ok, _key_shared_group} =
+    {:ok, key_shared_group} =
       Pulsar.Consumer.start(
         @topic,
         "key-shared",
@@ -90,7 +91,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         manual_flow_options(:key_shared, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(key_shared_group)
+    [consumer1, consumer2] = Topology.workers(key_shared_group)
 
     # With manual flow control, only grant permits once BOTH consumers are
     # subscribed, so Key_Shared hash ranges are split between them before any
@@ -125,7 +127,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   end
 
   test "failover subscription uses single active consumer", %{expected_count: expected_count} do
-    {:ok, _failover_group} =
+    {:ok, failover_group} =
       Pulsar.Consumer.start(
         @topic,
         "failover",
@@ -133,7 +135,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:failover, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(failover_group)
+    [consumer1, consumer2] = Topology.workers(failover_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer1) +
@@ -156,7 +159,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   end
 
   test "exclusive subscription receives all messages", %{expected_count: expected_count} do
-    {:ok, _exclusive_group} =
+    {:ok, exclusive_group} =
       Pulsar.Consumer.start(
         @topic,
         "exclusive",
@@ -164,7 +167,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:exclusive, 1)
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(exclusive_group)
+    [consumer] = Topology.workers(exclusive_group)
 
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
@@ -202,8 +206,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       consumer_count: count,
       flow_initial: 1,
       flow_threshold: 0,
-      flow_refill: 1,
-      init_args: [notify_pid: self()]
+      flow_refill: 1
     ]
   end
 
@@ -216,8 +219,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       initial_position: :earliest,
       consumer_count: count,
       flow_policy: {Pulsar.Test.Support.Flow, :never, []},
-      flow_initial: 0,
-      init_args: [notify_pid: self()]
+      flow_initial: 0
     ]
   end
 end

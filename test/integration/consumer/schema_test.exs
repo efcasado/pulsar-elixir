@@ -87,22 +87,16 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
   end
 
   defp start_consumer(topic, sub_name, opts \\ []) do
-    {:ok, _} =
+    {:ok, group} =
       Pulsar.Consumer.start(
         topic,
         sub_name,
         DummyConsumer,
-        Keyword.merge(
-          [
-            client: @client,
-            initial_position: :earliest,
-            init_args: [notify_pid: self()]
-          ],
-          opts
-        )
+        Keyword.merge([client: @client, initial_position: :earliest], opts)
       )
 
-    [pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(group)
+    [pid] = Topology.workers(group)
     pid
   end
 end

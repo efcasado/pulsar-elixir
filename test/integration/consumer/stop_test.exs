@@ -20,7 +20,10 @@ defmodule Pulsar.Integration.Consumer.StopTest do
   test "stopping by pid removes the consumer rather than restarting it" do
     topic = @topic <> "-pid"
     consumer = start_consumer(topic, "pid-sub")
-    Utils.wait_for_consumer_ready(1)
+
+    # start_consumer/3 already awaited it; this takes the announcement out of the mailbox so
+    # the refute below can only see one from a consumer that came back.
+    assert_receive {:consumer_ready, _pid}
 
     assert Pulsar.Consumer.stop(consumer, client: @client) == :ok
 
@@ -106,7 +109,9 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     on_exit(fn -> Pulsar.Client.stop(@declared_client) end)
 
     :ok = Pulsar.Consumer.await_ready(name(topic, "declared-sub"), client: @declared_client)
-    Utils.wait_for_consumer_ready(1)
+
+    # Drains the announcement, so the refute below can only see one from a restart.
+    assert_receive {:consumer_ready, _pid}
 
     assert Pulsar.Consumer.stop(name(topic, "declared-sub"), client: @declared_client) == :ok
 

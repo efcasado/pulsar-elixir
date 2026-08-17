@@ -2,7 +2,6 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
   @client :consumer_batch_ack_test_client
@@ -15,10 +14,7 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
     use Pulsar.Consumer.Callback
 
     def init(opts, _context) do
-      notify_pid = Keyword.fetch!(opts, :notify_pid)
-      send(notify_pid, {:consumer_ready, self()})
-
-      {:ok, %{notify_pid: notify_pid, ack: Keyword.fetch!(opts, :ack)}}
+      {:ok, %{notify_pid: Keyword.fetch!(opts, :notify_pid), ack: Keyword.fetch!(opts, :ack)}}
     end
 
     def handle_message(message, state) do
@@ -140,7 +136,7 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
         ] ++ consumer_opts
       )
 
-    Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer)
 
     consumer
   end

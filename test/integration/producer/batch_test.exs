@@ -252,14 +252,14 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     topic = @topic <> "-" <> suffix
     :ok = System.create_topic(topic)
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "batch-#{suffix}-sub", DummyConsumer,
         client: @client,
-        initial_position: :earliest,
-        init_args: [notify_pid: self()]
+        initial_position: :earliest
       )
 
-    [consumer_pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer_pid] = Topology.workers(consumer_group)
 
     {:ok, producer_pid} =
       Pulsar.Producer.start(

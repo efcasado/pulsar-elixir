@@ -123,14 +123,14 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
     :ok = System.create_topic(topic)
     :ok = System.enable_deduplication(topic)
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "dedup-#{suffix}-sub", DummyConsumer,
         client: @client,
-        initial_position: :earliest,
-        init_args: [notify_pid: self()]
+        initial_position: :earliest
       )
 
-    [consumer_pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer_pid] = Topology.workers(consumer_group)
 
     {consumer_pid, topic}
   end

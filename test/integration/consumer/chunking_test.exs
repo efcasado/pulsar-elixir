@@ -6,6 +6,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.System
   alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
   @client :chunking_test_client
@@ -44,16 +45,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-simple",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert byte_size(large_message) == 44
 
@@ -102,16 +103,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 8
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-interleaved",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     task1 = Task.async(fn -> Pulsar.Producer.send(producer1, p1_large_message) end)
     task2 = Task.async(fn -> Pulsar.Producer.send(producer2, p2_large_message) end)
@@ -145,16 +146,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-mixed",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _} = Pulsar.Producer.send(producer, small_message)
     {:ok, _} = Pulsar.Producer.send(producer, large_message)
@@ -215,16 +216,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-5mb",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert byte_size(very_large_message) == 6_291_456
 
@@ -269,16 +270,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           max_message_size: @chunk_size
         )
 
-      {:ok, _consumer_group} =
+      {:ok, consumer_group} =
         Pulsar.Consumer.start(
           topic,
           "chunking-#{compression}",
           @consumer_callback,
-          client: @client,
-          init_args: [notify_pid: self()]
+          client: @client
         )
 
-      [consumer] = Utils.wait_for_consumer_ready(1)
+      :ok = Pulsar.Consumer.await_ready(consumer_group)
+      [consumer] = Topology.workers(consumer_group)
 
       {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
@@ -328,16 +329,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 1024
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-compress-first",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, compressible_message)
 
@@ -366,16 +367,16 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-metadata-overhead",
         @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
+        client: @client
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, very_large_message, properties: bulky_properties)
 
@@ -406,13 +407,11 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
-      Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback,
-        client: @client,
-        init_args: [notify_pid: self()]
-      )
+    {:ok, consumer_group} =
+      Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback, client: @client)
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, message)
 
@@ -446,18 +445,18 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     alias Proto, as: Binary
     alias Pulsar.Consumer.ChunkedMessageContext
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         isolated_topic("expire"),
         "chunking-expire",
         @consumer_callback,
         client: @client,
         expire_incomplete_chunked_message_after: 100,
-        chunk_cleanup_interval: 50,
-        init_args: [notify_pid: self()]
+        chunk_cleanup_interval: 50
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     :sys.replace_state(consumer, fn state ->
       old_timestamp = :erlang.monotonic_time(:millisecond) - 200
@@ -529,17 +528,17 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-evict",
         @consumer_callback,
         client: @client,
-        max_pending_chunked_messages: 2,
-        init_args: [notify_pid: self()]
+        max_pending_chunked_messages: 2
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     :sys.replace_state(consumer, fn state ->
       now = :erlang.monotonic_time(:millisecond)
