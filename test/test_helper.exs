@@ -1,12 +1,10 @@
-Logger.configure(level: :info)
-
 Application.put_env(:junit_formatter, :report_dir, "test/reports")
 Application.put_env(:junit_formatter, :report_file, "junit.xml")
 Application.put_env(:junit_formatter, :automatic_create_dir?, true)
 
 Application.ensure_all_started(:telemetry_test)
 
-ExUnit.configure(formatters: [ExUnit.CLIFormatter, JUnitFormatter])
+ExUnit.configure(formatters: [ExUnit.CLIFormatter, JUnitFormatter], capture_log: true)
 ExUnit.start()
 
 # The CLI tag filters are already applied when this file loads, so we can skip

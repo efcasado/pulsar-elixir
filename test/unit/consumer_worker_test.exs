@@ -6,9 +6,6 @@ defmodule Pulsar.Consumer.WorkerTest do
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
-  # The default handle_invalid_message/2 logs at :warning.
-  @moduletag :capture_log
-
   defmodule Callback do
     @moduledoc false
     use Pulsar.Consumer.Callback
