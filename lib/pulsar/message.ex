@@ -17,8 +17,9 @@ defmodule Pulsar.Message do
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
     For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
 
-  - `validation_error` - `nil` for messages that arrived intact. Otherwise why the
-    frame could not be trusted, in which case `payload` holds unverified bytes. See `valid?/1`.
+  - `validation_error` - `nil` for messages that arrived intact. Otherwise why `payload` cannot
+    be treated as data: the frame could not be read, or it could and its payload did not
+    decompress. See `valid?/1`.
 
   - `raw` - The underlying protocol structs, as a map of `:command`, `:metadata`,
     `:single_metadata` and `:broker_metadata`. **Unstable**: its shape follows the wire
@@ -269,7 +270,8 @@ defmodule Pulsar.Message do
   @doc """
   Returns the number of broker messages (permits) consumed.
 
-  For non-chunked messages, this is always 1.
+  For ordinary non-chunked messages, this is 1. An invalid batched message still reports the
+  batch count when its payload failed validation after the metadata was decoded.
   For chunked messages, this is the number of chunks actually received.
 
   This is used for flow control permit accounting.
@@ -288,13 +290,26 @@ defmodule Pulsar.Message do
       iex> expired = %{chunked: true, complete: false, message_ids: [1, 2]}
       iex> Pulsar.Message.num_broker_messages(%Pulsar.Message{chunk_metadata: expired})
       2
+
+  A batch that could not be decompressed still knows how many messages it carried:
+
+      iex> raw = %{metadata: %{num_messages_in_batch: 5}}
+      iex> undecompressable = %Pulsar.Message{validation_error: :decompression_failed, raw: raw}
+      iex> Pulsar.Message.num_broker_messages(undecompressable)
+      5
   """
   @spec num_broker_messages(t()) :: pos_integer()
   def num_broker_messages(%__MODULE__{chunk_metadata: %{message_ids: ids}}) when is_list(ids) do
     length(ids)
   end
 
-  # An invalid frame's batch count was in the metadata that failed validation, and
+  # A payload that failed after its metadata was decoded keeps its batch count.
+  def num_broker_messages(%__MODULE__{validation_error: error, raw: %{metadata: %{num_messages_in_batch: count}}})
+      when error in [:decompression_failed, :uncompressed_size_corruption] and is_integer(count) and count > 0 do
+    count
+  end
+
+  # Any other invalid frame had its batch count in the metadata that failed validation, and
   # CommandMessage does not carry it, so 1 is the most that can be assumed. A
   # corrupt batch therefore under-counts what the broker charged for it: enough of
   # them and outstanding permits never reach the refill threshold, and the consumer
@@ -346,11 +361,22 @@ defmodule Pulsar.Message do
   @doc """
   Returns `true` if the message arrived intact, `false` if it did not.
 
-  An invalid message failed its CRC32C check or carried metadata that could not be
-  read, so its `metadata` is `nil` and its `payload` is unverified: the bytes the
-  framing points at, or the whole message section when even that does not hold. It
-  is delivered so the callback can record or divert it, but the payload must not be
-  treated as data. `validation_error` says what went wrong.
+  A message is invalid when its bytes could not be turned into a payload, and
+  `validation_error` says why:
+
+  - The frame itself could not be read: `:checksum_mismatch` when it failed its CRC32C check,
+    `:malformed_frame`, `:malformed_message_metadata` or `:malformed_broker_entry_metadata`
+    when its framing did not hold. Its `metadata` is `nil` and its `payload` is the bytes the
+    framing points at, or the whole message section when even that does not hold.
+  - `:decompression_failed` - the frame was intact and its metadata readable, but its payload
+    could not be turned back into the message that was sent. `metadata` is kept and `payload`
+    holds the bytes as they arrived, still compressed.
+  - `:uncompressed_size_corruption` - the decoded or reassembled payload did not match the
+    size advertised by the producer. `metadata` is kept and `payload` holds the bytes as they
+    arrived, still compressed when compression was enabled.
+
+  Any of them is delivered so the callback can record or divert it, but no such payload may be
+  treated as data. Match `validation_error` with a catch-all: more reasons may be added.
 
   Messages that fail validation are routed to `c:Pulsar.Consumer.Callback.handle_invalid_message/2`,
   so `handle_message/2` never receives one and rarely needs this check.

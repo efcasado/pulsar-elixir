@@ -17,6 +17,11 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
+  # ezstd fills this buffer up to 1000 times per call, so it is what caps how large a zstd
+  # message can be. Sizing it to what the producer declared keeps one round the common case.
+  @zstd_min_buffer_size 64 * 1024
+  @zstd_max_buffer_size 1024 * 1024
+
   @terminal_errors [
     :AuthenticationError,
     :AuthorizationError,
@@ -366,6 +371,7 @@ defmodule Pulsar.Consumer.Worker do
     {messages, skipped_ids, new_state} =
       case message_data do
         {:invalid, command, bytes, validation_error} ->
+          report_invalid_message(state, validation_error)
           {[build_invalid_message(command, bytes, validation_error)], [], state}
 
         {command, metadata, payload, broker_metadata} ->
@@ -375,9 +381,7 @@ defmodule Pulsar.Consumer.Worker do
             {state_after, msgs} = maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
             {msgs, [], state_after}
           else
-            payload = maybe_uncompress(metadata, payload)
-            unwrapped = unwrap_messages(metadata, payload)
-            {msgs, skipped_ids} = build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+            {msgs, skipped_ids} = build_messages_from_entry(command, metadata, payload, broker_metadata, state)
             {msgs, skipped_ids, state}
           end
 
@@ -893,26 +897,91 @@ defmodule Pulsar.Consumer.Worker do
   defp max_redelivery(nil), do: nil
   defp max_redelivery(policy) when is_list(policy), do: Keyword.fetch!(policy, :max_redelivery)
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload) do
-    payload
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload), do: {:ok, payload}
+
+  defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload) do
+    with {:ok, payload} <- uncompress(metadata, compressed_payload) do
+      verify_uncompressed_size(payload, metadata.uncompressed_size)
+    end
   end
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
-    :zlib.uncompress(compressed_payload)
+  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+    {:ok, :zlib.uncompress(compressed_payload)}
+  rescue
+    error in ErlangError -> {:error, error.original}
   end
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
-    {:ok, payload} = NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
-    payload
+  defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
+    NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
   end
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
-    :ezstd.decompress(compressed_payload)
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload) do
+    buffer_size = metadata.uncompressed_size |> max(@zstd_min_buffer_size) |> min(@zstd_max_buffer_size)
+
+    with context when is_reference(context) <- :ezstd.create_decompression_context(buffer_size),
+         payload when is_list(payload) <- :ezstd.decompress_streaming(context, compressed_payload) do
+      {:ok, IO.iodata_to_binary(payload)}
+    end
   end
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
-    {:ok, payload} = :snappyer.decompress(compressed_payload)
-    payload
+  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+    :snappyer.decompress(compressed_payload)
+  end
+
+  # Protobuf preserves unknown enum values as integers.
+  defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload) do
+    {:error, {:unsupported_compression, compression}}
+  end
+
+  # Chunk ids outside the range the producer announced can fill the context without chunk 0
+  # ever arriving, leaving nothing that describes the reassembled payload.
+  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx) do
+    {:error, :missing_first_chunk}
+  end
+
+  defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx)
+       when total_chunk_msg_size in [0, nil] or byte_size(payload) == total_chunk_msg_size do
+    if independently_compressed_chunks?(ctx) do
+      {:error, :unsupported_chunk_framing}
+    else
+      maybe_uncompress(metadata, payload)
+    end
+  end
+
+  defp uncompress_assembled(_metadata, payload, total_chunk_msg_size, _ctx) do
+    {:error, {:total_chunk_msg_size_mismatch, expected: total_chunk_msg_size, actual: byte_size(payload)}}
+  end
+
+  defp independently_compressed_chunks?(%ChunkedMessageContext{num_chunks_from_msg: num_chunks} = ctx)
+       when num_chunks > 1 do
+    case ChunkedMessageContext.metadata(ctx, 0) do
+      %Binary.MessageMetadata{compression: compression} when compression != :NONE ->
+        Enum.all?(0..(num_chunks - 1), &independently_compressed_chunk?(ctx, &1))
+
+      _ ->
+        false
+    end
+  end
+
+  defp independently_compressed_chunks?(_ctx), do: false
+
+  defp independently_compressed_chunk?(ctx, chunk_id) do
+    with %Binary.MessageMetadata{} = metadata <- ChunkedMessageContext.metadata(ctx, chunk_id),
+         payload when is_binary(payload) <- Map.get(ctx.chunks, chunk_id),
+         {:ok, _uncompressed} <- maybe_uncompress(metadata, payload) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  # A payload the codec accepted is only whole if it is the size the producer recorded
+  # before compressing.
+  defp verify_uncompressed_size(payload, 0), do: {:ok, payload}
+  defp verify_uncompressed_size(payload, size) when byte_size(payload) == size, do: {:ok, payload}
+
+  defp verify_uncompressed_size(payload, size) do
+    {:error, {:uncompressed_size_mismatch, expected: size, actual: byte_size(payload)}}
   end
 
   # A partly acknowledged entry is redelivered whole, carrying a set of what is still owed, and a
@@ -971,30 +1040,93 @@ defmodule Pulsar.Consumer.Worker do
   defp compacted_out?(%Binary.SingleMessageMetadata{compacted_out: true}), do: true
   defp compacted_out?(_single_metadata), do: false
 
-  # Pulsar's validation errors all describe damaged message contents, with nothing
-  # for a frame that was malformed around them, so every reason is reported as the
-  # nearest available. Pulsar.Message.validation_error carries the exact one.
-  defp validation_error(message) do
-    if Pulsar.Message.valid?(message), do: nil, else: :ChecksumMismatch
-  end
+  defp validation_error(%Pulsar.Message{validation_error: nil}), do: nil
+  defp validation_error(%Pulsar.Message{validation_error: :decompression_failed}), do: :DecompressionError
+  defp validation_error(%Pulsar.Message{validation_error: :uncompressed_size_corruption}), do: :UncompressedSizeCorruption
+  defp validation_error(%Pulsar.Message{}), do: :ChecksumMismatch
 
   # A chunk's uuid lives in the metadata that failed validation, so a corrupt chunk
   # cannot be tied back to its siblings; those expire as an incomplete message.
-  defp build_invalid_message(command, bytes, validation_error) do
+  defp build_invalid_message(command, bytes, validation_error, metadata \\ nil, broker_metadata \\ nil) do
     %Pulsar.Message{
       payload: bytes,
       message_id: command.message_id,
       chunk_metadata: nil,
       validation_error: validation_error,
-      raw: %{command: command, metadata: nil, single_metadata: nil, broker_metadata: nil}
+      raw: %{command: command, metadata: metadata, single_metadata: nil, broker_metadata: broker_metadata}
     }
   end
 
-  defp build_message_from_chunk(chunk_metadata, payload) do
+  defp build_messages_from_entry(command, metadata, payload, broker_metadata, state) do
+    case maybe_uncompress(metadata, payload) do
+      {:ok, uncompressed} ->
+        unwrapped = unwrap_messages(metadata, uncompressed)
+        build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+
+      {:error, reason} ->
+        validation_error = report_unreadable_payload(state, reason)
+
+        {[
+           build_invalid_message(
+             command,
+             payload,
+             validation_error,
+             metadata,
+             broker_metadata
+           )
+         ], []}
+    end
+  end
+
+  defp report_unreadable_payload(state, reason) do
+    {validation_error, decompression_reason} =
+      case reason do
+        {:uncompressed_size_mismatch, _} ->
+          {:uncompressed_size_corruption, :uncompressed_size_mismatch}
+
+        {:total_chunk_msg_size_mismatch, _} ->
+          {:uncompressed_size_corruption, :total_chunk_msg_size_mismatch}
+
+        :missing_first_chunk ->
+          {:uncompressed_size_corruption, :missing_first_chunk}
+
+        {:unsupported_compression, _} ->
+          {:decompression_failed, :unsupported_compression}
+
+        :unsupported_chunk_framing ->
+          {:decompression_failed, :unsupported_chunk_framing}
+
+        _ ->
+          {:decompression_failed, :decompression_error}
+      end
+
+    :telemetry.execute(
+      [:pulsar, :consumer, :message, :invalid],
+      %{count: 1},
+      state
+      |> consumer_metadata()
+      |> Map.merge(%{reason: validation_error, decompression_reason: decompression_reason, detail: reason})
+    )
+
+    validation_error
+  end
+
+  defp report_invalid_message(state, reason) do
+    :telemetry.execute(
+      [:pulsar, :consumer, :message, :invalid],
+      %{count: 1},
+      state
+      |> consumer_metadata()
+      |> Map.merge(%{reason: reason, decompression_reason: nil, detail: nil})
+    )
+  end
+
+  defp build_message_from_chunk(chunk_metadata, payload, validation_error \\ nil) do
     %Pulsar.Message{
       payload: payload,
       message_id: Map.get(chunk_metadata, :message_ids, []),
       chunk_metadata: chunk_metadata,
+      validation_error: validation_error,
       raw: %{
         command: Map.get(chunk_metadata, :commands, []),
         metadata: Map.get(chunk_metadata, :metadatas, []),
@@ -1130,10 +1262,18 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp complete_chunked_message(state, uuid, ctx, num_chunks) do
-    # Every chunk repeats the metadata of the message it came from, so any of them says how
-    # the reassembled payload was compressed.
+    metadata = ChunkedMessageContext.metadata(ctx, 0)
     assembled_payload = ChunkedMessageContext.assemble_payload(ctx)
-    complete_payload = maybe_uncompress(hd(ctx.metadatas), assembled_payload)
+
+    {complete_payload, validation_error} =
+      case uncompress_assembled(metadata, assembled_payload, ctx.total_chunk_msg_size, ctx) do
+        {:ok, payload} ->
+          {payload, nil}
+
+        {:error, reason} ->
+          validation_error = report_unreadable_payload(state, reason)
+          {assembled_payload, validation_error}
+      end
 
     :telemetry.execute(
       [:pulsar, :consumer, :chunk, :complete],
@@ -1142,7 +1282,7 @@ defmodule Pulsar.Consumer.Worker do
         total_size: byte_size(complete_payload),
         age_ms: ChunkedMessageContext.age_ms(ctx)
       },
-      Map.put(consumer_metadata(state), :uuid, uuid)
+      Map.merge(consumer_metadata(state), %{uuid: uuid, validation_error: validation_error})
     )
 
     final_state = %{state | chunked_message_contexts: Map.delete(state.chunked_message_contexts, uuid)}
@@ -1158,7 +1298,7 @@ defmodule Pulsar.Consumer.Worker do
       broker_metadatas: ctx.broker_metadatas
     }
 
-    message = build_message_from_chunk(chunk_metadata, complete_payload)
+    message = build_message_from_chunk(chunk_metadata, complete_payload, validation_error)
     {final_state, [message]}
   end
 

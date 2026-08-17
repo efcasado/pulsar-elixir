@@ -748,12 +748,6 @@ defmodule Pulsar.Broker do
       {consumer_pid, _monitor_ref} ->
         Logger.warning("Message for consumer #{consumer_id} failed validation: #{reason}")
 
-        :telemetry.execute(
-          [:pulsar, :consumer, :message, :invalid],
-          %{count: 1},
-          %{consumer_id: consumer_id, reason: reason}
-        )
-
         send(consumer_pid, {:broker_message, {:invalid, command, bytes, reason}})
         :keep_state_and_data
     end

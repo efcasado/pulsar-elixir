@@ -15,6 +15,15 @@ defmodule Pulsar.MessageTest do
     assert Message.num_broker_messages(%Message{validation_error: :checksum_mismatch}) == 1
   end
 
+  test "num_broker_messages/1 preserves a decoded batch count for size corruption" do
+    message = %Message{
+      validation_error: :uncompressed_size_corruption,
+      raw: %{metadata: %{num_messages_in_batch: 3}}
+    }
+
+    assert Message.num_broker_messages(message) == 3
+  end
+
   # The point of the accessors: the same question has one answer whether the broker delivered
   # the message on its own, inside a batch, or split across chunks.
   describe "accessors across delivery shapes" do
