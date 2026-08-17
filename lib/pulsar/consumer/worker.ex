@@ -17,7 +17,10 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
-  @zstd_decompression_buffer_size 64 * 1024
+  # ezstd fills this buffer up to 1000 times per call, so it is what caps how large a zstd
+  # message can be. Sizing it to what the producer declared keeps one round the common case.
+  @zstd_min_buffer_size 64 * 1024
+  @zstd_max_buffer_size 1024 * 1024
 
   @terminal_errors [
     :AuthenticationError,
@@ -912,18 +915,12 @@ defmodule Pulsar.Consumer.Worker do
     NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
-    case :ezstd.create_decompression_context(@zstd_decompression_buffer_size) do
-      context when is_reference(context) ->
-        payload = :ezstd.decompress_streaming(context, compressed_payload)
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload) do
+    buffer_size = metadata.uncompressed_size |> max(@zstd_min_buffer_size) |> min(@zstd_max_buffer_size)
 
-        case payload do
-          payload when is_list(payload) -> {:ok, IO.iodata_to_binary(payload)}
-          {:error, _reason} = error -> error
-        end
-
-      {:error, _reason} = error ->
-        error
+    with context when is_reference(context) <- :ezstd.create_decompression_context(buffer_size),
+         payload when is_list(payload) <- :ezstd.decompress_streaming(context, compressed_payload) do
+      {:ok, IO.iodata_to_binary(payload)}
     end
   end
 
@@ -934,6 +931,12 @@ defmodule Pulsar.Consumer.Worker do
   # Protobuf preserves unknown enum values as integers.
   defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload) do
     {:error, {:unsupported_compression, compression}}
+  end
+
+  # Chunk ids outside the range the producer announced can fill the context without chunk 0
+  # ever arriving, leaving nothing that describes the reassembled payload.
+  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx) do
+    {:error, :missing_first_chunk}
   end
 
   defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx)
@@ -1084,6 +1087,9 @@ defmodule Pulsar.Consumer.Worker do
         {:total_chunk_msg_size_mismatch, _} ->
           {:uncompressed_size_corruption, :total_chunk_msg_size_mismatch}
 
+        :missing_first_chunk ->
+          {:uncompressed_size_corruption, :missing_first_chunk}
+
         {:unsupported_compression, _} ->
           {:decompression_failed, :unsupported_compression}
 
@@ -1099,8 +1105,7 @@ defmodule Pulsar.Consumer.Worker do
       %{count: 1},
       state
       |> consumer_metadata()
-      |> Map.put(:reason, validation_error)
-      |> Map.put(:decompression_reason, decompression_reason)
+      |> Map.merge(%{reason: validation_error, decompression_reason: decompression_reason, detail: reason})
     )
 
     validation_error
@@ -1112,8 +1117,7 @@ defmodule Pulsar.Consumer.Worker do
       %{count: 1},
       state
       |> consumer_metadata()
-      |> Map.put(:reason, reason)
-      |> Map.put(:decompression_reason, nil)
+      |> Map.merge(%{reason: reason, decompression_reason: nil, detail: nil})
     )
   end
 

@@ -24,7 +24,7 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
           chunks: %{non_neg_integer() => binary()},
           chunk_message_ids: %{non_neg_integer() => term()},
           num_chunks_from_msg: non_neg_integer(),
-          total_chunk_msg_size: non_neg_integer(),
+          total_chunk_msg_size: non_neg_integer() | nil,
           received_chunks: non_neg_integer(),
           first_chunk_message_id: term(),
           last_chunk_message_id: term(),

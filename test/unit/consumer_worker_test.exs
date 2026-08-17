@@ -6,7 +6,7 @@ defmodule Pulsar.Consumer.WorkerTest do
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
-  # An unreadable payload is reported at :warning, which every test here provokes on purpose.
+  # The default handle_invalid_message/2 logs at :warning.
   @moduletag :capture_log
 
   defmodule Callback do
@@ -230,6 +230,16 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert metadata.topic == "persistent://public/default/orders-partition-2"
     end
 
+    test "decodes a zstd payload larger than one decompression round" do
+      payload = :binary.copy(<<"abcdefgh">>, 262_144)
+      delivery = delivery(:ZSTD, :ezstd.compress(payload), uncompressed_size: byte_size(payload))
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+
+      assert_received {:handled, message}
+      assert message.payload == payload
+    end
+
     test "decodes an empty zstd payload" do
       delivery = delivery(:ZSTD, :ezstd.compress(<<>>), uncompressed_size: 0)
 
@@ -329,6 +339,18 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_received {:handled, message}
       assert message.payload == @chunked
     end
+  end
+
+  test "a chunked message counted complete without its first chunk is invalid, not a crash" do
+    state = struct(reporting_state(), max_pending_chunked_messages: 10)
+
+    {:noreply, state} = Worker.handle_info(chunk_delivery(1, :zlib.compress(<<"second">>), []), state)
+    {:noreply, _state} = Worker.handle_info(chunk_delivery(2, :zlib.compress(<<"third">>), []), state)
+
+    assert_received {:invalid, invalid}
+    refute_received {:handled, _message}
+
+    assert invalid.validation_error == :uncompressed_size_corruption
   end
 
   defp deliver_chunks(chunks) do

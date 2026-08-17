@@ -183,7 +183,7 @@ Flow control permits are only decremented when messages are assembled and delive
 The `Pulsar.Message.num_broker_messages/1` helper returns the correct permit count:
 
 ```elixir
-# Non-chunked message
+# Non-chunked message (a batch that failed validation reports the batch count instead)
 Pulsar.Message.num_broker_messages(message) # => 1
 
 # Complete chunked message with 3 chunks

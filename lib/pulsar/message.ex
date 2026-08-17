@@ -304,19 +304,8 @@ defmodule Pulsar.Message do
   end
 
   # A payload that failed after its metadata was decoded keeps its batch count.
-  def num_broker_messages(%__MODULE__{
-        validation_error: :decompression_failed,
-        raw: %{metadata: %{num_messages_in_batch: count}}
-      })
-      when is_integer(count) and count > 0 do
-    count
-  end
-
-  def num_broker_messages(%__MODULE__{
-        validation_error: :uncompressed_size_corruption,
-        raw: %{metadata: %{num_messages_in_batch: count}}
-      })
-      when is_integer(count) and count > 0 do
+  def num_broker_messages(%__MODULE__{validation_error: error, raw: %{metadata: %{num_messages_in_batch: count}}})
+      when error in [:decompression_failed, :uncompressed_size_corruption] and is_integer(count) and count > 0 do
     count
   end
 

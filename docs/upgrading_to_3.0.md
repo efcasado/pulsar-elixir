@@ -271,11 +271,20 @@ often for one of these reasons:
 
 - `:checksum_mismatch` — the frame failed its CRC32C check. 2.x did not verify checksums at all,
   so such a message was parsed as though it were intact.
+- `:decompression_failed` — the frame arrived intact and its metadata read, but the codec could
+  not turn the payload back into the message that was sent. 2.x raised here, taking the worker
+  down under every codec but `:zstd`, which handed the callback an error tuple in place of the
+  payload.
+- `:uncompressed_size_corruption` — the payload decoded, or the chunks reassembled, to a
+  different size than the producer recorded. 2.x did not check.
 
-The default implementation logs and acknowledges, so invalid messages are not redelivered forever;
-override it to record or divert them instead, and match `:validation_error` with a catch-all —
-malformed framing is reported under its own reasons. Each of them also counts against the
-`[:pulsar, :consumer, :message, :invalid]` telemetry event, whose `reason` is the same atom.
+Either of the last two keeps `metadata`, and `payload` holds the bytes as they arrived, still
+compressed. The default implementation logs and acknowledges, so invalid messages are not
+redelivered forever; override it to record or divert them instead, and match `:validation_error`
+with a catch-all — malformed framing is reported under its own reasons. Each of them also counts
+against the `[:pulsar, :consumer, :message, :invalid]` telemetry event, whose `reason` is the same
+atom, whose `decompression_reason` narrows the two above, and whose `detail` carries what the
+codec itself reported.
 
 A message that arrived intact but incomplete is not invalid: an expired or evicted chunked message
 still reaches `handle_message/2`. Check `Pulsar.Message.complete?/1` there before reading it.
