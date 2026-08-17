@@ -65,14 +65,8 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
         subscription_options()
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_pid) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> Process.alive?(consumer) end)
-
-    # Wait for consumer to be ready to receive messages
-    Utils.wait_for(fn ->
-      state = :sys.get_state(consumer)
-      state.flow_outstanding_permits > 0
-    end)
+    :ok = Pulsar.Consumer.await_ready(consumer_pid)
+    [consumer] = Topology.workers(consumer_pid)
 
     {:ok, _} = Pulsar.Producer.send("none", "Hello, world!", client: @client)
     {:ok, _} = Pulsar.Producer.send("lz4", "Hello, world!", client: @client)

@@ -56,7 +56,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         dead_letter_policy: [max_redelivery: 1, topic: dlq_topic]
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_group} =
       Pulsar.Consumer.start(dlq_topic, "dlq-consumer", DummyConsumer,
@@ -64,7 +65,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] = Utils.wait_for(fn -> Topology.workers(dlq_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(dlq_group)
+    [dlq_consumer] = Topology.workers(dlq_group)
 
     command = %Proto.CommandMessage{
       consumer_id: 1,
@@ -107,8 +109,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -120,8 +122,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] =
-      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(dlq_consumer_group)
+    [dlq_consumer] = Topology.workers(dlq_consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)
@@ -161,8 +163,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         redelivery_interval: 100
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(failing_consumer) >= length(@messages) * 2
@@ -195,8 +197,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -208,8 +210,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         initial_position: :earliest
       )
 
-    [dlq_consumer] =
-      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(dlq_consumer_group)
+    [dlq_consumer] = Topology.workers(dlq_consumer_group)
 
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(dlq_consumer) == length(@messages)
@@ -245,7 +247,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         until: &is_pid/1
       )
 
-    [producer] = Utils.wait_for(fn -> Topology.workers(dead_letter_root) end, until: &match?([_], &1))
+    :ok = Pulsar.Producer.await_ready(dead_letter_root)
+    [producer] = Topology.workers(dead_letter_root)
 
     producer_state = :sys.get_state(producer)
 
@@ -273,7 +276,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         dead_letter_policy: [max_redelivery: 1]
       )
 
-    [_consumer] = Utils.wait_for(fn -> Topology.workers(group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group)
+    [_consumer] = Topology.workers(group)
 
     {:ok, producer} = Pulsar.Producer.start(topic, client: @client)
     :ok = Pulsar.Producer.await_ready(producer, client: @client)
@@ -323,7 +327,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         dead_letter_policy: [max_redelivery: 1]
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group)
+    [consumer] = Topology.workers(group)
 
     # A root with no dead letter child, so the producer cannot be resolved and diverting fails
     # the way it does against a dead letter topic that is unavailable. Pointing the worker at

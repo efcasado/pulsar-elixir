@@ -38,15 +38,9 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     assert Pulsar.Client.producers(@client) == [producer_pid]
 
-    all_producers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: fn producers ->
-          length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-        end,
-        description: "partitioned producers to become ready"
-      )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
-    assert Enum.count(all_producers) == 3
+    assert Enum.count(Topology.workers(producer_pid)) == 3
 
     :ok = Pulsar.Producer.stop(producer_pid)
   end
@@ -62,12 +56,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn producers ->
-        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-      end,
-      description: "partitioned producers to become ready"
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -126,12 +115,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn producers ->
-        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-      end,
-      description: "partitioned producers to become ready"
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -205,11 +189,5 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     assert Enum.all?(initial_workers, &(&1 in current_workers))
 
     :ok = Pulsar.Producer.stop(producer_pid)
-  end
-
-  defp producer_ready?(producer) do
-    :sys.get_state(producer).ready
-  catch
-    :exit, _reason -> false
   end
 end

@@ -26,7 +26,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       messages = Enum.map(1..12, &"msg-#{&1}")
@@ -47,7 +47,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("per-entry-metadata", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       event_time = DateTime.utc_now()
@@ -92,7 +92,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
           batch_builder: :key_based
         )
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       keys = ["tenant-1", "tenant-2", "tenant-1", "tenant-2"]
@@ -124,7 +124,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("entry-key", batch_size: 2, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       sends =
@@ -150,7 +150,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("sequence-ids", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
 
       messages = Enum.map(1..9, &"seq-#{&1}")
       send_messages(producer_pid, messages)
@@ -173,7 +173,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       assert {:ok, _} = Pulsar.Producer.send(producer_pid, "single-msg")
@@ -190,7 +190,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Wait for a few timer cycles without sending anything
       Process.sleep(200)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       state = :sys.get_state(producer)
       assert state.ready == true
       assert state.batch == []
@@ -218,7 +218,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       deliver_at = DateTime.shift(DateTime.utc_now(), second: 1)
       deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
 
       # Neither fills the batch, so both wait for a flush that nothing has scheduled yet.
       pending =
@@ -267,12 +267,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
         [client: @client, name: "#{suffix}-producer", batch_enabled: true] ++ opts
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {consumer_pid, producer_pid}
   end

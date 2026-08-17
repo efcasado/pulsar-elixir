@@ -47,14 +47,9 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
-    # Wait for both producers to register
-    Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
-    Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
-
-    # Both should send successfully
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from producer 1")
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "Message from producer 2")
 
@@ -68,9 +63,8 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-
-    Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Exclusive message", client: @client)
 
@@ -115,8 +109,7 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "New exclusive owner", client: @client)
 
@@ -134,8 +127,8 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
 
     # Start second producer with :wait_for_exclusive. It should not be ready
     {:ok, group_pid_2} =
@@ -145,6 +138,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
+    # await_ready/2 would wait out its whole timeout here: this producer is queued behind the
+    # exclusive one and stays unready until that one goes.
     [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
@@ -165,7 +160,7 @@ defmodule Pulsar.Integration.AccessModesTest do
     Utils.wait_for(fn -> not Process.alive?(producer_1) end)
 
     # Second producer should now get exclusive access
-    Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
     # Second producer should now be able to send messages
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "Message from second producer", client: @client)
@@ -182,8 +177,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
 
     assert :sys.get_state(producer_1).topic_epoch == 0
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from original producer", client: @client)
@@ -196,8 +191,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
+    [producer_2] = Topology.workers(group_pid_2)
 
     producer_2_state = :sys.get_state(producer_2)
     assert producer_2_state.topic_epoch == 1

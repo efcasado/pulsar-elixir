@@ -53,11 +53,8 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     :ok = System.create_topic(topic, 3)
     consumer = start_consumer(topic, "partitioned-sub", create_topic?: false)
 
-    workers =
-      Utils.wait_for(fn -> Pulsar.Topology.workers(consumer) end,
-        until: &(length(&1) == 3),
-        description: "every partition worker to start"
-      )
+    workers = Pulsar.Topology.workers(consumer)
+    assert length(workers) == 3
 
     assert Pulsar.Consumer.stop(consumer, client: @client) == :ok
 

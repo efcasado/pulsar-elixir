@@ -27,12 +27,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
         name: "message-options-producer"
       )
 
-    Utils.wait_for(fn -> Topology.workers(group_pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(group_pid)
 
     {:ok, _consumer_group} =
       Pulsar.Consumer.start(@topic, "message-options-sub", @consumer_callback,

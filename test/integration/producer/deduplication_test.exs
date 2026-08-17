@@ -138,12 +138,7 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
   defp start_producer(topic, name, opts \\ []) do
     {:ok, producer} = Pulsar.Producer.start(topic, [client: @client, name: name] ++ opts)
 
-    Utils.wait_for(fn -> Topology.workers(producer) end,
-      until: fn
-        [worker] -> :sys.get_state(worker).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(producer)
 
     producer
   end

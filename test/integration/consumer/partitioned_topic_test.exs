@@ -50,11 +50,9 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert Pulsar.Client.consumers(@client) == [partitioned_consumer_pid]
 
-    consumers =
-      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
-        until: &(length(&1) == 6),
-        description: "partitioned consumer workers to start"
-      )
+    assert :ok = Pulsar.Consumer.await_ready(partitioned_consumer_pid)
+    consumers = Topology.workers(partitioned_consumer_pid)
+    assert length(consumers) == 6
 
     Utils.wait_for(fn ->
       consumers
@@ -114,13 +112,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     assert :ok = Pulsar.Consumer.await_ready(partitioned)
     assert Pulsar.Consumer.topic(partitioned) == @topic
 
-    workers =
-      Utils.wait_for(fn -> Topology.workers(partitioned) end,
-        until: &(length(&1) == 3),
-        description: "partitioned consumer workers to start"
-      )
-
-    assert Pulsar.Consumer.topic(partitioned) == @topic
+    workers = Topology.workers(partitioned)
     assert length(workers) == 3
     assert Enum.all?(workers, &(Pulsar.Consumer.topic(&1) =~ "#{@topic}-partition-"))
 
@@ -161,13 +153,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
 
-    workers =
-      Utils.wait_for(fn -> Topology.workers(consumer) end,
-        until: &(length(&1) == 3),
-        description: "partitioned consumer workers to start"
-      )
-
-    contexts = Enum.map(workers, &@consumer_callback.context/1)
+    contexts = consumer |> Topology.workers() |> Enum.map(&@consumer_callback.context/1)
 
     assert contexts |> Enum.map(& &1.partition) |> Enum.sort() == [0, 1, 2]
 
@@ -227,13 +213,8 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
 
-    workers =
-      Utils.wait_for(fn -> Topology.workers(consumer) end,
-        until: fn workers ->
-          length(workers) == 3 and Enum.all?(workers, &(not is_nil(:sys.get_state(&1).consumer_id)))
-        end,
-        description: "partition consumers to subscribe"
-      )
+    workers = Topology.workers(consumer)
+    assert length(workers) == 3
 
     [{partition, _group} | _rest] = Topology.groups(consumer)
     :ok = Supervisor.terminate_child(consumer, {:partition, partition})

@@ -34,7 +34,8 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
         name: name
       )
 
-    [consumer_pid] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group_pid)
+    [consumer_pid] = Topology.workers(group_pid)
 
     on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
@@ -77,7 +78,8 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     {:ok, group_pid} =
       Pulsar.Consumer.start(@topic, name, PlainConsumer, client: @client, name: name, init_args: self())
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group_pid)
+    [consumer] = Topology.workers(group_pid)
     on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 9, entryId: 9}}

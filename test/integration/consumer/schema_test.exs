@@ -81,12 +81,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
   defp start_producer(topic, opts) do
     {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
 
-    Utils.wait_for(fn -> Topology.workers(pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(pid)
 
     pid
   end
