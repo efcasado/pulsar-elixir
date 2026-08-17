@@ -70,8 +70,8 @@ defmodule Pulsar.Integration.Producer.CommonTest do
       state.producer_name != nil
     end)
 
-    stats = Utils.collect_producer_opened_stats(producer_names: [producer_group_name])
-    assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
+    assert %{success_count: 1, failure_count: 0, total_count: 1} =
+             Utils.collect_stats([:pulsar, :producer, :opened, :stop], producer_names: [producer_group_name])
 
     assert {:ok, message_id_data} = Pulsar.Producer.send(producer_group_name, "Hello, Pulsar!", client: @client)
 
@@ -80,14 +80,14 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     assert {:ok, _message_id_data2} = Pulsar.Producer.send(group_pid, "Another message with pid!")
 
-    publish_stats = Utils.collect_message_published_stats(producer_names: [producer_group_name])
-    assert %{total_count: 2} = publish_stats
+    assert [_first, _second] =
+             Utils.collect_events([:pulsar, :producer, :message, :published], producer_names: [producer_group_name])
 
     assert :ok = Pulsar.Producer.stop(group_pid)
     Utils.wait_for(fn -> not Process.alive?(producer) end)
 
-    close_stats = Utils.collect_producer_closed_stats(producer_names: [producer_group_name])
-    assert %{success_count: 1, failure_count: 0, total_count: 1} = close_stats
+    assert %{success_count: 1, failure_count: 0, total_count: 1} =
+             Utils.collect_stats([:pulsar, :producer, :closed, :stop], producer_names: [producer_group_name])
   end
 
   test "send multiple messages asynchronously" do

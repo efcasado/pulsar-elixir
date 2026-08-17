@@ -44,8 +44,7 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
-  Collects flow control telemetry events and returns aggregated statistics.
-  Returns a map with statistics grouped by consumer_id.
+  What each consumer's flow control has cost so far, keyed by consumer id.
   """
   def collect_flow_stats do
     [:pulsar, :consumer, :flow_control, :stop]
@@ -54,69 +53,29 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
-  Collects lookup telemetry events and returns aggregated statistics.
-  Returns a map with total, success, and failure counts.
-  Filters by client (defaults to :default).
+  Counts how many of `event_name`'s events reported success and how many reported failure.
+
+  Takes the same filters as `collect_events/2`.
   """
-  def collect_lookup_stats(opts \\ []) do
-    client = Keyword.get(opts, :client, :default)
-
-    [:pulsar, :topology, :resolver, :lookup_topic, :stop]
-    |> collect_events()
-    |> filter_by_client(client)
-    |> aggregate_success_stats()
-  end
-
-  @doc """
-  Collects producer opened telemetry events and returns aggregated statistics.
-  Returns a map with total, success, and failure counts.
-
-  ## Options
-    - `:producer_names` - list of producer names to filter by (optional)
-  """
-  def collect_producer_opened_stats(opts \\ []) do
-    [:pulsar, :producer, :opened, :stop]
+  def collect_stats(event_name, opts \\ []) do
+    event_name
     |> collect_events(opts)
     |> aggregate_success_stats()
   end
 
   @doc """
-  Collects producer closed telemetry events and returns aggregated statistics.
-  Returns a map with total, success, and failure counts.
+  Every event named `event_name` collected so far, oldest first, each one its measurements
+  merged with its metadata.
 
   ## Options
-    - `:producer_names` - list of producer names to filter by (optional)
-  """
-  def collect_producer_closed_stats(opts \\ []) do
-    [:pulsar, :producer, :closed, :stop]
-    |> collect_events(opts)
-    |> aggregate_success_stats()
-  end
-
-  @doc """
-  Collects message published telemetry events and returns aggregated statistics.
-  Returns a map with total count.
-
-  ## Options
-    - `:producer_names` - list of producer names to filter by (optional)
-  """
-  def collect_message_published_stats(opts \\ []) do
-    [:pulsar, :producer, :message, :published]
-    |> collect_events(opts)
-    |> then(fn events -> %{total_count: length(events)} end)
-  end
-
-  @doc """
-  Collects all raw telemetry events for the given event name.
-  Returns a list of events with merged measurements and metadata.
-
-  ## Options
-    - `:producer_names` - list of producer names to filter by (optional)
+    - `:producer_names` - keep only the events a producer in this list emitted
+    - `:client` - keep only the events this client emitted
   """
   def collect_events(event_name, opts \\ []) do
     event_name
     |> do_collect_events([])
-    |> filter_by_producer_names(opts)
+    |> filter_by(:producer_name, Keyword.get(opts, :producer_names), &in_group?/2)
+    |> filter_by(:client, Keyword.get(opts, :client), &==/2)
   end
 
   defp aggregate_flow_stats(events) do
@@ -133,20 +92,10 @@ defmodule Pulsar.Test.Support.Utils do
     end)
   end
 
-  defp filter_by_client(events, client) do
-    Enum.filter(events, fn event ->
-      Map.get(event, :client) == client
-    end)
-  end
+  defp filter_by(events, _key, nil, _match?), do: events
 
-  defp filter_by_producer_names(events, opts) do
-    case Keyword.get(opts, :producer_names) do
-      nil ->
-        events
-
-      names when is_list(names) ->
-        Enum.filter(events, &(&1 |> Map.get(:producer_name) |> in_group?(names)))
-    end
+  defp filter_by(events, key, expected, match?) do
+    Enum.filter(events, &match?.(Map.get(&1, key), expected))
   end
 
   # A group's workers are named after it with an index suffix, so filtering by the group's
@@ -181,16 +130,12 @@ defmodule Pulsar.Test.Support.Utils do
   end
 
   @doc """
-  Waits for the specified number of consumers to be ready.
+  The pids of `count` consumers, in the order they announced themselves ready.
 
-  Consumers are considered ready when they send a `{:consumer_ready, pid}` message.
-  This is typically used with the DummyConsumer callback which notifies when initialized.
-
-  Returns a list of consumer PIDs in the order they became ready.
+  A consumer announces itself by sending `{:consumer_ready, pid}`, which
+  `Pulsar.Test.Support.DummyConsumer` does when started with `notify_pid: self()`.
   """
   def wait_for_consumer_ready(count, timeout \\ 5000) do
-    import ExUnit.Assertions, only: [flunk: 1]
-
     Enum.map(1..count, fn _ ->
       receive do
         {:consumer_ready, pid} -> pid

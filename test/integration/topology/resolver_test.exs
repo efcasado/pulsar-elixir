@@ -34,7 +34,7 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
     assert {:ok, broker_pid} = Resolver.lookup_topic(@topic, client: @client)
     assert Process.alive?(broker_pid)
 
-    stats = Utils.collect_lookup_stats(client: @client)
+    stats = Utils.collect_stats([:pulsar, :topology, :resolver, :lookup_topic, :stop], client: @client)
     assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
   end
 
@@ -46,7 +46,7 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
     result2 = Resolver.lookup_topic("persistent://public/fake/fake", client: @client)
     assert {:error, _reason} = result2
 
-    stats = Utils.collect_lookup_stats(client: @client)
+    stats = Utils.collect_stats([:pulsar, :topology, :resolver, :lookup_topic, :stop], client: @client)
     assert %{success_count: 0, failure_count: 2, total_count: 2} = stats
   end
 end
