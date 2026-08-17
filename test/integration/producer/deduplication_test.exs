@@ -106,8 +106,13 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
       assert [ok: :deduplicated, ok: :deduplicated, ok: :deduplicated] =
                send_concurrently(producer, ["d", "e", "f"])
 
-      assert [%{count: 3}] =
-               Utils.collect_events([:pulsar, :producer, :message, :deduplicated], producer_names: [producer_name])
+      assert_receive {:telemetry_event,
+                      %{
+                        event: [:pulsar, :producer, :message, :deduplicated],
+                        measurements: %{count: 3},
+                        metadata: %{producer_name: ^producer_name}
+                      }},
+                     5_000
     end
   end
 
