@@ -1,8 +1,8 @@
 # Upgrading to 3.0
 
 3.0 makes `Pulsar.Client`, `Pulsar.Consumer` and `Pulsar.Producer` the API, moves configuration
-out of `config :pulsar` and into the supervision tree, and fixes two things that were on the
-wire: partition key routing and chunk framing.
+out of `config :pulsar` and into the supervision tree, and changes partition key routing and
+compressed chunk framing.
 
 Most of it is caught by the compiler or at boot. Four changes are not, and they are the ones to
 read first:
@@ -12,8 +12,8 @@ read first:
 - [`init/1` became `init/2`](#callback-initialization), and a stale `init/1` is never called.
 - [Partition keys hash differently](#partition-key-routing), so a key moves to another
   partition of a partitioned topic.
-- [Chunked messages are framed differently](#chunking) when compression is on, and a
-  mixed-version deployment cannot read them.
+- [Compressed chunk framing changed](#chunking) to match other Pulsar SDKs; drain messages
+  produced by 2.x before upgrading when both chunking and compression are enabled.
 
 Bump the dependency:
 
@@ -266,10 +266,19 @@ matching on it.
 ### Invalid messages
 
 `:validation_error` and `c:Pulsar.Consumer.Callback.handle_invalid_message/2` are new. A message
-whose frame failed its CRC32C check is delivered there instead of `handle_message/2`, with
-`payload` holding unverified bytes. The default implementation logs a warning and acknowledges
-it, so it is not redelivered; override it to record or divert such messages. 2.x had no checksum
-verification, so this is new behaviour rather than a rename.
+whose bytes could not be turned into a payload goes there instead of `handle_message/2`, most
+often for one of these reasons:
+
+- `:checksum_mismatch` — the frame failed its CRC32C check. 2.x did not verify checksums at all,
+  so such a message was parsed as though it were intact.
+
+The default implementation logs and acknowledges, so invalid messages are not redelivered forever;
+override it to record or divert them instead, and match `:validation_error` with a catch-all —
+malformed framing is reported under its own reasons. Each of them also counts against the
+`[:pulsar, :consumer, :message, :invalid]` telemetry event, whose `reason` is the same atom.
+
+A message that arrived intact but incomplete is not invalid: an expired or evicted chunked message
+still reaches `handle_message/2`. Check `Pulsar.Message.complete?/1` there before reading it.
 
 ## Callback initialization
 
@@ -383,38 +392,17 @@ One related tightening: `:partition_key` must be a binary now, where 2.x accepte
 
 ## Chunking
 
-2.x compressed each chunk on its own. Every other Pulsar client compresses the whole message and
-then splits the compressed bytes, and 3.0 now does the same — which is what makes a chunked
-message readable by a Java consumer, and what makes 2.x and 3.0 unable to read each other's.
-
-The incompatibility is limited to producers with **both** `:chunking_enabled` and
-`:compression` set. Uncompressed chunked messages are framed the same way in both versions and
-cross freely.
-
-How it fails depends on the codec. Under `:lz4`, `:snappy` and `:zlib` the consumer assembles the
-chunks, hands them to the decompressor, and the decompressor rejects bytes that are not one
-compressed stream — which takes the worker down, and the unacknowledged message is redelivered
-into the same crash. Under `:zstd` it is quiet: decompression answers an error tuple instead of
-raising, and that tuple reaches your callback in place of `payload`. Compressed chunked messages
-already on a topic when you upgrade behave the same way.
-
-So if you use compression together with chunking, drain the topic before upgrading, and upgrade
-producers and consumers together.
-
-Two smaller changes come with it. A payload is now compressed *before* it is measured against
-`:max_message_size`, so a large payload that compresses under the limit is sent whole and never
-chunked at all. And the chunk size is capped so a chunk plus its metadata stays inside the
-broker's advertised frame limit, which makes chunks slightly smaller than `:max_message_size`;
-a producer whose `:properties` leave no room for a payload now gets `{:error, :metadata_too_large}`
-rather than a frame the broker rejects.
+Uncompressed chunked messages remain compatible across versions. If both
+`:chunking_enabled` and `:compression` are enabled, drain messages produced by 2.x before
+upgrading and move producers and consumers to 3.0 together; 3.0 does not read the old compressed
+chunk framing.
 
 Combining `:batch_enabled` with `:chunking_enabled` raises now. 2.x accepted both and batched,
 silently ignoring `:chunking_enabled`, so a payload over `:max_message_size` went into a batch
 entry whole rather than being split.
 
 Incomplete chunked messages reach the callback with `chunk_metadata.complete == false`, as
-before, but their payload is whatever chunks arrived — still compressed, since a partial message
-cannot be decompressed. Treat it as opaque.
+before. Check `Pulsar.Message.complete?/1` before reading an incomplete message.
 
 ## Removed options
 

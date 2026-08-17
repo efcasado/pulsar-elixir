@@ -262,7 +262,9 @@ The consumer emits telemetry events for chunk lifecycle:
 
 Each of these carries `uuid` alongside the `topic`, `base_topic`, `partition`,
 `subscription_name` and `consumer_id` that every consumer event carries, and the two that give
-up on a message also carry `reason`.
+up on a message also carry `reason`. `:complete` carries `validation_error`, `nil` unless the
+assembled message failed to decompress, in which case `total_size` counts the compressed bytes
+the callback is handed rather than a message that could be read.
 `received_chunks` against `num_chunks` says how much of the message had arrived before it was
 dropped, and `age_ms` on `:complete` is how long assembly took, which is what
 `:expire_incomplete_chunked_message_after` should be set against.

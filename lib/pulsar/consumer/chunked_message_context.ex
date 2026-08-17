@@ -85,6 +85,8 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
       | chunks: Map.put(ctx.chunks, chunk_id, payload),
         chunk_message_ids: Map.put(ctx.chunk_message_ids, chunk_id, message_id),
         received_chunks: if(already_has_chunk, do: ctx.received_chunks, else: ctx.received_chunks + 1),
+        total_chunk_msg_size:
+          if(chunk_id == 0, do: Map.get(metadata, :total_chunk_msg_size, 0), else: ctx.total_chunk_msg_size),
         first_chunk_message_id: if(chunk_id == 0, do: message_id, else: ctx.first_chunk_message_id),
         last_chunk_message_id: message_id,
         commands: ctx.commands ++ [command],
@@ -182,5 +184,10 @@ defmodule Pulsar.Consumer.ChunkedMessageContext do
   @spec all_message_ids(t()) :: [term()]
   def all_message_ids(ctx) do
     Map.values(ctx.chunk_message_ids)
+  end
+
+  @doc false
+  def metadata(ctx, chunk_id) do
+    Enum.find(ctx.metadatas, &(&1.chunk_id == chunk_id))
   end
 end
