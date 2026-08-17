@@ -36,6 +36,12 @@ def deps do
 end
 ```
 
+Upgrading from 2.x? See the
+[upgrade guide](https://hexdocs.pm/pulsar_elixir/upgrading_to_3-0.html). 3.0 replaces
+`config :pulsar` with a client in your supervision tree, moves the API onto `Pulsar.Client`,
+`Pulsar.Consumer` and `Pulsar.Producer`, downcases the option atoms, and changes how partition
+keys are routed and chunks are framed.
+
 
 ## Quick Start
 
