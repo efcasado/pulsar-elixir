@@ -1,15 +1,8 @@
 defmodule Pulsar.Integration.Consumer.FlowControlTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :flow_control_test_client
   @topic "persistent://public/default/flow-control"
+  @flow_control [:pulsar, :consumer, :flow_control, :stop]
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
     {"key1", "Message 1"},
@@ -21,39 +14,13 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, @messages, client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :flow_control_producer
-      )
-
-    for {key, payload} <- @messages do
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:flow_control_producer, payload, partition_key: key, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
 
-  setup [:telemetry_listen]
-
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-  test "tiny permits with zero threshold triggers refill on every message", %{
+  @tag telemetry_listen: [@flow_control]
+  test "a window of one is topped up on every message", %{
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
@@ -64,22 +31,20 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 1, 0, 1)
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
-    stats = Utils.collect_flow_stats()
 
-    # 1 initial + 6 refills (one per message) = 7 total events
-    # Each event requests 1 permit, so requested_total should be 7
-    assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
+    # One permit up front and one back per message consumed, so seven grants of one.
+    for _grant <- 1..7, do: assert_granted(consumer_id, 1)
+    refute_granted(consumer_id)
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-  test "threshold triggers refill when outstanding permits drop below threshold", %{
+  @tag telemetry_listen: [@flow_control]
+  test "is topped up once the window falls to its threshold", %{
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
@@ -90,23 +55,21 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 5, 3, 4)
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
-    stats = Utils.collect_flow_stats()
 
-    # Initial: 5 permits
-    # After 2 messages: 3 permits remaining (within threshold of 3) -> refill 4 = 7 permits
-    # After 4 messages: 3 permits remaining (within threshold of 3) -> no more messages
-    # Expected: 3 events (initial + 2 refill)
-    assert %{^consumer_id => %{event_count: 3, requested_total: 13}} = stats
+    # Five up front, then a refill of four each time the window falls to the threshold of three.
+    assert_granted(consumer_id, 5)
+    assert_granted(consumer_id, 4)
+    assert_granted(consumer_id, 4)
+    refute_granted(consumer_id)
   end
 
-  test "manual flow control with zero initial permits", %{expected_count: expected_count} do
+  test "grants nothing until the caller asks, when it starts with no window", %{expected_count: expected_count} do
     {:ok, consumer_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -115,38 +78,27 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 0, 0, 0)
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
-    # Initially, no messages should be received
-    Process.sleep(500)
-    assert @consumer_callback.count_messages(consumer) == 0
+    refute_receive {:consumer, ^consumer, _message}, 500
 
-    # Manually request 3 messages
     :ok = Pulsar.Consumer.send_flow(consumer, 3)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 3
-    end)
+    for _message <- 1..3, do: assert_receive({:consumer, ^consumer, _message})
+    refute_receive {:consumer, ^consumer, _message}
 
-    # Request remaining messages
     :ok = Pulsar.Consumer.send_flow(consumer, expected_count - 3)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
-
-    assert @consumer_callback.count_messages(consumer) == expected_count
+    for _message <- 1..(expected_count - 3), do: assert_receive({:consumer, ^consumer, _message})
   end
 
   test "granting permits through the group pid reaches its workers" do
     {:ok, consumer_group} =
       Pulsar.Consumer.start(@topic, "group-flow", @consumer_callback, subscription_options(2, 0, 0, 0))
 
-    workers =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end,
-        until: fn workers -> length(workers) == 2 end
-      )
-
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    workers = Topology.workers(consumer_group)
     assert length(workers) == 2
 
     # The pid start/1 returns is a supervisor, which cannot answer the worker's call.
@@ -155,10 +107,23 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     assert Process.alive?(consumer_group)
     assert Enum.all?(workers, &Process.alive?/1)
 
-    Utils.wait_for(fn -> Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0 end)
-    assert Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0
+    assert_receive {:consumer, worker, _message}
+    assert worker in workers
 
     Pulsar.Consumer.stop(consumer_group)
+  end
+
+  # Every test listening for this event is sent every consumer's, so the id picks out ours.
+  defp assert_granted(consumer_id, permits) do
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @flow_control,
+                      metadata: %{consumer_id: ^consumer_id, permits_requested: ^permits}
+                    }}
+  end
+
+  defp refute_granted(consumer_id) do
+    refute_receive {:telemetry_event, %{event: @flow_control, metadata: %{consumer_id: ^consumer_id}}}
   end
 
   defp subscription_options(count, initial, threshold, refill) do
@@ -169,7 +134,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       flow_policy: if(initial == 0, do: {Pulsar.Test.Support.Flow, :never, []}, else: :auto),
       flow_initial: initial,
       flow_threshold: threshold,
-      flow_refill: refill
+      flow_refill: refill,
+      init_args: [forward_to: self()]
     ]
   end
 end

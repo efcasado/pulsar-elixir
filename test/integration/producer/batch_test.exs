@@ -1,32 +1,18 @@
 defmodule Pulsar.Integration.Producer.BatchTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :producer_batch_test_client
   @topic "persistent://public/default/producer-batch-test"
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  setup [:telemetry_listen]
+  @batch_published [:pulsar, :producer, :batch, :published]
 
   describe "batch producer" do
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
-    test "sends multiple batches when messages exceed batch_size" do
+    @tag telemetry_listen: [@batch_published]
+    test "fills one entry per :batch_size messages, and sends each as it fills" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       messages = Enum.map(1..12, &"msg-#{&1}")
@@ -34,20 +20,19 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert_messages_received(consumer_pid, messages)
 
-      # Should have 4 batch events (3+3+3+3=12 messages)
-      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-      assert length(events) == 4
-      assert Enum.all?(events, fn %{count: c} -> c == 3 end)
+      # Twelve messages at three to a batch, and nothing left over.
+      for _batch <- 1..4, do: assert_batch_published(producer_name, 3)
+      refute_batch_published(producer_name)
     end
 
     # A batched message carries its key, properties and event time per entry rather than on the
     # message that carried them, so this is the shape Pulsar.Message's accessors have to resolve.
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "each message in a batch keeps its own key, properties and event time" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("per-entry-metadata", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       event_time = DateTime.utc_now()
@@ -67,12 +52,12 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
       expected_payloads = Enum.map(1..3, &"entry-#{&1}")
-      assert_messages_received(consumer_pid, expected_payloads)
+      received = assert_messages_received(consumer_pid, expected_payloads)
 
       # The assertions below only mean anything if these arrived as one batch.
       assert_batch_telemetry(count: 3, producer_name: producer_name)
 
-      by_payload = Map.new(DummyConsumer.get_messages(consumer_pid), &{&1.payload, &1})
+      by_payload = Map.new(received, &{&1.payload, &1})
 
       for i <- 1..3 do
         message = Map.fetch!(by_payload, "entry-#{i}")
@@ -83,7 +68,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       end
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "key-based batching gives every key an entry of its own, not just the first" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("key-based",
@@ -92,7 +77,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
           batch_builder: :key_based
         )
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       keys = ["tenant-1", "tenant-2", "tenant-1", "tenant-2"]
@@ -107,24 +92,25 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
       expected_payloads = Enum.map(0..3, &"keyed-#{&1}")
-      assert_messages_received(consumer_pid, expected_payloads)
+      received = assert_messages_received(consumer_pid, expected_payloads)
 
       # One entry per key, rather than the single entry the default builder would have sent.
-      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-      assert [%{count: 2}, %{count: 2}] = events
+      assert_batch_published(producer_name, 2)
+      assert_batch_published(producer_name, 2)
+      refute_batch_published(producer_name)
 
       # Every message dispatches on its own key, not on whichever one led the batch.
-      for message <- DummyConsumer.get_messages(consumer_pid) do
+      for message <- received do
         assert message.raw.metadata.partition_key == Pulsar.Message.key(message)
       end
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "the entry a batch arrives as carries a key for Key_Shared to dispatch on" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("entry-key", batch_size: 2, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       sends =
@@ -134,10 +120,10 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
-      assert_messages_received(consumer_pid, ["keyed-1", "keyed-2"])
+      received = assert_messages_received(consumer_pid, ["keyed-1", "keyed-2"])
       assert_batch_telemetry(count: 2, producer_name: producer_name)
 
-      for message <- DummyConsumer.get_messages(consumer_pid) do
+      for message <- received do
         assert message.raw.metadata.partition_key == "tenant-1"
       end
     end
@@ -145,35 +131,34 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     # A batch spends one sequence id per message it carries, so the next batch has to start
     # past the whole range. Starting at the previous batch's first id repeats the ids consumers
     # see and understates the high-water mark the broker reports back on reconnect.
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "consecutive batches claim sequence id ranges that do not overlap" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("sequence-ids", batch_size: 3, flush_interval: 30_000)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
 
       messages = Enum.map(1..9, &"seq-#{&1}")
       send_messages(producer_pid, messages)
 
-      assert_messages_received(consumer_pid, messages)
+      received = assert_messages_received(consumer_pid, messages)
 
       assert :sys.get_state(producer).sequence_id == 9
 
       sequence_ids =
-        consumer_pid
-        |> DummyConsumer.get_messages()
+        received
         |> Enum.map(& &1.raw.single_metadata.sequence_id)
         |> Enum.sort()
 
       assert sequence_ids == Enum.to_list(1..9)
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
-    test "flushes single message batch on timer" do
+    @tag telemetry_listen: [@batch_published]
+    test "sends a batch the timer came due on, however little it holds" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       producer_name = :sys.get_state(producer).producer_name
 
       assert {:ok, _} = Pulsar.Producer.send(producer_pid, "single-msg")
@@ -182,20 +167,20 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert_batch_telemetry(count: 1, producer_name: producer_name)
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
-    test "empty batch flush is no-op" do
+    @tag telemetry_listen: [@batch_published]
+    test "sends nothing when the timer comes due on an empty batch" do
       {_consumer_pid, producer_pid} =
         setup_producer_consumer("empty-batch", batch_size: 10, flush_interval: 50)
 
       # Wait for a few timer cycles without sending anything
       Process.sleep(200)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
       state = :sys.get_state(producer)
-      assert state.ready == true
+      assert state.ready
       assert state.batch == []
 
-      assert [] = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [state.producer_name])
+      refute_batch_published(state.producer_name)
     end
 
     test "refuses a batch the broker would reject, and keeps the connection" do
@@ -218,7 +203,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       deliver_at = DateTime.shift(DateTime.utc_now(), second: 1)
       deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
 
-      [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+      [producer] = Topology.workers(producer_pid)
 
       # Neither fills the batch, so both wait for a flush that nothing has scheduled yet.
       pending =
@@ -233,8 +218,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert Enum.all?(Task.await_many(pending, 10_000), &match?({:ok, _}, &1))
 
-      assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
-      messages = DummyConsumer.get_messages(consumer_pid)
+      messages = assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
       delayed = Enum.find(messages, &(&1.payload == "delayed-1"))
       batched = Enum.find(messages, &(&1.payload == "batched-1"))
 
@@ -252,14 +236,15 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     topic = @topic <> "-" <> suffix
     :ok = System.create_topic(topic)
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "batch-#{suffix}-sub", DummyConsumer,
         client: @client,
         initial_position: :earliest,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer_pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer_pid] = Topology.workers(consumer_group)
 
     {:ok, producer_pid} =
       Pulsar.Producer.start(
@@ -267,12 +252,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
         [client: @client, name: "#{suffix}-producer", batch_enabled: true] ++ opts
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {consumer_pid, producer_pid}
   end
@@ -290,14 +270,37 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     |> Task.await_many(10_000)
   end
 
+  # Returns them in the order they were delivered, for a test that cares about that or about
+  # what else they carried.
   defp assert_messages_received(consumer_pid, expected_payloads) do
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= length(expected_payloads) end)
-    payloads = consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
-    Enum.each(expected_payloads, fn expected -> assert expected in payloads end)
+    received =
+      for _expected <- expected_payloads do
+        assert_receive {:consumer, ^consumer_pid, message}
+        message
+      end
+
+    assert Enum.sort(Enum.map(received, & &1.payload)) == Enum.sort(expected_payloads)
+
+    received
   end
 
   defp assert_batch_telemetry(count: expected_count, producer_name: producer_name) do
-    events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-    assert [%{count: ^expected_count}] = events
+    assert_batch_published(producer_name, expected_count)
+    refute_batch_published(producer_name)
+  end
+
+  # Every test listening for this event is sent every producer's, so the name is what picks
+  # this producer's out of the mailbox.
+  defp assert_batch_published(producer_name, count) do
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @batch_published,
+                      measurements: %{count: ^count},
+                      metadata: %{producer_name: ^producer_name}
+                    }}
+  end
+
+  defp refute_batch_published(producer_name) do
+    refute_receive {:telemetry_event, %{event: @batch_published, metadata: %{producer_name: ^producer_name}}}
   end
 end

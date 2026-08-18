@@ -1,30 +1,22 @@
 defmodule Pulsar.Integration.Consumer.StopTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
-  @moduletag :integration
-  @client :consumer_stop_test_client
   @declared_client :consumer_stop_test_declared_client
   @topic "persistent://public/default/consumer-stop-test"
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _client} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-    :ok
-  end
 
   test "stopping by pid removes the consumer rather than restarting it" do
     topic = @topic <> "-pid"
     consumer = start_consumer(topic, "pid-sub")
-    Utils.wait_for_consumer_ready(1)
+
+    # start_consumer/3 already awaited it; this takes the announcement out of the mailbox so
+    # the refute below can only see one from a consumer that came back.
+    assert_receive {:consumer_started, _pid, _context}
 
     assert Pulsar.Consumer.stop(consumer, client: @client) == :ok
 
-    refute_receive {:consumer_ready, _pid}, 3_000
+    refute_receive {:consumer_started, _pid, _context}, 3_000
     assert_removed(consumer, topic, "pid-sub")
     assert Pulsar.Consumer.stop(consumer, client: @client) == {:error, :not_found}
   end
@@ -53,11 +45,8 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     :ok = System.create_topic(topic, 3)
     consumer = start_consumer(topic, "partitioned-sub", create_topic?: false)
 
-    workers =
-      Utils.wait_for(fn -> Pulsar.Topology.workers(consumer) end,
-        until: &(length(&1) == 3),
-        description: "every partition worker to start"
-      )
+    workers = Pulsar.Topology.workers(consumer)
+    assert length(workers) == 3
 
     assert Pulsar.Consumer.stop(consumer, client: @client) == :ok
 
@@ -101,7 +90,7 @@ defmodule Pulsar.Integration.Consumer.StopTest do
             topic: topic,
             subscription_name: "declared-sub",
             callback_module: DummyConsumer,
-            init_args: [notify_pid: self()]
+            init_args: [forward_to: self()]
           ]
         ]
       )
@@ -109,11 +98,13 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     on_exit(fn -> Pulsar.Client.stop(@declared_client) end)
 
     :ok = Pulsar.Consumer.await_ready(name(topic, "declared-sub"), client: @declared_client)
-    Utils.wait_for_consumer_ready(1)
+
+    # Drains the announcement, so the refute below can only see one from a restart.
+    assert_receive {:consumer_started, _pid, _context}
 
     assert Pulsar.Consumer.stop(name(topic, "declared-sub"), client: @declared_client) == :ok
 
-    refute_receive {:consumer_ready, _pid}, 3_000
+    refute_receive {:consumer_started, _pid, _context}, 3_000
     assert Pulsar.Client.consumers(@declared_client) == []
   end
 
@@ -123,7 +114,7 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     {create_topic?, opts} = Keyword.pop(opts, :create_topic?, true)
     if create_topic?, do: :ok = System.create_topic(topic)
 
-    opts = Keyword.merge([client: @client, init_args: [notify_pid: self()]], opts)
+    opts = Keyword.merge([client: @client, init_args: [forward_to: self()]], opts)
 
     {:ok, consumer} = Pulsar.Consumer.start(topic, subscription, DummyConsumer, opts)
     :ok = Pulsar.Consumer.await_ready(consumer, client: Keyword.fetch!(opts, :client))

@@ -1,35 +1,19 @@
 defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :partitioned_producer_test_client
   @topic "persistent://public/default/partitioned-producer-test"
   @discovery_interval_ms 200
+  @reconciliation [:pulsar, :topology, :reconciliation, :stop]
 
   setup_all do
-    broker = System.broker()
-
     System.create_topic(@topic, 3)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
 
     :ok
   end
 
-  test "creates producer groups for each partition" do
+  test "starts a worker for every partition of the topic" do
     {:ok, producer_pid} =
       Pulsar.Producer.start(@topic,
         client: @client,
@@ -38,20 +22,14 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     assert Pulsar.Client.producers(@client) == [producer_pid]
 
-    all_producers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: fn producers ->
-          length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-        end,
-        description: "partitioned producers to become ready"
-      )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
-    assert Enum.count(all_producers) == 3
+    assert Enum.count(Topology.workers(producer_pid)) == 3
 
     :ok = Pulsar.Producer.stop(producer_pid)
   end
 
-  test "messages with same key consumed from same partition" do
+  test "routes messages sharing a partition key to one partition" do
     test_id = :erlang.unique_integer([:positive])
     subscription = "partitioned-test-#{test_id}"
     producer_name = "partitioned-producer-test-#{test_id}"
@@ -62,12 +40,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn producers ->
-        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-      end,
-      description: "partitioned producers to become ready"
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -76,10 +49,10 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         DummyConsumer,
         client: @client,
         initial_position: :latest,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    consumers = Utils.wait_for_consumer_ready(3)
+    :ok = Pulsar.Consumer.await_ready(consumer_pid)
 
     partition_key = "same-partition-key-#{test_id}"
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
@@ -88,24 +61,13 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
       {:ok, _} = Pulsar.Producer.send(producer_pid, msg, partition_key: partition_key)
     end
 
-    Utils.wait_for(fn ->
-      all_msgs = Enum.flat_map(consumers, &DummyConsumer.get_messages/1)
-      our_msgs = Enum.filter(all_msgs, fn msg -> msg.payload in messages end)
-      Enum.count(our_msgs) == 3
-    end)
+    our_messages = receive_messages(messages)
 
-    our_messages =
-      consumers
-      |> Enum.flat_map(&DummyConsumer.get_messages/1)
-      |> Enum.filter(fn msg -> msg.payload in messages end)
-
-    # All messages should have the same partition_key
     assert [^partition_key] =
              our_messages
              |> Enum.map(fn msg -> Pulsar.Message.key(msg) end)
              |> Enum.uniq()
 
-    # All messages should have been routed to the same partition
     assert [_single_partition] =
              our_messages
              |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
@@ -115,7 +77,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(consumer_pid)
   end
 
-  test "messages without partition_key are distributed randomly across partitions" do
+  test "spreads keyless messages across every partition" do
     test_id = :erlang.unique_integer([:positive])
     subscription = "partitioned-random-test-#{test_id}"
     producer_name = "partitioned-producer-random-test-#{test_id}"
@@ -126,12 +88,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         name: producer_name
       )
 
-    Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-      until: fn producers ->
-        length(producers) == 3 and Enum.all?(producers, &producer_ready?/1)
-      end,
-      description: "partitioned producers to become ready"
-    )
+    :ok = Pulsar.Producer.await_ready(producer_pid)
 
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
@@ -140,10 +97,10 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         DummyConsumer,
         client: @client,
         initial_position: :latest,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    consumers = Utils.wait_for_consumer_ready(3)
+    :ok = Pulsar.Consumer.await_ready(consumer_pid)
 
     messages =
       for i <- 1..30 do
@@ -152,16 +109,9 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         msg
       end
 
-    Utils.wait_for(fn ->
-      all_msgs = Enum.flat_map(consumers, &DummyConsumer.get_messages/1)
-      our_msgs = Enum.filter(all_msgs, fn msg -> msg.payload in messages end)
-      Enum.count(our_msgs) == 30
-    end)
-
     partitions =
-      consumers
-      |> Enum.flat_map(&DummyConsumer.get_messages/1)
-      |> Enum.filter(fn msg -> msg.payload in messages end)
+      messages
+      |> receive_messages()
       |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
 
     # With 30 messages and 3 partitions, random distribution should hit all partitions
@@ -173,6 +123,16 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(consumer_pid)
   end
 
+  # Every partition's worker forwards here, so the messages arrive interleaved and are picked
+  # out by payload rather than by which worker held them.
+  defp receive_messages(payloads) do
+    for _payload <- payloads do
+      assert_receive {:consumer, _pid, message}
+      message
+    end
+  end
+
+  @tag telemetry_listen: [@reconciliation]
   test "discovers partitions added to the topic" do
     test_id = :erlang.unique_integer([:positive])
     topic = "persistent://public/default/partition-discovery-producer-#{test_id}"
@@ -186,30 +146,23 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         partition_discovery_interval_ms: @discovery_interval_ms
       )
 
-    initial_workers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: &(length(&1) == 3),
-        description: "initial producer partitions to start"
-      )
+    assert_receive {:telemetry_event, %{event: @reconciliation, metadata: %{topic: ^topic, partition_count: 3}}}
+
+    initial_workers = Topology.workers(producer_pid)
 
     System.update_partitions(topic, 6)
 
-    # The discovery poller should pick up the new partitions and start a
-    # producer group for each one, without restarting the existing groups.
-    current_workers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: &(length(&1) == 6),
-        description: "added producer partitions to start"
-      )
+    # The poller picks the new partitions up and starts a group for each, leaving the groups
+    # already running where they were.
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @reconciliation,
+                      metadata: %{topic: ^topic, partition_count: 6, added_groups: [3, 4, 5]}
+                    }},
+                   10_000
 
-    assert Enum.all?(initial_workers, &(&1 in current_workers))
+    assert Enum.all?(initial_workers, &(&1 in Topology.workers(producer_pid)))
 
     :ok = Pulsar.Producer.stop(producer_pid)
-  end
-
-  defp producer_ready?(producer) do
-    :sys.get_state(producer).ready
-  catch
-    :exit, _reason -> false
   end
 end

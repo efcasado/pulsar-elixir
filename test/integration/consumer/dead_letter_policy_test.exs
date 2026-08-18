@@ -1,47 +1,16 @@
 defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  setup [:telemetry_listen]
-
-  @moduletag :integration
-  @client :dead_letter_policy_test_client
   @topic "persistent://public/default/dlq-test-topic"
   @messages Enum.map(1..3, &"Message #{&1}")
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, @messages, client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :test_producer
-      )
-
-    Enum.each(@messages, fn message ->
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:test_producer, message, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end)
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    :ok
   end
 
   test "an invalid message reaches the DLQ carrying its payload and is acknowledged" do
@@ -53,18 +22,22 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
         client: @client,
         redelivery_interval: 100,
-        dead_letter_policy: [max_redelivery: 1, topic: dlq_topic]
+        dead_letter_policy: [max_redelivery: 1, topic: dlq_topic],
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_group} =
       Pulsar.Consumer.start(dlq_topic, "dlq-consumer", DummyConsumer,
         client: @client,
-        initial_position: :earliest
+        initial_position: :earliest,
+        init_args: [forward_to: self()]
       )
 
-    [dlq_consumer] = Utils.wait_for(fn -> Topology.workers(dlq_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(dlq_group)
+    [dlq_consumer] = Topology.workers(dlq_group)
 
     command = %Proto.CommandMessage{
       consumer_id: 1,
@@ -74,10 +47,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     send(consumer, {:broker_message, {:invalid, command, "corrupt-payload", :checksum_mismatch}})
 
-    Utils.wait_for(fn -> DummyConsumer.count_messages(dlq_consumer) > 0 end)
-
-    assert [dlq_message] = DummyConsumer.get_messages(dlq_consumer)
-    assert dlq_message.payload == "corrupt-payload"
+    assert_receive {:consumer, ^dlq_consumer, %{payload: "corrupt-payload"}}
 
     # The acknowledgement carries a validation error the broker has to accept; had
     # it not, the connection would have gone and taken the consumer with it.
@@ -85,7 +55,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     assert Pulsar.Consumer.topic(consumer) == topic
   end
 
-  test "dead letter policy with max_redelivery sends messages to DLQ after threshold" do
+  test "diverts a message once it has been redelivered :max_redelivery times" do
     topic = @topic
     subscription = "failing"
     dlq_topic = topic <> "-" <> subscription <> "-DLQ"
@@ -96,7 +66,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         topic,
         subscription,
         DummyConsumer,
-        init_args: [fail_all: true],
+        init_args: [fail_all: true, forward_to: self()],
         client: @client,
         initial_position: :earliest,
         subscription_type: :shared,
@@ -107,8 +77,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -117,34 +87,31 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         DummyConsumer,
         client: @client,
         subscription_type: :shared,
-        initial_position: :earliest
+        initial_position: :earliest,
+        init_args: [forward_to: self()]
       )
 
-    [dlq_consumer] =
-      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
-
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(dlq_consumer) == length(@messages)
-    end)
-
-    failing_consumer_count = DummyConsumer.count_messages(failing_consumer)
+    :ok = Pulsar.Consumer.await_ready(dlq_consumer_group)
+    [dlq_consumer] = Topology.workers(dlq_consumer_group)
 
     # The delivery that reaches the threshold is diverted rather than delivered, so the callback
     # sees a message on every attempt below it and never on the one that dead letters it.
-    assert failing_consumer_count == length(@messages) * max_redelivery
+    for _attempt <- 1..(length(@messages) * max_redelivery) do
+      assert_receive {:consumer, ^failing_consumer, _message}
+    end
 
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(dlq_consumer) == length(@messages)
-    end)
+    refute_receive {:consumer, ^failing_consumer, _message}
 
-    dlq_messages = DummyConsumer.get_messages(dlq_consumer)
-    assert length(dlq_messages) == length(@messages)
+    dlq_payloads =
+      for _message <- @messages do
+        assert_receive {:consumer, ^dlq_consumer, message}
+        message.payload
+      end
 
-    dlq_payloads = Enum.map(dlq_messages, & &1.payload)
-    assert dlq_payloads == @messages
+    assert Enum.sort(dlq_payloads) == Enum.sort(@messages)
   end
 
-  test "no dead letter policy means no DLQ" do
+  test "redelivers forever, and creates no topic, when no policy is set" do
     topic = @topic
     subscription = "no-dlq"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
@@ -154,28 +121,25 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         topic,
         subscription,
         DummyConsumer,
-        init_args: [fail_all: true],
+        init_args: [fail_all: true, forward_to: self()],
         client: @client,
         initial_position: :earliest,
         subscription_type: :shared,
         redelivery_interval: 100
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(failing_consumer) >= length(@messages) * 2
-    end)
-
-    failing_consumer_count = DummyConsumer.count_messages(failing_consumer)
-    assert failing_consumer_count >= length(@messages) * 2
+    for _attempt <- 1..(length(@messages) * 2) do
+      assert_receive {:consumer, ^failing_consumer, _message}
+    end
 
     {:ok, topics} = System.list_topics()
     refute expected_dlq_topic in topics
   end
 
-  test "dead letter policy with default DLQ topic name" do
+  test "names the topic after the subscription when the policy does not" do
     topic = @topic
     subscription = "default-name"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
@@ -185,7 +149,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         topic,
         subscription,
         DummyConsumer,
-        init_args: [fail_all: true],
+        init_args: [fail_all: true, forward_to: self()],
         client: @client,
         initial_position: :earliest,
         subscription_type: :shared,
@@ -195,8 +159,8 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         ]
       )
 
-    [failing_consumer] =
-      Utils.wait_for(fn -> Topology.workers(consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [failing_consumer] = Topology.workers(consumer_group)
 
     {:ok, dlq_consumer_group} =
       Pulsar.Consumer.start(
@@ -205,20 +169,22 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         DummyConsumer,
         client: @client,
         subscription_type: :shared,
-        initial_position: :earliest
+        initial_position: :earliest,
+        init_args: [forward_to: self()]
       )
 
-    [dlq_consumer] =
-      Utils.wait_for(fn -> Topology.workers(dlq_consumer_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(dlq_consumer_group)
+    [dlq_consumer] = Topology.workers(dlq_consumer_group)
 
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(dlq_consumer) == length(@messages)
-    end)
+    for _message <- @messages do
+      assert_receive {:consumer, ^dlq_consumer, _message}
+    end
 
-    dlq_messages = DummyConsumer.get_messages(dlq_consumer)
-    assert length(dlq_messages) == length(@messages)
+    for _attempt <- 1..(length(@messages) * 2) do
+      assert_receive {:consumer, ^failing_consumer, _message}
+    end
 
-    assert DummyConsumer.count_messages(failing_consumer) == length(@messages) * 2
+    refute_receive {:consumer, ^failing_consumer, _message}
   end
 
   test "producer options configure the running dead letter producer" do
@@ -229,29 +195,31 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
         client: @client,
         redelivery_interval: 100,
-        dead_letter_policy: [max_redelivery: 1, producer: [compression: :lz4, batch_enabled: true]]
+        dead_letter_policy: [max_redelivery: 1, producer: [compression: :lz4, batch_enabled: true]],
+        init_args: [forward_to: self()]
       )
 
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+
+    # The dead letter producer is a child of the consumer's own topology, started alongside it.
     dead_letter_root =
-      Utils.wait_for(
-        fn ->
-          consumer_group
-          |> Supervisor.which_children()
-          |> Enum.find_value(fn
-            {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> pid
-            _child -> nil
-          end)
-        end,
-        until: &is_pid/1
-      )
+      consumer_group
+      |> Supervisor.which_children()
+      |> Enum.find_value(fn
+        {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> pid
+        _child -> nil
+      end)
 
-    [producer] = Utils.wait_for(fn -> Topology.workers(dead_letter_root) end, until: &match?([_], &1))
+    assert is_pid(dead_letter_root)
+
+    :ok = Pulsar.Producer.await_ready(dead_letter_root)
+    [producer] = Topology.workers(dead_letter_root)
 
     producer_state = :sys.get_state(producer)
 
     # Both differ from the schema defaults, :none and false, so a default cannot satisfy them.
     assert producer_state.compression == :lz4
-    assert producer_state.batch_enabled == true
+    assert producer_state.batch_enabled
   end
 
   @tag telemetry_listen: [
@@ -266,14 +234,15 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     {:ok, group} =
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
-        init_args: [fail_all: true],
+        init_args: [fail_all: true, forward_to: self()],
         client: @client,
         initial_position: :earliest,
         redelivery_interval: 100,
         dead_letter_policy: [max_redelivery: 1]
       )
 
-    [_consumer] = Utils.wait_for(fn -> Topology.workers(group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group)
+    [_consumer] = Topology.workers(group)
 
     {:ok, producer} = Pulsar.Producer.start(topic, client: @client)
     :ok = Pulsar.Producer.await_ready(producer, client: @client)
@@ -316,14 +285,15 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     {:ok, group} =
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
-        init_args: [fail_all: true],
+        init_args: [fail_all: true, forward_to: self()],
         client: @client,
         initial_position: :earliest,
         redelivery_interval: 100,
         dead_letter_policy: [max_redelivery: 1]
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group)
+    [consumer] = Topology.workers(group)
 
     # A root with no dead letter child, so the producer cannot be resolved and diverting fails
     # the way it does against a dead letter topic that is unavailable. Pointing the worker at

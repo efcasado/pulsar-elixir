@@ -1,11 +1,6 @@
 defmodule Pulsar.Integration.Consumer.BatchAckTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :consumer_batch_ack_test_client
   @topic "persistent://public/default/consumer-batch-ack-test"
   @batch ["msg-1", "msg-2", "msg-3", "msg-4", "msg-5"]
 
@@ -15,10 +10,7 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
     use Pulsar.Consumer.Callback
 
     def init(opts, _context) do
-      notify_pid = Keyword.fetch!(opts, :notify_pid)
-      send(notify_pid, {:consumer_ready, self()})
-
-      {:ok, %{notify_pid: notify_pid, ack: Keyword.fetch!(opts, :ack)}}
+      {:ok, %{notify_pid: Keyword.fetch!(opts, :notify_pid), ack: Keyword.fetch!(opts, :ack)}}
     end
 
     def handle_message(message, state) do
@@ -30,13 +22,6 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
         {:noreply, state}
       end
     end
-  end
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-    :ok
   end
 
   test "acking one message of a batch does not acknowledge the rest of its entry" do
@@ -140,7 +125,7 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
         ] ++ consumer_opts
       )
 
-    Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer)
 
     consumer
   end

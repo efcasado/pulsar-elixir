@@ -1,28 +1,13 @@
 defmodule Pulsar.Integration.Producer.DeduplicationTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :producer_dedup_test_client
   @topic "persistent://public/default/producer-dedup-test"
 
   # The broker's "not persisted" message id, which reaches us as an unsigned 64-bit -1.
   @deduplicated 18_446_744_073_709_551_615
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  setup [:telemetry_listen]
 
   describe "a topic with deduplication enabled" do
     test "a producer restarting under the same name resumes past the sequence id it reached" do
@@ -66,9 +51,9 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
       # Published after the discarded one and on the same topic, so its arrival is the point at
       # which "discarded" would have arrived too had the broker stored it.
       assert {:ok, _} = Pulsar.Producer.send(producer, "barrier")
-      assert_messages_received(consumer_pid, ["stored", "barrier"])
+      received = assert_messages_received(consumer_pid, ["stored", "barrier"])
 
-      assert ["stored", "barrier"] == consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
+      assert ["stored", "barrier"] == Enum.map(received, & &1.payload)
     end
 
     test "a chunked message is not deduplicated, though an unchunked one at the same id is" do
@@ -123,14 +108,15 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
     :ok = System.create_topic(topic)
     :ok = System.enable_deduplication(topic)
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "dedup-#{suffix}-sub", DummyConsumer,
         client: @client,
         initial_position: :earliest,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer_pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer_pid] = Topology.workers(consumer_group)
 
     {consumer_pid, topic}
   end
@@ -138,12 +124,7 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
   defp start_producer(topic, name, opts \\ []) do
     {:ok, producer} = Pulsar.Producer.start(topic, [client: @client, name: name] ++ opts)
 
-    Utils.wait_for(fn -> Topology.workers(producer) end,
-      until: fn
-        [worker] -> :sys.get_state(worker).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(producer)
 
     producer
   end
@@ -159,9 +140,17 @@ defmodule Pulsar.Integration.Producer.DeduplicationTest do
     |> Task.await_many(10_000)
   end
 
+  # Returns them in the order they were delivered, for a test that cares about that or about
+  # what else they carried.
   defp assert_messages_received(consumer_pid, expected_payloads) do
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= length(expected_payloads) end)
-    payloads = consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
-    Enum.each(expected_payloads, fn expected -> assert expected in payloads end)
+    received =
+      for _expected <- expected_payloads do
+        assert_receive {:consumer, ^consumer_pid, message}
+        message
+      end
+
+    assert Enum.sort(Enum.map(received, & &1.payload)) == Enum.sort(expected_payloads)
+
+    received
   end
 end

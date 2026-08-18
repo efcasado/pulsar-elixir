@@ -1,52 +1,34 @@
 defmodule Pulsar.Integration.Topology.ResolverTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology.Resolver
 
-  @moduletag :integration
-  @client :topology_resolver_test_client
   @topic "persistent://public/default/topology-resolver-test-topic"
+  @lookup [:pulsar, :topology, :resolver, :lookup_topic, :stop]
 
   setup_all do
-    broker = System.broker()
-
-    System.create_topic(@topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    :ok = System.create_topic(@topic)
   end
 
-  setup [:telemetry_listen]
-
-  @tag telemetry_listen: [[:pulsar, :topology, :resolver, :lookup_topic, :stop]]
-  test "topic lookup retrieves broker PID" do
+  @tag telemetry_listen: [@lookup]
+  test "resolves a topic to the broker serving it" do
     assert {:ok, broker_pid} = Resolver.lookup_topic(@topic, client: @client)
     assert Process.alive?(broker_pid)
 
-    stats = Utils.collect_lookup_stats(client: @client)
-    assert %{success_count: 1, failure_count: 0, total_count: 1} = stats
+    # Every test listening for this event is sent every client's, so the client picks out ours.
+    assert_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client, success: true}}}
+    refute_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client}}}
   end
 
-  @tag telemetry_listen: [[:pulsar, :topology, :resolver, :lookup_topic, :stop]]
-  test "topic lookup fails for non-existing topics" do
-    result1 = Resolver.lookup_topic("persistent://fake/fake/fake", client: @client)
-    assert {:error, _reason} = result1
+  @tag telemetry_listen: [@lookup]
+  test "reports a topic whose tenant or namespace does not exist" do
+    assert {:error, _reason} = Resolver.lookup_topic("persistent://fake/fake/fake", client: @client)
+    assert {:error, _reason} = Resolver.lookup_topic("persistent://public/fake/fake", client: @client)
 
-    result2 = Resolver.lookup_topic("persistent://public/fake/fake", client: @client)
-    assert {:error, _reason} = result2
+    for _lookup <- 1..2 do
+      assert_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client, success: false}}}
+    end
 
-    stats = Utils.collect_lookup_stats(client: @client)
-    assert %{success_count: 0, failure_count: 2, total_count: 2} = stats
+    refute_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client}}}
   end
 end

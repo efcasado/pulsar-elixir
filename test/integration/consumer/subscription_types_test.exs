@@ -1,12 +1,6 @@
 defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :subscription_types_test_client
   @topic "persistent://public/default/subscription-types-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
@@ -19,39 +13,13 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, @messages, client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :subscription_types_producer
-      )
-
-    for {key, payload} <- @messages do
-      Utils.wait_for(
-        fn ->
-          Pulsar.Producer.send(:subscription_types_producer, payload, partition_key: key, client: @client)
-        end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
 
-  test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do
-    {:ok, _shared_group} =
+  test ":shared hands each consumer a share of the messages", %{expected_count: expected_count} do
+    {:ok, shared_group} =
       Pulsar.Consumer.start(
         @topic,
         "shared",
@@ -59,30 +27,26 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         manual_flow_options(:shared, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(shared_group)
+    [consumer1, consumer2] = Topology.workers(shared_group)
 
-    # With manual flow control, grant one permit to each consumer per round so
-    # the broker dispatches exactly one message to each. This makes the Shared
-    # distribution deterministic (verifying round-robin) instead of racing on
-    # which consumer drains the pre-produced backlog first.
+    # A permit each per round, so the broker has exactly one message to give each. Left to
+    # itself, whichever consumer drained the backlog first would take all of it.
     rounds = div(expected_count, 2)
 
-    for round <- 1..rounds do
+    for _round <- 1..rounds do
       :ok = Pulsar.Consumer.send_flow(consumer1, 1)
       :ok = Pulsar.Consumer.send_flow(consumer2, 1)
 
-      Utils.wait_for(fn ->
-        @consumer_callback.count_messages(consumer1) == round and
-          @consumer_callback.count_messages(consumer2) == round
-      end)
+      assert_receive {:consumer, ^consumer1, _message}
+      assert_receive {:consumer, ^consumer2, _message}
     end
 
-    assert @consumer_callback.count_messages(consumer1) == rounds
-    assert @consumer_callback.count_messages(consumer2) == rounds
+    refute_receive {:consumer, _pid, _message}
   end
 
-  test "key_shared subscription partitions by key", %{expected_count: expected_count} do
-    {:ok, _key_shared_group} =
+  test ":key_shared gives each consumer a set of keys no other one sees", %{expected_count: expected_count} do
+    {:ok, key_shared_group} =
       Pulsar.Consumer.start(
         @topic,
         "key-shared",
@@ -90,27 +54,21 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         manual_flow_options(:key_shared, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(key_shared_group)
+    [consumer1, consumer2] = Topology.workers(key_shared_group)
 
-    # With manual flow control, only grant permits once BOTH consumers are
-    # subscribed, so Key_Shared hash ranges are split between them before any
-    # message is dispatched. Otherwise the first consumer can drain backlog for
-    # keys that later belong to the second consumer's range, causing key overlap.
+    # Granted only once both have subscribed, so the broker has split the hash range before it
+    # dispatches anything. Earlier, and the first consumer takes keys that later belong to the
+    # second.
     :ok = Pulsar.Consumer.send_flow(consumer1, expected_count)
     :ok = Pulsar.Consumer.send_flow(consumer2, expected_count)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer1) +
-        @consumer_callback.count_messages(consumer2) ==
-        expected_count
-    end)
-
-    messages1 = @consumer_callback.get_messages(consumer1)
-    messages2 = @consumer_callback.get_messages(consumer2)
+    delivered = receive_messages(expected_count)
+    messages1 = Map.get(delivered, consumer1, [])
+    messages2 = Map.get(delivered, consumer2, [])
 
     assert length(messages1) + length(messages2) == expected_count
 
-    # Extract partition keys to verify no key overlap
     extract_keys = fn messages ->
       messages
       |> Enum.map(&Pulsar.Message.key(&1))
@@ -124,8 +82,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert MapSet.size(key_overlap) == 0
   end
 
-  test "failover subscription uses single active consumer", %{expected_count: expected_count} do
-    {:ok, _failover_group} =
+  test ":failover delivers to one consumer and leaves the rest standing by", %{expected_count: expected_count} do
+    {:ok, failover_group} =
       Pulsar.Consumer.start(
         @topic,
         "failover",
@@ -133,30 +91,21 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:failover, 2)
       )
 
-    [consumer1, consumer2] = Utils.wait_for_consumer_ready(2)
+    :ok = Pulsar.Consumer.await_ready(failover_group)
+    [consumer1, consumer2] = Topology.workers(failover_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer1) +
-        @consumer_callback.count_messages(consumer2) == expected_count
-    end)
+    delivered = receive_messages(expected_count)
 
-    count1 = @consumer_callback.count_messages(consumer1)
-    count2 = @consumer_callback.count_messages(consumer2)
+    assert [{active, messages}] = Map.to_list(delivered)
+    assert length(messages) == expected_count
+    assert active in [consumer1, consumer2]
 
-    assert count1 + count2 == expected_count
-
-    assert (count1 == expected_count and count2 == 0) or
-             (count1 == 0 and count2 == expected_count)
-
-    {active_consumer, passive_consumer} =
-      if count1 == expected_count, do: {consumer1, consumer2}, else: {consumer2, consumer1}
-
-    assert @consumer_callback.active?(active_consumer) == true
-    assert @consumer_callback.active?(passive_consumer) == false
+    assert_receive {:consumer_active, ^active, true}
+    refute_receive {:consumer_active, _pid, true}
   end
 
-  test "exclusive subscription receives all messages", %{expected_count: expected_count} do
-    {:ok, _exclusive_group} =
+  test ":exclusive delivers everything to the one consumer it admits", %{expected_count: expected_count} do
+    {:ok, exclusive_group} =
       Pulsar.Consumer.start(
         @topic,
         "exclusive",
@@ -164,14 +113,11 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         subscription_options(:exclusive, 1)
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(exclusive_group)
+    [consumer] = Topology.workers(exclusive_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
-
-    count = @consumer_callback.count_messages(consumer)
-    assert count == expected_count
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
+    refute_receive {:consumer, ^consumer, _message}
   end
 
   # An :exclusive subscription admits one consumer, so the workers past the first are refused
@@ -194,6 +140,18 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
              )
   end
 
+  # Deliveries from the consumers of one subscription arrive interleaved, so they are grouped
+  # by the worker that got each one.
+  defp receive_messages(count) do
+    for_result =
+      for _message <- 1..count do
+        assert_receive {:consumer, pid, message}
+        {pid, message}
+      end
+
+    Enum.group_by(for_result, &elem(&1, 0), &elem(&1, 1))
+  end
+
   defp subscription_options(type, count) do
     [
       client: @client,
@@ -203,7 +161,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       flow_initial: 1,
       flow_threshold: 0,
       flow_refill: 1,
-      init_args: [notify_pid: self()]
+      init_args: [forward_to: self()]
     ]
   end
 
@@ -217,7 +175,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       consumer_count: count,
       flow_policy: {Pulsar.Test.Support.Flow, :never, []},
       flow_initial: 0,
-      init_args: [notify_pid: self()]
+      init_args: [forward_to: self()]
     ]
   end
 end

@@ -123,7 +123,7 @@ defmodule Pulsar.ProtocolTest do
       frame = Protocol.encode(%{ctx.command | is_chunk: true}, ctx.metadata, ctx.payload)
 
       assert {:ok, {command, _metadata, _payload, nil}} = Protocol.decode(frame)
-      assert command.is_chunk == true
+      assert command.is_chunk
     end
 
     test "checksum covers the metadata size, metadata and payload", ctx do

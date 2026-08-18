@@ -1,50 +1,18 @@
 defmodule Pulsar.Integration.Reader.FlowControlTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_flow_control_test_client
   @topic "persistent://public/default/reader-flow-control-test"
   @num_messages 20
+  @flow_control [:pulsar, :consumer, :flow_control, :stop]
 
   setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_flow_control_test_producer
-      )
-
-    for i <- 1..@num_messages do
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:reader_flow_control_test_producer, "Message #{i}", client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    Utils.seed_topic(@topic, Enum.map(1..@num_messages, &"Message #{&1}"), client: @client)
 
     :ok
   end
 
-  setup [:telemetry_listen]
-
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-  test "small flow_permits triggers refills" do
+  @tag telemetry_listen: [@flow_control]
+  test "tops the window up as it is spent, when it is smaller than the topic" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 100)
@@ -53,14 +21,14 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
     assert length(messages) == @num_messages
 
     consumer_id = hd(messages).raw.command.consumer_id
-    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
-    assert consumer_stats.event_count == 5
-    assert consumer_stats.requested_total == @num_messages + 5
+    # Five up front, then five back each time the window empties.
+    for _grant <- 1..5, do: assert_granted(consumer_id, 5)
+    refute_granted(consumer_id)
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-  test "flow_permits of 1 triggers refill on every message" do
+  @tag telemetry_listen: [@flow_control]
+  test "a window of one is topped up on every message" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 100)
@@ -69,14 +37,14 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
     assert length(messages) == @num_messages
 
     consumer_id = hd(messages).raw.command.consumer_id
-    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
-    assert consumer_stats.event_count == @num_messages + 1
-    assert consumer_stats.requested_total == @num_messages + 1
+    # One up front and one back per message, so a grant per message and one over.
+    for _grant <- 1..(@num_messages + 1), do: assert_granted(consumer_id, 1)
+    refute_granted(consumer_id)
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
-  test "large flow_permits requires only initial request" do
+  @tag telemetry_listen: [@flow_control]
+  test "a window wider than the topic is never topped up" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 100)
@@ -85,9 +53,22 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
     assert length(messages) == @num_messages
 
     consumer_id = hd(messages).raw.command.consumer_id
-    consumer_stats = Map.fetch!(Utils.collect_flow_stats(), consumer_id)
 
-    assert consumer_stats.event_count == 1
-    assert consumer_stats.requested_total == 1000
+    # The window never falls far enough to be topped up, so the initial grant is the only one.
+    assert_granted(consumer_id, 1000)
+    refute_granted(consumer_id)
+  end
+
+  # Every test listening for this event is sent every consumer's, so the id picks out ours.
+  defp assert_granted(consumer_id, permits) do
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @flow_control,
+                      metadata: %{consumer_id: ^consumer_id, permits_requested: ^permits}
+                    }}
+  end
+
+  defp refute_granted(consumer_id) do
+    refute_receive {:telemetry_event, %{event: @flow_control, metadata: %{consumer_id: ^consumer_id}}}
   end
 end

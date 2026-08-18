@@ -1,12 +1,17 @@
-Logger.configure(level: :info)
-
 Application.put_env(:junit_formatter, :report_dir, "test/reports")
 Application.put_env(:junit_formatter, :report_file, "junit.xml")
 Application.put_env(:junit_formatter, :automatic_create_dir?, true)
 
 Application.ensure_all_started(:telemetry_test)
 
-ExUnit.configure(formatters: [ExUnit.CLIFormatter, JUnitFormatter])
+# Most of what a test waits on here is a broker round trip, which the 100ms default does not
+# cover. refute_receive keeps its own, shorter default, so asserting absence stays quick.
+ExUnit.configure(
+  formatters: [ExUnit.CLIFormatter, JUnitFormatter],
+  capture_log: true,
+  assert_receive_timeout: 5_000
+)
+
 ExUnit.start()
 
 # The CLI tag filters are already applied when this file loads, so we can skip

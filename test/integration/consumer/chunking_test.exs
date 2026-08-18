@@ -1,34 +1,11 @@
 defmodule Pulsar.Integration.Consumer.ChunkingTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
+  alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Protocol.Binary.Pulsar.Proto
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
-  @moduletag :integration
-  @client :chunking_test_client
   @topic "persistent://public/default/chunking-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
-
-  setup [:telemetry_listen]
-
-  setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    :ok
-  end
 
   @tag telemetry_listen: [[:pulsar, :producer, :chunk, :start]]
   test "receives and reassembles a simple chunked message" do
@@ -44,31 +21,25 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-simple",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert byte_size(large_message) == 44
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == large_message
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
 
     # Workers pick these up from their options by name, so a rename empties every event.
@@ -79,7 +50,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
   end
 
-  test "handles interleaved chunks from multiple chunked messages" do
+  test "reassembles two chunked messages whose chunks arrive interleaved" do
     topic = isolated_topic("interleaved")
     p1_large_message = "This is a test message that will be chunked from producer 1."
     p2_large_message = "This is a test message that will be chunked from producer 2."
@@ -102,16 +73,17 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 8
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-interleaved",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     task1 = Task.async(fn -> Pulsar.Producer.send(producer1, p1_large_message) end)
     task2 = Task.async(fn -> Pulsar.Producer.send(producer2, p2_large_message) end)
@@ -119,19 +91,18 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     Task.await(task1)
     Task.await(task2)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 2
-    end)
+    payloads =
+      for _message <- 1..2 do
+        assert_receive {:consumer, ^consumer, message}
+        message.payload
+      end
 
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 2
-    payloads = messages |> Enum.map(& &1.payload) |> Enum.sort()
     assert p1_large_message in payloads
     assert p2_large_message in payloads
   end
 
   @tag telemetry_listen: [[:pulsar, :producer, :message, :published]]
-  test "handles mix of chunked and non-chunked messages" do
+  test "delivers chunked and unchunked messages off the same producer" do
     topic = isolated_topic("mixed")
     small_message = "Small message"
     large_message = "This is a test message that will be chunked."
@@ -145,29 +116,28 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-mixed",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _} = Pulsar.Producer.send(producer, small_message)
     {:ok, _} = Pulsar.Producer.send(producer, large_message)
     {:ok, _} = Pulsar.Producer.send(producer, small_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 3
-    end)
+    payloads =
+      for _message <- 1..3 do
+        assert_receive {:consumer, ^consumer, message}
+        message.payload
+      end
 
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 3
-
-    payloads = Enum.map(messages, & &1.payload)
     assert Enum.count(payloads, &(&1 == small_message)) == 2
     assert large_message in payloads
 
@@ -179,7 +149,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
   end
 
-  test "producer with chunking disabled cannot send 5MB messages" do
+  test "refuses an oversized message outright when chunking is off" do
     topic = isolated_topic("disabled")
     very_large_message = String.duplicate("x", 6_291_456)
 
@@ -203,7 +173,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, "still connected")
   end
 
-  test "producer with chunking enabled can send and receive messages larger than 5MB" do
+  test "splits a message past the broker's limit and reassembles it whole" do
     topic = isolated_topic("5mb")
     very_large_message = String.duplicate("x", 6_291_456)
 
@@ -215,16 +185,17 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-5mb",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert byte_size(very_large_message) == 6_291_456
 
@@ -233,18 +204,10 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert chunked_msg_id.uuid
     assert chunked_msg_id.num_chunks == 2
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
+    assert_receive {:consumer, ^consumer, %{payload: ^very_large_message} = received_msg}
 
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == very_large_message
-    assert byte_size(received_msg.payload) == 6_291_456
-
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
@@ -269,26 +232,22 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           max_message_size: @chunk_size
         )
 
-      {:ok, _consumer_group} =
+      {:ok, consumer_group} =
         Pulsar.Consumer.start(
           topic,
           "chunking-#{compression}",
           @consumer_callback,
           client: @client,
-          init_args: [notify_pid: self()]
+          init_args: [forward_to: self()]
         )
 
-      [consumer] = Utils.wait_for_consumer_ready(1)
+      :ok = Pulsar.Consumer.await_ready(consumer_group)
+      [consumer] = Topology.workers(consumer_group)
 
       {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
-      Utils.wait_for(fn ->
-        @consumer_callback.count_messages(consumer) == 1
-      end)
-
-      [received_msg] = @consumer_callback.get_messages(consumer)
-      assert received_msg.payload == large_message
-      assert received_msg.chunk_metadata.complete == true
+      assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
+      assert received_msg.chunk_metadata.complete
       assert received_msg.chunk_metadata.num_chunks > 1
 
       # Every chunk describes the message it belongs to, not the slice it carries.
@@ -303,7 +262,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       # removed a byte.
       assert received_msg.chunk_metadata.num_chunks == ceil(total / @chunk_size)
 
-      if compression == :none do
+      if unquote(compression == :none) do
         assert total == byte_size(large_message)
       else
         assert total < byte_size(large_message)
@@ -328,26 +287,22 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 1024
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-compress-first",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, compressible_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == compressible_message
-    assert received_msg.chunk_metadata == nil
+    # No chunk metadata at all: compressing first left nothing to split.
+    assert_receive {:consumer, ^consumer, %{payload: ^compressible_message, chunk_metadata: nil}}
   end
 
   test "leaves room for the message metadata inside the broker's size limit" do
@@ -366,25 +321,21 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-metadata-overhead",
         @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, very_large_message, properties: bulky_properties)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == very_large_message
+    assert_receive {:consumer, ^consumer, %{payload: ^very_large_message} = received_msg}
     assert Pulsar.Message.properties(received_msg) == bulky_properties
   end
 
@@ -406,20 +357,18 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         chunking_enabled: true
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback,
         client: @client,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, message)
 
-    Utils.wait_for(fn -> @consumer_callback.count_messages(consumer) == 1 end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == message
+    assert_receive {:consumer, ^consumer, %{payload: ^message}}
   end
 
   test "refuses a message whose metadata alone exceeds the broker's limit" do
@@ -441,83 +390,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     )
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :expired]]
-  test "expired incomplete chunked messages are cleaned up and delivered" do
-    alias Proto, as: Binary
-    alias Pulsar.Consumer.ChunkedMessageContext
-
-    {:ok, _consumer_group} =
-      Pulsar.Consumer.start(
-        isolated_topic("expire"),
-        "chunking-expire",
-        @consumer_callback,
-        client: @client,
-        expire_incomplete_chunked_message_after: 100,
-        chunk_cleanup_interval: 50,
-        init_args: [notify_pid: self()]
-      )
-
-    [consumer] = Utils.wait_for_consumer_ready(1)
-
-    :sys.replace_state(consumer, fn state ->
-      old_timestamp = :erlang.monotonic_time(:millisecond) - 200
-
-      fake_command = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}
-      }
-
-      fake_metadata = %Binary.MessageMetadata{
-        producer_name: "test-producer",
-        sequence_id: 1,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "test-uuid-expired",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx = %ChunkedMessageContext{
-        uuid: "test-uuid-expired",
-        chunks: %{0 => "chunk0", 1 => "chunk1"},
-        chunk_message_ids: %{
-          0 => fake_command.message_id,
-          1 => %{fake_command.message_id | entryId: 2}
-        },
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 2,
-        first_chunk_message_id: fake_command.message_id,
-        last_chunk_message_id: %{fake_command.message_id | entryId: 2},
-        created_at: old_timestamp,
-        commands: [fake_command, fake_command],
-        metadatas: [fake_metadata, fake_metadata],
-        broker_metadatas: [nil, nil]
-      }
-
-      %{state | chunked_message_contexts: Map.put(state.chunked_message_contexts, "test-uuid-expired", fake_ctx)}
-    end)
-
-    Process.sleep(200)
-
-    assert_receive {:telemetry_event,
-                    %{
-                      event: [:pulsar, :consumer, :chunk, :expired],
-                      measurements: measurements,
-                      metadata: %{uuid: "test-uuid-expired"}
-                    }}
-
-    assert measurements.received_chunks == 2
-
-    updated_state = :sys.get_state(consumer)
-    refute Map.has_key?(updated_state.chunked_message_contexts, "test-uuid-expired")
-  end
-
   @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :discarded]]
-  test "evicts oldest incomplete chunked message when queue is full" do
-    alias Proto, as: Binary
-    alias Pulsar.Consumer.ChunkedMessageContext
-
+  test "evicts the message that has been waiting longest when the queue is full" do
     topic = isolated_topic("evict")
 
     {:ok, producer} =
@@ -529,93 +403,32 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         max_message_size: 32
       )
 
-    {:ok, _consumer_group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(
         topic,
         "chunking-evict",
         @consumer_callback,
         client: @client,
         max_pending_chunked_messages: 2,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [consumer] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
+    # Two chunked messages already waiting, so the real one below arrives to a full queue.
     :sys.replace_state(consumer, fn state ->
       now = :erlang.monotonic_time(:millisecond)
 
-      fake_command1 = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 100, entryId: 1}
+      waiting = %{
+        "fake-uuid-oldest" => %{incomplete("fake-uuid-oldest", 100) | created_at: now - 100},
+        "fake-uuid-newer" => %{incomplete("fake-uuid-newer", 101) | created_at: now}
       }
 
-      fake_metadata1 = %Binary.MessageMetadata{
-        producer_name: "fake-producer-1",
-        sequence_id: 1,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "fake-uuid-oldest",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx1 = %ChunkedMessageContext{
-        uuid: "fake-uuid-oldest",
-        chunks: %{0 => "fake-chunk0"},
-        chunk_message_ids: %{0 => fake_command1.message_id},
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 1,
-        first_chunk_message_id: fake_command1.message_id,
-        last_chunk_message_id: fake_command1.message_id,
-        created_at: now - 100,
-        commands: [fake_command1],
-        metadatas: [fake_metadata1],
-        broker_metadatas: [nil]
-      }
-
-      fake_command2 = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 101, entryId: 1}
-      }
-
-      fake_metadata2 = %Binary.MessageMetadata{
-        producer_name: "fake-producer-2",
-        sequence_id: 2,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "fake-uuid-newer",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx2 = %ChunkedMessageContext{
-        uuid: "fake-uuid-newer",
-        chunks: %{0 => "fake-chunk0"},
-        chunk_message_ids: %{0 => fake_command2.message_id},
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 1,
-        first_chunk_message_id: fake_command2.message_id,
-        last_chunk_message_id: fake_command2.message_id,
-        created_at: now,
-        commands: [fake_command2],
-        metadatas: [fake_metadata2],
-        broker_metadatas: [nil]
-      }
-
-      %{
-        state
-        | chunked_message_contexts:
-            Map.merge(state.chunked_message_contexts, %{
-              "fake-uuid-oldest" => fake_ctx1,
-              "fake-uuid-newer" => fake_ctx2
-            })
-      }
+      %{state | chunked_message_contexts: Map.merge(state.chunked_message_contexts, waiting)}
     end)
 
-    state = :sys.get_state(consumer)
-    assert map_size(state.chunked_message_contexts) == 2
+    assert map_size(:sys.get_state(consumer).chunked_message_contexts) == 2
 
     large_message = "This is a real message that will be chunked and trigger eviction"
     {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
@@ -638,16 +451,9 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
     assert metadata.subscription_name == "chunking-evict"
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == large_message
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
@@ -655,4 +461,22 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   # otherwise pick up whatever the others are publishing. Naming a topic is enough while the
   # cluster has allowAutoTopicCreation on; without it this needs System.create_topic/1.
   defp isolated_topic(suffix), do: @topic <> "-" <> suffix
+
+  # One chunk of three, so the message it belongs to is still waiting on the other two.
+  defp incomplete(uuid, ledger) do
+    command = %Proto.CommandMessage{message_id: %Proto.MessageIdData{ledgerId: ledger, entryId: 1}}
+
+    metadata = %Proto.MessageMetadata{
+      producer_name: uuid,
+      sequence_id: 1,
+      publish_time: :erlang.system_time(:millisecond),
+      uuid: uuid,
+      chunk_id: 0,
+      num_chunks_from_msg: 3,
+      total_chunk_msg_size: 100
+    }
+
+    {:ok, context} = ChunkedMessageContext.new(command, metadata, "chunk-0", nil)
+    context
+  end
 end

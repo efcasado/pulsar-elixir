@@ -1,21 +1,9 @@
 defmodule Pulsar.Integration.Consumer.SchemaTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :consumer_schema_test_client
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  test "consumer successfully registers schema with broker" do
+  test "subscribes with a schema and reads what was published under it" do
     topic = "persistent://public/default/consumer-schema-registration-test-#{:erlang.unique_integer([:positive])}"
 
     producer_pid = start_producer(topic, schema: [type: :String])
@@ -25,15 +13,12 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert %{schema: schema} = state
     assert schema.type == :String
 
-    # Verify messages can be sent and received
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
-    assert message.payload == "test message"
+    assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
-  test "consumer can subscribe without schema" do
+  test "subscribes without one, and reads a schema-carrying topic anyway" do
     topic = "persistent://public/default/consumer-no-schema-test-#{:erlang.unique_integer([:positive])}"
 
     producer_pid = start_producer(topic, schema: [type: :String])
@@ -43,13 +28,11 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert state.schema == nil
 
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
-    assert message.payload == "test message"
+    assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
-  test "incompatible schema types are rejected" do
+  test "a consumer whose schema the topic will not accept never becomes ready" do
     topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
 
     start_producer(topic, schema: [type: :String])
@@ -64,50 +47,41 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
       )
 
     :ok = Topology.await_ready(consumer_group, 1_000)
-    Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
 
-    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 0) ==
-             {:error, :timeout}
+    # The topology comes up, but its worker cannot subscribe under a schema the topic refuses,
+    # so it gives up rather than ever becoming ready.
+    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(consumer_group) == []
 
     assert Process.alive?(consumer_group)
     assert consumer_group in Pulsar.Client.consumers(@client)
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
 
+    ref = Process.monitor(consumer_group)
     assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}
     refute consumer_group in Pulsar.Client.consumers(@client)
   end
 
   defp start_producer(topic, opts) do
     {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
 
-    Utils.wait_for(fn -> Topology.workers(pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(pid)
 
     pid
   end
 
   defp start_consumer(topic, sub_name, opts \\ []) do
-    {:ok, _} =
+    {:ok, group} =
       Pulsar.Consumer.start(
         topic,
         sub_name,
         DummyConsumer,
-        Keyword.merge(
-          [
-            client: @client,
-            initial_position: :earliest,
-            init_args: [notify_pid: self()]
-          ],
-          opts
-        )
+        Keyword.merge([client: @client, initial_position: :earliest, init_args: [forward_to: self()]], opts)
       )
 
-    [pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(group)
+    [pid] = Topology.workers(group)
     pid
   end
 end

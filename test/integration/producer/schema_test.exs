@@ -1,21 +1,9 @@
 defmodule Pulsar.Integration.Producer.SchemaTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :producer_schema_test_client
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  test "json schema" do
+  test "registers a Json schema and carries it on what it publishes" do
     topic = "persistent://public/default/producer-schema-test-json"
     :ok = System.create_topic(topic)
     json_definition = %{type: "record", name: "TestRecord", fields: [%{name: "name", type: "string"}]}
@@ -29,7 +17,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
   end
 
-  test "avro schema" do
+  test "registers an Avro schema and carries it on what it publishes" do
     topic = "persistent://public/default/producer-schema-test-avro"
     :ok = System.create_topic(topic)
 
@@ -58,7 +46,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     defstruct [:type, :name, :fields]
   end
 
-  test "json schema with struct definition" do
+  test "encodes a struct definition to the JSON the broker stores" do
     topic = "persistent://public/default/producer-schema-test-json-struct"
     :ok = System.create_topic(topic)
 
@@ -81,7 +69,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
   end
 
-  test "batched messages work with schema" do
+  test "applies the schema to messages that go out in a batch" do
     topic = "persistent://public/default/schema-with-batching-test"
     :ok = System.create_topic(topic)
 
@@ -100,12 +88,12 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
     assert Enum.all?(results, &match?({:ok, _}, &1))
 
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 3 end)
-    received = consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
-    assert Enum.all?(messages, &(&1 in received))
+    for _message <- messages do
+      assert_receive {:consumer, ^consumer_pid, _message}
+    end
   end
 
-  test "we get schema version from broker" do
+  test "records the version the broker assigned the schema" do
     topic = "persistent://public/default/producer-schema-version-test"
     :ok = System.create_topic(topic)
 
@@ -117,7 +105,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert is_binary(version), "expected schema_version to be binary, got: #{inspect(version)}"
   end
 
-  test "message metadata includes schema version" do
+  test "stamps each message with the schema version it was published under" do
     topic = "persistent://public/default/producer-schema-msg-version-test"
     :ok = System.create_topic(topic)
 
@@ -125,13 +113,12 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     consumer_pid = start_consumer(topic, "schema-version-sub")
 
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
+    assert_receive {:consumer, ^consumer_pid, message}
     assert message.raw.metadata.schema_version
   end
 
-  test "incompatible schema types are rejected on same topic" do
+  test "a producer whose schema the topic will not accept never becomes ready" do
     topic = "persistent://public/default/producer-schema-compat-test"
     :ok = System.create_topic(topic)
 
@@ -145,21 +132,23 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       )
 
     :ok = Topology.await_ready(producer_group, 1_000)
-    Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
 
-    assert Pulsar.Producer.await_ready(producer_group, timeout: 0) ==
-             {:error, :timeout}
+    # The topology comes up, but its worker cannot register under a schema the topic refuses,
+    # so it gives up rather than ever becoming ready.
+    assert Pulsar.Producer.await_ready(producer_group, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(producer_group) == []
 
     assert Process.alive?(producer_group)
     assert producer_group in Pulsar.Client.producers(@client)
     assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
 
+    ref = Process.monitor(producer_group)
     assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(producer_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_group, _reason}
     refute producer_group in Pulsar.Client.producers(@client)
   end
 
-  test "compatible schema changes produce different versions" do
+  test "an evolved schema is stored as a new version of the old one" do
     topic = "persistent://public/default/producer-schema-evolution-test"
     :ok = System.create_topic(topic)
 
@@ -207,36 +196,32 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
   defp start_producer(topic, opts) do
     {:ok, pid} = Pulsar.Producer.start(topic, Keyword.merge([client: @client], opts))
 
-    Utils.wait_for(fn -> Topology.workers(pid) end,
-      until: fn
-        [producer] -> :sys.get_state(producer).ready
-        _workers -> false
-      end
-    )
+    :ok = Pulsar.Producer.await_ready(pid)
 
     pid
   end
 
   defp start_consumer(topic, sub_name) do
-    {:ok, _} =
+    {:ok, group} =
       Pulsar.Consumer.start(topic, sub_name, DummyConsumer,
         client: @client,
         initial_position: :earliest,
-        init_args: [notify_pid: self()]
+        init_args: [forward_to: self()]
       )
 
-    [pid] = Utils.wait_for_consumer_ready(1)
+    :ok = Pulsar.Consumer.await_ready(group)
+    [pid] = Topology.workers(group)
     pid
   end
 
   defp get_producer_state(producer_pid) do
-    [producer] = Utils.wait_for(fn -> Topology.workers(producer_pid) end, until: &match?([_], &1))
+    [producer] = Topology.workers(producer_pid)
     :sys.get_state(producer)
   end
 
   defp assert_send(producer_pid, consumer_pid, payload) do
     {:ok, _} = Pulsar.Producer.send(producer_pid, payload)
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
-    assert [%{payload: ^payload}] = DummyConsumer.get_messages(consumer_pid)
+
+    assert_receive {:consumer, ^consumer_pid, %{payload: ^payload}}
   end
 end

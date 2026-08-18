@@ -1,113 +1,55 @@
 defmodule Pulsar.Integration.Reader.CommonTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_common_test_client
   @topic "persistent://public/default/reader-common-test"
   @num_messages 100
 
   setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_common_test_producer
-      )
-
-    for i <- 1..@num_messages do
-      payload = "Message #{i}"
-
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:reader_common_test_producer, payload, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    Utils.seed_topic(@topic, Enum.map(1..@num_messages, &"Message #{&1}"), client: @client)
 
     :ok
   end
 
-  test "basic streaming with Enum.take" do
-    result =
+  # Without a :timeout the stream waits on the topic rather than ending, so taking a few
+  # messages from it returning at all is the laziness: nothing here reads the other 95.
+  test "is lazy, and composes with the Stream functions" do
+    payloads =
       @topic
       |> Pulsar.Reader.stream(client: @client)
+      |> Stream.map(& &1.payload)
+      |> Stream.filter(&String.ends_with?(&1, "0"))
       |> Enum.take(5)
 
-    assert length(result) == 5
+    assert payloads == Enum.map([10, 20, 30, 40, 50], &"Message #{&1}")
   end
 
-  test "stream pipeline with lazy evaluation" do
-    result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
-      |> Stream.map(fn msg -> String.replace(msg.payload, "Message ", "") end)
-      |> Stream.map(&String.to_integer/1)
-      |> Stream.filter(fn n -> rem(n, 2) == 0 end)
-      |> Enum.take(5)
+  test "reads the topic from the start again on each enumeration" do
+    stream = Pulsar.Reader.stream(@topic, client: @client)
 
-    assert result == [2, 4, 6, 8, 10]
+    assert Enum.map(Enum.take(stream, 3), & &1.payload) == ["Message 1", "Message 2", "Message 3"]
+    assert Enum.map(Enum.take(stream, 3), & &1.payload) == ["Message 1", "Message 2", "Message 3"]
   end
 
-  test "each enumeration restarts from beginning" do
-    stream =
-      Pulsar.Reader.stream(@topic, client: @client)
-
-    first_batch = Enum.take(stream, 3)
-    second_batch = Enum.take(stream, 3)
-
-    assert Enum.map(first_batch, & &1.payload) == ["Message 1", "Message 2", "Message 3"]
-    assert Enum.map(second_batch, & &1.payload) == ["Message 1", "Message 2", "Message 3"]
-  end
-
-  test "Stream.take vs Enum.take in pipeline" do
-    result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
-      |> Stream.take(10)
-      |> Stream.map(fn msg -> msg.payload end)
-      |> Enum.take(5)
-
-    assert result == ["Message 1", "Message 2", "Message 3", "Message 4", "Message 5"]
-  end
-
-  test "process all messages with Enum.each" do
-    counter = :counters.new(1, [:atomics])
-
-    @topic
-    |> Pulsar.Reader.stream(client: @client, timeout: 100)
-    |> Enum.each(fn _msg -> :counters.add(counter, 1, 1) end)
-
-    assert :counters.get(counter, 1) == @num_messages
-  end
-
-  test "consume in chunks using Stream.chunk_every" do
-    chunks =
+  test "ends once the topic is drained, given a timeout to end on" do
+    payloads =
       @topic
       |> Pulsar.Reader.stream(client: @client, timeout: 100)
-      |> Stream.map(& &1.payload)
-      |> Stream.chunk_every(3)
-      |> Enum.to_list()
+      |> Enum.map(& &1.payload)
 
-    assert length(chunks) == 34
-    assert hd(chunks) == ["Message 1", "Message 2", "Message 3"]
-    assert List.last(chunks) == ["Message 100"]
+    assert payloads == Enum.map(1..@num_messages, &"Message #{&1}")
   end
 
-  test "empty stream when no messages available from latest" do
+  test "closes the consumer it opened once the stream is done with it" do
+    assert @topic
+           |> Pulsar.Reader.stream(client: @client, timeout: 100)
+           |> Enum.count() == @num_messages
+
+    Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end,
+      description: "the reader's consumer to be removed from the client"
+    )
+  end
+
+  test "reading from :latest yields nothing published before it" do
     unique_topic = "persistent://public/default/reader-empty-#{:erlang.unique_integer([:positive])}"
 
     {:ok, _producer} =

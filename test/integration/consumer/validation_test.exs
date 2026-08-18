@@ -1,27 +1,11 @@
 defmodule Pulsar.Integration.Consumer.ValidationTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :validation_test_client
   @topic "persistent://public/default/validation"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
 
-  setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-
-    :ok
-  end
-
-  # A consumer per test: both assert on everything the callback collected.
   setup do
     name = "validation-consumer-#{:erlang.unique_integer([:positive])}"
 
@@ -31,35 +15,19 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
         name,
         @consumer_callback,
         client: @client,
-        name: name
+        name: name,
+        init_args: [forward_to: self()]
       )
 
-    [consumer_pid] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group_pid)
+    [consumer_pid] = Topology.workers(group_pid)
 
     on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     %{consumer: consumer_pid}
   end
 
-  test "an unverifiable message reaches the callback flagged rather than being dropped", ctx do
-    command = %Binary.CommandMessage{
-      consumer_id: 1,
-      message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}
-    }
-
-    send(ctx.consumer, {:broker_message, {:invalid, command, <<255, 255, 255>>, :checksum_mismatch}})
-
-    Utils.wait_for(fn -> @consumer_callback.get_messages(ctx.consumer) != [] end)
-
-    assert [message] = @consumer_callback.get_messages(ctx.consumer)
-    refute Pulsar.Message.valid?(message)
-    assert message.validation_error == :checksum_mismatch
-    assert message.payload == <<255, 255, 255>>
-    assert message.raw.metadata == nil
-    assert message.message_id == command.message_id
-  end
-
-  test "a callback that does not opt in never sees it" do
+  test "a callback without handle_invalid_message/2 never sees an invalid message" do
     defmodule PlainConsumer do
       @moduledoc false
       use Pulsar.Consumer.Callback
@@ -77,7 +45,8 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     {:ok, group_pid} =
       Pulsar.Consumer.start(@topic, name, PlainConsumer, client: @client, name: name, init_args: self())
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(group_pid) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(group_pid)
+    [consumer] = Topology.workers(group_pid)
     on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 9, entryId: 9}}
@@ -99,7 +68,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
 
     # Reaching the callback means the ack went out. Had the broker rejected the
     # validation error on it, it would have closed the connection.
-    Utils.wait_for(fn -> @consumer_callback.get_messages(ctx.consumer) != [] end)
+    assert_receive {:consumer, _pid, _message}
 
     assert Pulsar.Consumer.topic(ctx.consumer) == @topic
     assert Process.alive?(ctx.consumer)

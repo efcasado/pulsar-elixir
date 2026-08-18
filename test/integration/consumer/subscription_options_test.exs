@@ -1,14 +1,6 @@
 defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :subscription_options_test_client
   @topic "persistent://public/default/subscription-options-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
@@ -21,38 +13,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    {:ok, producer} = Pulsar.Producer.start(@topic, client: @client, name: "subscription-options-seed")
+    :ok = Pulsar.Producer.await_ready(producer)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :subscription_options_producer
-      )
-
+    # "consuming from timestamp" seeks to one message's publish time, which can only name that
+    # message if no two share a stamp. The producer stamps to the millisecond as it sends, so
+    # these go a millisecond apart rather than together.
     for {key, payload} <- @messages do
-      Utils.wait_for(
-        fn ->
-          Pulsar.Producer.send(:subscription_options_producer, payload, partition_key: key, client: @client)
-        end,
-        until: &match?({:ok, _message_id}, &1)
-      )
+      Process.sleep(2)
+      {:ok, _message_id} = Pulsar.Producer.send(producer, payload, partition_key: key)
     end
 
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
-
-  setup [:telemetry_listen]
 
   test ":name names the group, and each consumer is named after it on the broker" do
     {:ok, group} =
@@ -62,15 +35,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         @consumer_callback,
         client: @client,
         name: "naming-group",
-        consumer_count: 2
+        consumer_count: 2,
+        init_args: [forward_to: self()]
       )
 
     on_exit(fn -> Pulsar.Consumer.stop("naming-group", client: @client) end)
 
-    workers =
-      Utils.wait_for(fn -> Topology.workers(group) end,
-        until: fn workers -> length(workers) == 2 end
-      )
+    :ok = Pulsar.Consumer.await_ready(group)
+    workers = Topology.workers(group)
 
     names =
       workers
@@ -80,7 +52,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert names == ["naming-group-1", "naming-group-2"]
   end
 
-  test "initial_position latest skips existing messages", %{expected_count: _expected_count} do
+  test ":latest starts past what the topic already held" do
     {:ok, latest_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -89,17 +61,13 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:latest)
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(latest_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(latest_group)
+    [consumer] = Topology.workers(latest_group)
 
-    # Give it time to potentially receive messages (if bug)
-    Process.sleep(1000)
-
-    # Should get no messages since they were published before subscription
-    count = @consumer_callback.count_messages(consumer)
-    assert count == 0
+    refute_receive {:consumer, ^consumer, _message}, 1_000
   end
 
-  test "initial_position earliest reads all messages", %{expected_count: expected_count} do
+  test ":earliest starts at the beginning of the topic", %{expected_count: expected_count} do
     {:ok, earliest_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -108,18 +76,13 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [consumer] = Utils.wait_for(fn -> Topology.workers(earliest_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(earliest_group)
+    [consumer] = Topology.workers(earliest_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
-
-    count = @consumer_callback.count_messages(consumer)
-    assert count == expected_count
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
   end
 
-  test "consuming from specific message ID", %{expected_count: expected_count} do
-    # First consumer to get messages and determine starting point
+  test ":start_message_id starts at the message it names", %{expected_count: expected_count} do
     {:ok, setup_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -128,15 +91,11 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [setup_consumer] = Utils.wait_for(fn -> Topology.workers(setup_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(setup_group)
+    [setup_consumer] = Topology.workers(setup_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(setup_consumer) == expected_count
-    end)
+    [_message1, message2 | _] = receive_messages(setup_consumer, expected_count)
 
-    [_message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
-
-    # Start consumer from second message
     message_id = {message2.raw.command.message_id.ledgerId, message2.raw.command.message_id.entryId}
 
     {:ok, message_id_group} =
@@ -147,19 +106,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_message_id: message_id)
       )
 
-    [message_id_consumer] =
-      Utils.wait_for(fn -> Topology.workers(message_id_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(message_id_group)
+    [message_id_consumer] = Topology.workers(message_id_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(message_id_consumer) == expected_count - 1
-    end)
-
-    [first_received | _] = @consumer_callback.get_messages(message_id_consumer)
+    [first_received | _] = receive_messages(message_id_consumer, expected_count - 1)
     assert first_received.payload == message2.payload
   end
 
-  test "consuming from timestamp", %{expected_count: expected_count} do
-    # First consumer to get messages and determine timestamp
+  test ":start_timestamp starts at the first message published at or after it", %{expected_count: expected_count} do
     {:ok, setup_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -168,16 +122,12 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest)
       )
 
-    [setup_consumer] = Utils.wait_for(fn -> Topology.workers(setup_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(setup_group)
+    [setup_consumer] = Topology.workers(setup_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(setup_consumer) == expected_count
-    end)
-
-    [message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
+    [message1, message2 | _] = receive_messages(setup_consumer, expected_count)
     publish_time = publish_time_from_message(message2)
 
-    # Start from second message's timestamp
     {:ok, timestamp_group1} =
       Pulsar.Consumer.start(
         @topic,
@@ -186,7 +136,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_timestamp: publish_time)
       )
 
-    # Start from beginning (timestamp 0)
     {:ok, timestamp_group2} =
       Pulsar.Consumer.start(
         @topic,
@@ -195,7 +144,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_timestamp: 0)
       )
 
-    # Start from future (should get no messages)
     future_timestamp = 32_503_683_600_000
 
     {:ok, timestamp_group3} =
@@ -206,32 +154,24 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, start_timestamp: future_timestamp)
       )
 
-    [timestamp_consumer1] =
-      Utils.wait_for(fn -> Topology.workers(timestamp_group1) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(timestamp_group1)
+    [timestamp_consumer1] = Topology.workers(timestamp_group1)
 
-    [timestamp_consumer2] =
-      Utils.wait_for(fn -> Topology.workers(timestamp_group2) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(timestamp_group2)
+    [timestamp_consumer2] = Topology.workers(timestamp_group2)
 
-    [timestamp_consumer3] =
-      Utils.wait_for(fn -> Topology.workers(timestamp_group3) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(timestamp_group3)
+    [timestamp_consumer3] = Topology.workers(timestamp_group3)
 
-    Utils.wait_for(fn ->
-      messages1 = @consumer_callback.get_messages(timestamp_consumer1)
-      messages2 = @consumer_callback.get_messages(timestamp_consumer2)
-
-      messages1 != [] and messages2 != []
-    end)
-
-    [first_message1 | _] = @consumer_callback.get_messages(timestamp_consumer1)
-    [first_message2 | _] = @consumer_callback.get_messages(timestamp_consumer2)
-    future_messages = @consumer_callback.get_messages(timestamp_consumer3)
+    assert_receive {:consumer, ^timestamp_consumer1, first_message1}
+    assert_receive {:consumer, ^timestamp_consumer2, first_message2}
 
     assert first_message1.payload == message2.payload
     assert first_message2.payload == message1.payload
-    assert future_messages == []
+    refute_receive {:consumer, ^timestamp_consumer3, _message}
   end
 
-  test "durable subscription persists after consumer stops" do
+  test "a durable subscription outlives the consumer that took it" do
     {:ok, durable_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -240,17 +180,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, durable: true)
       )
 
-    [durable_consumer] = Utils.wait_for(fn -> Topology.workers(durable_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(durable_group)
+    [durable_consumer] = Topology.workers(durable_group)
 
+    ref = Process.monitor(durable_consumer)
     :ok = Pulsar.Consumer.stop(durable_group)
 
-    Utils.wait_for(fn -> not Process.alive?(durable_consumer) end)
+    assert_receive {:DOWN, ^ref, :process, ^durable_consumer, _reason}
 
     {:ok, subscriptions} = System.topic_subscriptions(@topic)
     assert "durable" in subscriptions
   end
 
-  test "await_ready waits for subscription and callback initialization" do
+  test "await_ready/2 waits for the subscription and the callback, and honours its timeout" do
     {:ok, consumer} =
       Pulsar.Consumer.start(
         @topic,
@@ -265,7 +207,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert :ok = Pulsar.Consumer.stop(consumer, client: @client)
   end
 
-  test "non-durable subscription is removed after consumer stops" do
+  test "a non-durable subscription goes with the consumer that took it" do
     {:ok, non_durable_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -274,18 +216,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, durable: false)
       )
 
-    [non_durable_consumer] =
-      Utils.wait_for(fn -> Topology.workers(non_durable_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(non_durable_group)
+    [non_durable_consumer] = Topology.workers(non_durable_group)
 
+    ref = Process.monitor(non_durable_consumer)
     :ok = Pulsar.Consumer.stop(non_durable_group)
 
-    Utils.wait_for(fn -> not Process.alive?(non_durable_consumer) end)
+    assert_receive {:DOWN, ^ref, :process, ^non_durable_consumer, _reason}
 
     {:ok, subscriptions} = System.topic_subscriptions(@topic)
     refute "non-durable" in subscriptions
   end
 
-  test "consumer fails when force_create_topic is false and topic does not exist" do
+  test "force_create_topic: false leaves the consumer running with no workers" do
     non_existent_topic = "persistent://public/default/subscription-options-non-existent"
 
     {:ok, no_force_create_group} =
@@ -297,21 +240,23 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
       )
 
     :ok = Topology.await_ready(no_force_create_group, 1_000)
-    Utils.wait_for(fn -> Topology.workers(no_force_create_group) == [] end)
 
-    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 0) ==
-             {:error, :timeout}
+    # The topic does not exist and this consumer will not create one, so its worker gives up
+    # rather than ever becoming ready.
+    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(no_force_create_group) == []
 
     assert Process.alive?(no_force_create_group)
     assert no_force_create_group in Pulsar.Client.consumers(@client)
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
 
+    ref = Process.monitor(no_force_create_group)
     assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, _reason}
     refute no_force_create_group in Pulsar.Client.consumers(@client)
   end
 
-  test "read_compacted filters compacted messages", %{expected_count: expected_count} do
+  test "read_compacted reads the last message per key, not every message", %{expected_count: expected_count} do
     :ok = System.compact_topic(@topic)
 
     Utils.wait_for(fn -> System.compacted_topic?(@topic) end)
@@ -324,8 +269,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, read_compacted: true)
       )
 
-    [compacted_consumer] =
-      Utils.wait_for(fn -> Topology.workers(compacted_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(compacted_group)
+    [compacted_consumer] = Topology.workers(compacted_group)
 
     {:ok, non_compacted_group} =
       Pulsar.Consumer.start(
@@ -335,34 +280,34 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, read_compacted: false)
       )
 
-    [non_compacted_consumer] =
-      Utils.wait_for(fn -> Topology.workers(non_compacted_group) end, until: &match?([_], &1))
+    :ok = Pulsar.Consumer.await_ready(non_compacted_group)
+    [non_compacted_consumer] = Topology.workers(non_compacted_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(compacted_consumer) == 4 and
-        @consumer_callback.count_messages(non_compacted_consumer) == expected_count
-    end)
-
-    compacted_messages = @consumer_callback.get_messages(compacted_consumer)
-
+    compacted_messages = receive_messages(compacted_consumer, 4)
     compacted_messages_map = Map.new(compacted_messages, &{Pulsar.Message.key(&1), &1.payload})
-
-    assert Enum.count(compacted_messages) == 4
 
     assert compacted_messages_map["key1"] == "Message 2 for key1"
     assert compacted_messages_map["key2"] == "Message 2 for key2"
     assert compacted_messages_map["key3"] == "Message 1 for key3"
     assert compacted_messages_map["key4"] == "Message 1 for key4"
 
-    non_compacted_count = @consumer_callback.count_messages(non_compacted_consumer)
-    assert non_compacted_count == expected_count
+    # Every message, including the ones compaction superseded.
+    receive_messages(non_compacted_consumer, expected_count)
+  end
+
+  defp receive_messages(consumer, count) do
+    for _message <- 1..count do
+      assert_receive {:consumer, ^consumer, message}
+      message
+    end
   end
 
   defp subscription_options(initial_position, opts \\ []) do
     [
       client: @client,
       subscription_type: :exclusive,
-      initial_position: initial_position
+      initial_position: initial_position,
+      init_args: [forward_to: self()]
     ] ++ opts
   end
 

@@ -1,42 +1,20 @@
 defmodule Pulsar.Integration.AccessModesTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :access_modes_test_client
   @shared_topic "persistent://public/default/producer-shared-test"
   @exclusive_topic "persistent://public/default/producer-exclusive-test"
   @wait_exclusive_topic "persistent://public/default/producer-wait-exclusive-test"
   @exclusive_with_fencing_topic "persistent://public/default/producer-exclusive-fencing-test"
+  @opened [:pulsar, :producer, :opened, :stop]
 
   setup_all do
-    broker = System.broker()
-
     :ok = System.create_topic(@shared_topic)
     :ok = System.create_topic(@exclusive_topic)
     :ok = System.create_topic(@wait_exclusive_topic)
     :ok = System.create_topic(@exclusive_with_fencing_topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
   end
 
-  setup [:telemetry_listen]
-
-  test "multiple producers can publish with :shared access mode" do
-    # Start two separate producer groups with :shared mode on same topic
+  test ":shared lets several producers publish to one topic at once" do
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@shared_topic, access_mode: :shared, client: @client)
 
@@ -47,14 +25,9 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
-    # Wait for both producers to register
-    Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
-    Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
-
-    # Both should send successfully
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from producer 1")
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "Message from producer 2")
 
@@ -62,15 +35,13 @@ defmodule Pulsar.Integration.AccessModesTest do
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
-  test "only one producer can connect with :exclusive access mode" do
-    # Start first producer with :exclusive
+  @tag telemetry_listen: [@opened]
+  test ":exclusive fences a second producer until the first releases the topic" do
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-
-    Utils.wait_for(fn -> :sys.get_state(producer_1).producer_name != nil end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Exclusive message", client: @client)
 
@@ -81,33 +52,32 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    # Second producer should fail to register (fenced by the existing exclusive producer)
     :ok = Topology.await_ready(group_pid_2, 1_000)
-    Utils.wait_for(fn -> Topology.workers(group_pid_2) == [] end)
 
-    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 0) == {:error, :timeout}
+    # Fenced by the producer already holding the topic, so it gives up rather than ever
+    # becoming ready.
+    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(group_pid_2) == []
 
     assert Process.alive?(group_pid_2)
     assert group_pid_2 in Pulsar.Client.producers(@client)
     assert {:error, :no_producers_available} = Pulsar.Producer.send(group_pid_2, "Rejected message")
 
-    events = Utils.collect_events([:pulsar, :producer, :opened, :stop], producer_names: ["exclusive-2"])
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @opened,
+                      metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
+                    }}
 
-    assert Enum.any?(
-             events,
-             &(&1.success == false and &1.error == :producer_fenced and
-                 String.starts_with?(&1.producer_name, "exclusive-2"))
-           )
-
+    ref = Process.monitor(group_pid_2)
     assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, _reason}
     refute group_pid_2 in Pulsar.Client.producers(@client)
 
-    # Stop the first producer to release exclusive lock
+    ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_1, _reason}
 
-    # New exclusive producer should now succeed
     assert {:ok, group_pid_2} =
              Pulsar.Producer.start(@exclusive_topic,
                access_mode: :exclusive,
@@ -115,18 +85,16 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_2).producer_name != nil end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "New exclusive owner", client: @client)
 
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  test ":wait_for_exclusive waits for exclusive access " do
+  test ":wait_for_exclusive queues behind the exclusive producer rather than failing" do
     # See: https://github.com/apache/pulsar/blob/master/pip/pip-68.md
 
-    # Start first producer with :exclusive - becomes the exclusive producer immediately
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@wait_exclusive_topic,
                access_mode: :exclusive,
@@ -134,10 +102,9 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
 
-    # Start second producer with :wait_for_exclusive. It should not be ready
     {:ok, group_pid_2} =
       Pulsar.Producer.start(@wait_exclusive_topic,
         access_mode: :wait_for_exclusive,
@@ -145,6 +112,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
+    # await_ready/2 would wait out its whole timeout here: this producer is queued behind the
+    # exclusive one and stays unready until that one goes.
     [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
 
     Utils.wait_for(fn ->
@@ -153,28 +122,24 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     refute :sys.get_state(producer_2).ready
 
-    # First producer can send messages
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from first producer", client: @client)
 
-    # Second producer should not be able to send messages yet
     assert {:error, :producer_waiting} =
              Pulsar.Producer.send(group_pid_2, "Message from second producer while waiting", client: @client)
 
-    # Now stop the first producer to release exclusive access
+    ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_1, _reason}
 
-    # Second producer should now get exclusive access
-    Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
 
-    # Second producer should now be able to send messages
     assert {:ok, _} = Pulsar.Producer.send(group_pid_2, "Message from second producer", client: @client)
 
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
-  test ":exclusive_with_fencing takes over and fences old producer" do
+  @tag telemetry_listen: [@opened]
+  test ":exclusive_with_fencing takes the topic from the producer holding it" do
     {:ok, group_pid_1} =
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
         access_mode: :exclusive,
@@ -182,13 +147,15 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_1] = Utils.wait_for(fn -> Topology.workers(group_pid_1) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_1).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_1)
+    [producer_1] = Topology.workers(group_pid_1)
+
+    # Taken before the fencing below, which is what brings this producer down.
+    fenced_ref = Process.monitor(producer_1)
 
     assert :sys.get_state(producer_1).topic_epoch == 0
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from original producer", client: @client)
 
-    # Step 2: Start second producer with :exclusive_with_fencing. It should fence out first
     {:ok, group_pid_2} =
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
         access_mode: :exclusive_with_fencing,
@@ -196,8 +163,8 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
-    Utils.wait_for(fn -> :sys.get_state(producer_2).ready end)
+    :ok = Pulsar.Producer.await_ready(group_pid_2)
+    [producer_2] = Topology.workers(group_pid_2)
 
     producer_2_state = :sys.get_state(producer_2)
     assert producer_2_state.topic_epoch == 1
@@ -206,7 +173,6 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert Process.alive?(producer_1)
     assert Process.alive?(producer_2)
 
-    # Step 3: Try to send from the fenced (original) producer
     Utils.wait_for(fn ->
       match?(
         {:error, {:producer_died, _}},
@@ -214,43 +180,34 @@ defmodule Pulsar.Integration.AccessModesTest do
       )
     end)
 
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
-    refute Process.alive?(producer_1), "Old producer should be fenced and stopped"
+    assert_receive {:DOWN, ^fenced_ref, :process, ^producer_1, _reason},
+                   5_000,
+                   "the fenced producer should have been stopped"
 
-    # Step 4: Wait for broker to reconnect and producer to be ready to send
     Utils.wait_for(fn ->
       match?({:ok, _}, Pulsar.Producer.send(group_pid_2, "Probe message", client: @client))
     end)
 
-    fenced? =
-      &(&1.success == false and &1.error == :producer_fenced and
-          String.starts_with?(&1.producer_name, "original-exclusive"))
+    # Both opened before either was fenced. A worker is named after its group with an index
+    # suffix, so the prefix is what identifies it.
+    assert_receive {:telemetry_event,
+                    %{event: @opened, metadata: %{success: true, producer_name: "original-exclusive" <> _}}}
 
-    # Fencing is observed asynchronously after the broker reconnects, so accumulate events
-    # across collection windows until the original producer reports the terminal error.
-    all_events =
-      Enum.reduce_while(1..150, [], fn _attempt, collected ->
-        collected =
-          collected ++
-            Utils.collect_events([:pulsar, :producer, :opened, :stop],
-              producer_names: ["original-exclusive", "fencing-takeover"]
-            )
+    assert_receive {:telemetry_event,
+                    %{event: @opened, metadata: %{success: true, producer_name: "fencing-takeover" <> _}}}
 
-        if Enum.any?(collected, fenced?) do
-          {:halt, collected}
-        else
-          Process.sleep(100)
-          {:cont, collected}
-        end
-      end)
+    # Fencing is only observed once the broker has reconnected, which is what the wait is for.
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @opened,
+                      metadata: %{
+                        success: false,
+                        error: :producer_fenced,
+                        producer_name: "original-exclusive" <> _
+                      }
+                    }},
+                   15_000
 
-    for group <- ["original-exclusive", "fencing-takeover"] do
-      assert Enum.any?(all_events, &(&1.success and String.starts_with?(&1.producer_name, group)))
-    end
-
-    assert Enum.any?(all_events, fenced?)
-
-    # Cleanup
     Pulsar.Producer.stop(group_pid_2)
   end
 end
