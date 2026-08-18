@@ -24,6 +24,11 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     %{producer: group_pid, consumer: consumer}
   end
 
+  # setup_all runs in its own process, so the consumer it started is pointed at each test in turn.
+  setup %{consumer: consumer} do
+    :ok = @consumer_callback.register(consumer, self())
+  end
+
   test "carries the partition key it was sent with", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
              Pulsar.Producer.send(producer, "payload with key", partition_key: "user-123", client: @client)
@@ -132,14 +137,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
   end
 
   defp wait_for_message(consumer, payload) do
-    Utils.wait_for(fn ->
-      consumer
-      |> @consumer_callback.get_messages()
-      |> Enum.any?(&(&1.payload == payload))
-    end)
-
-    consumer
-    |> @consumer_callback.get_messages()
-    |> Enum.find(&(&1.payload == payload))
+    assert_receive {:consumer, ^consumer, %{payload: ^payload} = message}
+    message
   end
 end

@@ -1,77 +1,76 @@
 defmodule Pulsar.Test.Support.DummyConsumer do
-  @moduledoc false
+  @moduledoc """
+  A callback that forwards what it is given to a test process, and holds nothing of its own.
+
+  With `forward_to: self()` in its `:init_args` it sends that process:
+
+    * `{:consumer_started, pid, context}` once it has initialized
+    * `{:consumer, pid, message}` for every message, valid or not
+    * `{:consumer_active, pid, active?}` when the broker makes it the active consumer of a
+      `:failover` subscription, or takes that over
+
+  `pid` is the worker itself, which is what tells the consumers of one topic apart. A test
+  asserts on deliveries with `assert_receive`, and on the absence of one with `refute_receive`,
+  rather than asking the callback what it has collected.
+
+  The only thing it decides for itself is what to answer with: `fail_all: true` rejects every
+  message, so redelivery and dead lettering have something to act on.
+
+  A consumer started in `setup_all` cannot forward to the test that asserts on it, since that
+  callback runs in its own process. Either start it in the test, or point it at the right one
+  with `register/2`.
+  """
   use Pulsar.Consumer.Callback
 
   def init(opts, context) do
-    fail_all = Keyword.get(opts, :fail_all, false)
+    forward_to = Keyword.get(opts, :forward_to)
+    notify(forward_to, {:consumer_started, self(), context})
 
-    if notify_pid = Keyword.get(opts, :notify_pid) do
-      send(notify_pid, {:consumer_ready, self()})
-    end
-
-    {:ok, %{messages: [], count: 0, fail_all: fail_all, is_active: false, context: context}}
+    {:ok, %{forward_to: forward_to, fail_all: Keyword.get(opts, :fail_all, false)}}
   end
+
+  @doc """
+  Points a running consumer at `pid`, for one started somewhere that cannot receive from it.
+  """
+  def register(consumer_pid, pid), do: GenServer.call(consumer_pid, {:forward_to, pid})
 
   def handle_message(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}, state) do
     {:error, :incomplete_chunk, state}
   end
 
   def handle_message(%Pulsar.Message{} = message, state) do
-    new_state = %{
-      state
-      | messages: [message | state.messages],
-        count: state.count + 1
-    }
+    notify(state.forward_to, {:consumer, self(), message})
 
     if state.fail_all do
-      {:error, :intentional_failure, new_state}
+      {:error, :intentional_failure, state}
     else
-      {:ok, new_state}
+      {:ok, state}
     end
   end
 
   # Opts in to invalid messages so tests can assert on them; the default drops them.
   def handle_invalid_message(%Pulsar.Message{} = message, state) do
-    {:ok, %{state | messages: [message | state.messages], count: state.count + 1}}
-  end
+    notify(state.forward_to, {:consumer, self(), message})
 
-  def get_messages(consumer_pid) do
-    GenServer.call(consumer_pid, :get_messages)
-  end
-
-  def count_messages(consumer_pid) do
-    GenServer.call(consumer_pid, :count_messages)
-  end
-
-  def context(consumer_pid) do
-    GenServer.call(consumer_pid, :context)
-  end
-
-  def active?(consumer_pid) do
-    GenServer.call(consumer_pid, :active?)
+    {:ok, state}
   end
 
   def became_active(state) do
-    {:noreply, %{state | is_active: true}}
+    notify(state.forward_to, {:consumer_active, self(), true})
+
+    {:noreply, state}
   end
 
   def became_passive(state) do
-    {:noreply, %{state | is_active: false}}
+    notify(state.forward_to, {:consumer_active, self(), false})
+
+    {:noreply, state}
   end
 
-  def handle_call(:active?, _from, state) do
-    {:reply, state.is_active, state}
+  def handle_call({:forward_to, pid}, _from, state) do
+    {:reply, :ok, %{state | forward_to: pid}}
   end
 
-  def handle_call(:get_messages, _from, state) do
-    {:reply, Enum.reverse(state.messages), state}
-  end
-
-  def handle_call(:count_messages, _from, state) do
-    {:reply, state.count, state}
-  end
-
-  def handle_call(:context, _from, state) do
-    {:reply, state.context, state}
-  end
+  defp notify(nil, _message), do: :ok
+  defp notify(pid, message), do: send(pid, message)
 end

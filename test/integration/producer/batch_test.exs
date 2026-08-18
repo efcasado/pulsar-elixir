@@ -52,12 +52,12 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
       expected_payloads = Enum.map(1..3, &"entry-#{&1}")
-      assert_messages_received(consumer_pid, expected_payloads)
+      received = assert_messages_received(consumer_pid, expected_payloads)
 
       # The assertions below only mean anything if these arrived as one batch.
       assert_batch_telemetry(count: 3, producer_name: producer_name)
 
-      by_payload = Map.new(DummyConsumer.get_messages(consumer_pid), &{&1.payload, &1})
+      by_payload = Map.new(received, &{&1.payload, &1})
 
       for i <- 1..3 do
         message = Map.fetch!(by_payload, "entry-#{i}")
@@ -92,7 +92,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
       expected_payloads = Enum.map(0..3, &"keyed-#{&1}")
-      assert_messages_received(consumer_pid, expected_payloads)
+      received = assert_messages_received(consumer_pid, expected_payloads)
 
       # One entry per key, rather than the single entry the default builder would have sent.
       assert_batch_published(producer_name, 2)
@@ -100,7 +100,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       refute_batch_published(producer_name)
 
       # Every message dispatches on its own key, not on whichever one led the batch.
-      for message <- DummyConsumer.get_messages(consumer_pid) do
+      for message <- received do
         assert message.raw.metadata.partition_key == Pulsar.Message.key(message)
       end
     end
@@ -120,10 +120,10 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert Enum.all?(Task.await_many(sends, 10_000), &match?({:ok, _}, &1))
 
-      assert_messages_received(consumer_pid, ["keyed-1", "keyed-2"])
+      received = assert_messages_received(consumer_pid, ["keyed-1", "keyed-2"])
       assert_batch_telemetry(count: 2, producer_name: producer_name)
 
-      for message <- DummyConsumer.get_messages(consumer_pid) do
+      for message <- received do
         assert message.raw.metadata.partition_key == "tenant-1"
       end
     end
@@ -141,13 +141,12 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       messages = Enum.map(1..9, &"seq-#{&1}")
       send_messages(producer_pid, messages)
 
-      assert_messages_received(consumer_pid, messages)
+      received = assert_messages_received(consumer_pid, messages)
 
       assert :sys.get_state(producer).sequence_id == 9
 
       sequence_ids =
-        consumer_pid
-        |> DummyConsumer.get_messages()
+        received
         |> Enum.map(& &1.raw.single_metadata.sequence_id)
         |> Enum.sort()
 
@@ -219,8 +218,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert Enum.all?(Task.await_many(pending, 10_000), &match?({:ok, _}, &1))
 
-      assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
-      messages = DummyConsumer.get_messages(consumer_pid)
+      messages = assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
       delayed = Enum.find(messages, &(&1.payload == "delayed-1"))
       batched = Enum.find(messages, &(&1.payload == "batched-1"))
 
@@ -241,7 +239,8 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, "batch-#{suffix}-sub", DummyConsumer,
         client: @client,
-        initial_position: :earliest
+        initial_position: :earliest,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -271,10 +270,18 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     |> Task.await_many(10_000)
   end
 
+  # Returns them in the order they were delivered, for a test that cares about that or about
+  # what else they carried.
   defp assert_messages_received(consumer_pid, expected_payloads) do
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= length(expected_payloads) end)
-    payloads = consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
-    Enum.each(expected_payloads, fn expected -> assert expected in payloads end)
+    received =
+      for _expected <- expected_payloads do
+        assert_receive {:consumer, ^consumer_pid, message}
+        message
+      end
+
+    assert Enum.sort(Enum.map(received, & &1.payload)) == Enum.sort(expected_payloads)
+
+    received
   end
 
   defp assert_batch_telemetry(count: expected_count, producer_name: producer_name) do

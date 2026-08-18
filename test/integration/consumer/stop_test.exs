@@ -12,11 +12,11 @@ defmodule Pulsar.Integration.Consumer.StopTest do
 
     # start_consumer/3 already awaited it; this takes the announcement out of the mailbox so
     # the refute below can only see one from a consumer that came back.
-    assert_receive {:consumer_ready, _pid}
+    assert_receive {:consumer_started, _pid, _context}
 
     assert Pulsar.Consumer.stop(consumer, client: @client) == :ok
 
-    refute_receive {:consumer_ready, _pid}, 3_000
+    refute_receive {:consumer_started, _pid, _context}, 3_000
     assert_removed(consumer, topic, "pid-sub")
     assert Pulsar.Consumer.stop(consumer, client: @client) == {:error, :not_found}
   end
@@ -90,7 +90,7 @@ defmodule Pulsar.Integration.Consumer.StopTest do
             topic: topic,
             subscription_name: "declared-sub",
             callback_module: DummyConsumer,
-            init_args: [notify_pid: self()]
+            init_args: [forward_to: self()]
           ]
         ]
       )
@@ -100,11 +100,11 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     :ok = Pulsar.Consumer.await_ready(name(topic, "declared-sub"), client: @declared_client)
 
     # Drains the announcement, so the refute below can only see one from a restart.
-    assert_receive {:consumer_ready, _pid}
+    assert_receive {:consumer_started, _pid, _context}
 
     assert Pulsar.Consumer.stop(name(topic, "declared-sub"), client: @declared_client) == :ok
 
-    refute_receive {:consumer_ready, _pid}, 3_000
+    refute_receive {:consumer_started, _pid, _context}, 3_000
     assert Pulsar.Client.consumers(@declared_client) == []
   end
 
@@ -114,7 +114,7 @@ defmodule Pulsar.Integration.Consumer.StopTest do
     {create_topic?, opts} = Keyword.pop(opts, :create_topic?, true)
     if create_topic?, do: :ok = System.create_topic(topic)
 
-    opts = Keyword.merge([client: @client, init_args: [notify_pid: self()]], opts)
+    opts = Keyword.merge([client: @client, init_args: [forward_to: self()]], opts)
 
     {:ok, consumer} = Pulsar.Consumer.start(topic, subscription, DummyConsumer, opts)
     :ok = Pulsar.Consumer.await_ready(consumer, client: Keyword.fetch!(opts, :client))

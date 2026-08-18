@@ -57,16 +57,9 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
     {:ok, _} = Pulsar.Producer.send("zlib", "Hello, world!", client: @client)
     {:ok, _} = Pulsar.Producer.send("snappy", "Hello, world!", client: @client)
 
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(consumer) == 5
-    end)
-
-    all_decoded? =
-      consumer
-      |> DummyConsumer.get_messages()
-      |> Enum.all?(fn message -> message.payload == "Hello, world!" end)
-
-    assert all_decoded?
+    for _codec <- 1..5 do
+      assert_receive {:consumer, ^consumer, %{payload: "Hello, world!"}}
+    end
   end
 
   defp producer_options(name, compression) do
@@ -78,8 +71,6 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
   end
 
   defp subscription_options do
-    [
-      client: @client
-    ]
+    [client: @client, init_args: [forward_to: self()]]
   end
 end

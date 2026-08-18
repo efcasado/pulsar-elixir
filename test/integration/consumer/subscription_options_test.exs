@@ -35,7 +35,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         @consumer_callback,
         client: @client,
         name: "naming-group",
-        consumer_count: 2
+        consumer_count: 2,
+        init_args: [forward_to: self()]
       )
 
     on_exit(fn -> Pulsar.Consumer.stop("naming-group", client: @client) end)
@@ -51,7 +52,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert names == ["naming-group-1", "naming-group-2"]
   end
 
-  test ":latest starts past what the topic already held", %{expected_count: _expected_count} do
+  test ":latest starts past what the topic already held" do
     {:ok, latest_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -63,10 +64,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(latest_group)
     [consumer] = Topology.workers(latest_group)
 
-    Process.sleep(1000)
-
-    count = @consumer_callback.count_messages(consumer)
-    assert count == 0
+    refute_receive {:consumer, ^consumer, _message}, 1_000
   end
 
   test ":earliest starts at the beginning of the topic", %{expected_count: expected_count} do
@@ -81,9 +79,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(earliest_group)
     [consumer] = Topology.workers(earliest_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
   end
 
   test ":start_message_id starts at the message it names", %{expected_count: expected_count} do
@@ -98,11 +94,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(setup_group)
     [setup_consumer] = Topology.workers(setup_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(setup_consumer) == expected_count
-    end)
-
-    [_message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
+    [_message1, message2 | _] = receive_messages(setup_consumer, expected_count)
 
     message_id = {message2.raw.command.message_id.ledgerId, message2.raw.command.message_id.entryId}
 
@@ -117,11 +109,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(message_id_group)
     [message_id_consumer] = Topology.workers(message_id_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(message_id_consumer) == expected_count - 1
-    end)
-
-    [first_received | _] = @consumer_callback.get_messages(message_id_consumer)
+    [first_received | _] = receive_messages(message_id_consumer, expected_count - 1)
     assert first_received.payload == message2.payload
   end
 
@@ -137,11 +125,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(setup_group)
     [setup_consumer] = Topology.workers(setup_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(setup_consumer) == expected_count
-    end)
-
-    [message1, message2 | _] = @consumer_callback.get_messages(setup_consumer)
+    [message1, message2 | _] = receive_messages(setup_consumer, expected_count)
     publish_time = publish_time_from_message(message2)
 
     {:ok, timestamp_group1} =
@@ -179,20 +163,12 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(timestamp_group3)
     [timestamp_consumer3] = Topology.workers(timestamp_group3)
 
-    Utils.wait_for(fn ->
-      messages1 = @consumer_callback.get_messages(timestamp_consumer1)
-      messages2 = @consumer_callback.get_messages(timestamp_consumer2)
-
-      messages1 != [] and messages2 != []
-    end)
-
-    [first_message1 | _] = @consumer_callback.get_messages(timestamp_consumer1)
-    [first_message2 | _] = @consumer_callback.get_messages(timestamp_consumer2)
-    future_messages = @consumer_callback.get_messages(timestamp_consumer3)
+    assert_receive {:consumer, ^timestamp_consumer1, first_message1}
+    assert_receive {:consumer, ^timestamp_consumer2, first_message2}
 
     assert first_message1.payload == message2.payload
     assert first_message2.payload == message1.payload
-    assert future_messages == []
+    refute_receive {:consumer, ^timestamp_consumer3, _message}
   end
 
   test "a durable subscription outlives the consumer that took it" do
@@ -306,31 +282,30 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(non_compacted_group)
     [non_compacted_consumer] = Topology.workers(non_compacted_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(compacted_consumer) == 4 and
-        @consumer_callback.count_messages(non_compacted_consumer) == expected_count
-    end)
-
-    compacted_messages = @consumer_callback.get_messages(compacted_consumer)
-
+    compacted_messages = receive_messages(compacted_consumer, 4)
     compacted_messages_map = Map.new(compacted_messages, &{Pulsar.Message.key(&1), &1.payload})
-
-    assert Enum.count(compacted_messages) == 4
 
     assert compacted_messages_map["key1"] == "Message 2 for key1"
     assert compacted_messages_map["key2"] == "Message 2 for key2"
     assert compacted_messages_map["key3"] == "Message 1 for key3"
     assert compacted_messages_map["key4"] == "Message 1 for key4"
 
-    non_compacted_count = @consumer_callback.count_messages(non_compacted_consumer)
-    assert non_compacted_count == expected_count
+    assert length(receive_messages(non_compacted_consumer, expected_count)) == expected_count
+  end
+
+  defp receive_messages(consumer, count) do
+    for _message <- 1..count do
+      assert_receive {:consumer, ^consumer, message}
+      message
+    end
   end
 
   defp subscription_options(initial_position, opts \\ []) do
     [
       client: @client,
       subscription_type: :exclusive,
-      initial_position: initial_position
+      initial_position: initial_position,
+      init_args: [forward_to: self()]
     ] ++ opts
   end
 

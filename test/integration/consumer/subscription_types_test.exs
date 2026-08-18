@@ -36,18 +36,15 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     # which consumer drains the pre-produced backlog first.
     rounds = div(expected_count, 2)
 
-    for round <- 1..rounds do
+    for _round <- 1..rounds do
       :ok = Pulsar.Consumer.send_flow(consumer1, 1)
       :ok = Pulsar.Consumer.send_flow(consumer2, 1)
 
-      Utils.wait_for(fn ->
-        @consumer_callback.count_messages(consumer1) == round and
-          @consumer_callback.count_messages(consumer2) == round
-      end)
+      assert_receive {:consumer, ^consumer1, _message}
+      assert_receive {:consumer, ^consumer2, _message}
     end
 
-    assert @consumer_callback.count_messages(consumer1) == rounds
-    assert @consumer_callback.count_messages(consumer2) == rounds
+    refute_receive {:consumer, _pid, _message}
   end
 
   test ":key_shared gives each consumer a set of keys no other one sees", %{expected_count: expected_count} do
@@ -69,14 +66,9 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     :ok = Pulsar.Consumer.send_flow(consumer1, expected_count)
     :ok = Pulsar.Consumer.send_flow(consumer2, expected_count)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer1) +
-        @consumer_callback.count_messages(consumer2) ==
-        expected_count
-    end)
-
-    messages1 = @consumer_callback.get_messages(consumer1)
-    messages2 = @consumer_callback.get_messages(consumer2)
+    delivered = receive_messages(expected_count)
+    messages1 = Map.get(delivered, consumer1, [])
+    messages2 = Map.get(delivered, consumer2, [])
 
     assert length(messages1) + length(messages2) == expected_count
 
@@ -105,24 +97,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     :ok = Pulsar.Consumer.await_ready(failover_group)
     [consumer1, consumer2] = Topology.workers(failover_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer1) +
-        @consumer_callback.count_messages(consumer2) == expected_count
-    end)
+    delivered = receive_messages(expected_count)
 
-    count1 = @consumer_callback.count_messages(consumer1)
-    count2 = @consumer_callback.count_messages(consumer2)
+    assert [{active, messages}] = Map.to_list(delivered)
+    assert length(messages) == expected_count
+    assert active in [consumer1, consumer2]
 
-    assert count1 + count2 == expected_count
-
-    assert (count1 == expected_count and count2 == 0) or
-             (count1 == 0 and count2 == expected_count)
-
-    {active_consumer, passive_consumer} =
-      if count1 == expected_count, do: {consumer1, consumer2}, else: {consumer2, consumer1}
-
-    assert @consumer_callback.active?(active_consumer) == true
-    assert @consumer_callback.active?(passive_consumer) == false
+    assert_receive {:consumer_active, ^active, true}
+    refute_receive {:consumer_active, _pid, true}
   end
 
   test ":exclusive delivers everything to the one consumer it admits", %{expected_count: expected_count} do
@@ -137,12 +119,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     :ok = Pulsar.Consumer.await_ready(exclusive_group)
     [consumer] = Topology.workers(exclusive_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
-
-    count = @consumer_callback.count_messages(consumer)
-    assert count == expected_count
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
+    refute_receive {:consumer, ^consumer, _message}
   end
 
   # An :exclusive subscription admits one consumer, so the workers past the first are refused
@@ -165,6 +143,18 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
              )
   end
 
+  # Deliveries from the consumers of one subscription arrive interleaved, so they are grouped
+  # by the worker that got each one.
+  defp receive_messages(count) do
+    for_result =
+      for _message <- 1..count do
+        assert_receive {:consumer, pid, message}
+        {pid, message}
+      end
+
+    Enum.group_by(for_result, &elem(&1, 0), &elem(&1, 1))
+  end
+
   defp subscription_options(type, count) do
     [
       client: @client,
@@ -173,7 +163,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       consumer_count: count,
       flow_initial: 1,
       flow_threshold: 0,
-      flow_refill: 1
+      flow_refill: 1,
+      init_args: [forward_to: self()]
     ]
   end
 
@@ -186,7 +177,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
       initial_position: :earliest,
       consumer_count: count,
       flow_policy: {Pulsar.Test.Support.Flow, :never, []},
-      flow_initial: 0
+      flow_initial: 0,
+      init_args: [forward_to: self()]
     ]
   end
 end

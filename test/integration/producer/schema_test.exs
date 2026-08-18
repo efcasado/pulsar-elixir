@@ -88,9 +88,9 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
     assert Enum.all?(results, &match?({:ok, _}, &1))
 
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 3 end)
-    received = consumer_pid |> DummyConsumer.get_messages() |> Enum.map(& &1.payload)
-    assert Enum.all?(messages, &(&1 in received))
+    for _message <- messages do
+      assert_receive {:consumer, ^consumer_pid, _message}
+    end
   end
 
   test "records the version the broker assigned the schema" do
@@ -113,9 +113,8 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     consumer_pid = start_consumer(topic, "schema-version-sub")
 
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
+    assert_receive {:consumer, ^consumer_pid, message}
     assert message.raw.metadata.schema_version
   end
 
@@ -205,7 +204,8 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     {:ok, group} =
       Pulsar.Consumer.start(topic, sub_name, DummyConsumer,
         client: @client,
-        initial_position: :earliest
+        initial_position: :earliest,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(group)
@@ -220,7 +220,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
   defp assert_send(producer_pid, consumer_pid, payload) do
     {:ok, _} = Pulsar.Producer.send(producer_pid, payload)
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
-    assert [%{payload: ^payload}] = DummyConsumer.get_messages(consumer_pid)
+
+    assert_receive {:consumer, ^consumer_pid, %{payload: ^payload}}
   end
 end

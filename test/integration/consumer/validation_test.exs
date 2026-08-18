@@ -15,7 +15,8 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
         name,
         @consumer_callback,
         client: @client,
-        name: name
+        name: name,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(group_pid)
@@ -67,7 +68,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
 
     # Reaching the callback means the ack went out. Had the broker rejected the
     # validation error on it, it would have closed the connection.
-    Utils.wait_for(fn -> @consumer_callback.get_messages(ctx.consumer) != [] end)
+    assert_receive {:consumer, _pid, _message}
 
     assert Pulsar.Consumer.topic(ctx.consumer) == @topic
     assert Process.alive?(ctx.consumer)

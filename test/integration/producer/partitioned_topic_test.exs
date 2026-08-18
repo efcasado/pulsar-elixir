@@ -47,11 +47,11 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         subscription,
         DummyConsumer,
         client: @client,
-        initial_position: :latest
+        initial_position: :latest,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_pid)
-    consumers = Topology.workers(consumer_pid)
 
     partition_key = "same-partition-key-#{test_id}"
     messages = ["e2e-msg-1-#{test_id}", "e2e-msg-2-#{test_id}", "e2e-msg-3-#{test_id}"]
@@ -60,16 +60,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
       {:ok, _} = Pulsar.Producer.send(producer_pid, msg, partition_key: partition_key)
     end
 
-    Utils.wait_for(fn ->
-      all_msgs = Enum.flat_map(consumers, &DummyConsumer.get_messages/1)
-      our_msgs = Enum.filter(all_msgs, fn msg -> msg.payload in messages end)
-      Enum.count(our_msgs) == 3
-    end)
-
-    our_messages =
-      consumers
-      |> Enum.flat_map(&DummyConsumer.get_messages/1)
-      |> Enum.filter(fn msg -> msg.payload in messages end)
+    our_messages = receive_messages(messages)
 
     assert [^partition_key] =
              our_messages
@@ -104,11 +95,11 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         subscription,
         DummyConsumer,
         client: @client,
-        initial_position: :latest
+        initial_position: :latest,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_pid)
-    consumers = Topology.workers(consumer_pid)
 
     messages =
       for i <- 1..30 do
@@ -117,16 +108,9 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         msg
       end
 
-    Utils.wait_for(fn ->
-      all_msgs = Enum.flat_map(consumers, &DummyConsumer.get_messages/1)
-      our_msgs = Enum.filter(all_msgs, fn msg -> msg.payload in messages end)
-      Enum.count(our_msgs) == 30
-    end)
-
     partitions =
-      consumers
-      |> Enum.flat_map(&DummyConsumer.get_messages/1)
-      |> Enum.filter(fn msg -> msg.payload in messages end)
+      messages
+      |> receive_messages()
       |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
 
     # With 30 messages and 3 partitions, random distribution should hit all partitions
@@ -136,6 +120,15 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     :ok = Pulsar.Producer.stop(producer_pid)
     :ok = Pulsar.Consumer.stop(consumer_pid)
+  end
+
+  # Every partition's worker forwards here, so the messages arrive interleaved and are picked
+  # out by payload rather than by which worker held them.
+  defp receive_messages(payloads) do
+    for _payload <- payloads do
+      assert_receive {:consumer, _pid, message}
+      message
+    end
   end
 
   test "discovers partitions added to the topic" do

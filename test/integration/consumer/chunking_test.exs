@@ -26,7 +26,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-simple",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -36,14 +37,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == large_message
+    assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
     assert received_msg.chunk_metadata.chunked == true
     assert received_msg.chunk_metadata.complete == true
     assert received_msg.chunk_metadata.num_chunks == 2
@@ -84,7 +78,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-interleaved",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -96,13 +91,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     Task.await(task1)
     Task.await(task2)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 2
-    end)
+    payloads =
+      for _message <- 1..2 do
+        assert_receive {:consumer, ^consumer, message}
+        message.payload
+      end
 
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 2
-    payloads = messages |> Enum.map(& &1.payload) |> Enum.sort()
     assert p1_large_message in payloads
     assert p2_large_message in payloads
   end
@@ -127,7 +121,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-mixed",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -137,14 +132,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     {:ok, _} = Pulsar.Producer.send(producer, large_message)
     {:ok, _} = Pulsar.Producer.send(producer, small_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 3
-    end)
+    payloads =
+      for _message <- 1..3 do
+        assert_receive {:consumer, ^consumer, message}
+        message.payload
+      end
 
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 3
-
-    payloads = Enum.map(messages, & &1.payload)
     assert Enum.count(payloads, &(&1 == small_message)) == 2
     assert large_message in payloads
 
@@ -197,7 +190,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-5mb",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -210,15 +204,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert chunked_msg_id.uuid
     assert chunked_msg_id.num_chunks == 2
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == very_large_message
-    assert byte_size(received_msg.payload) == 6_291_456
+    assert_receive {:consumer, ^consumer, %{payload: ^very_large_message} = received_msg}
 
     assert received_msg.chunk_metadata.chunked == true
     assert received_msg.chunk_metadata.complete == true
@@ -251,7 +237,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
           topic,
           "chunking-#{compression}",
           @consumer_callback,
-          client: @client
+          client: @client,
+          init_args: [forward_to: self()]
         )
 
       :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -259,12 +246,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
       {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
-      Utils.wait_for(fn ->
-        @consumer_callback.count_messages(consumer) == 1
-      end)
-
-      [received_msg] = @consumer_callback.get_messages(consumer)
-      assert received_msg.payload == large_message
+      assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
       assert received_msg.chunk_metadata.complete == true
       assert received_msg.chunk_metadata.num_chunks > 1
 
@@ -310,7 +292,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-compress-first",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -318,13 +301,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, compressible_message)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == compressible_message
-    assert received_msg.chunk_metadata == nil
+    # No chunk metadata at all: compressing first left nothing to split.
+    assert_receive {:consumer, ^consumer, %{payload: ^compressible_message, chunk_metadata: nil}}
   end
 
   test "leaves room for the message metadata inside the broker's size limit" do
@@ -348,7 +326,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         topic,
         "chunking-metadata-overhead",
         @consumer_callback,
-        client: @client
+        client: @client,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -356,12 +335,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     {:ok, _msg_id} = Pulsar.Producer.send(producer, very_large_message, properties: bulky_properties)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == very_large_message
+    assert_receive {:consumer, ^consumer, %{payload: ^very_large_message} = received_msg}
     assert Pulsar.Message.properties(received_msg) == bulky_properties
   end
 
@@ -384,17 +358,17 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       )
 
     {:ok, consumer_group} =
-      Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback, client: @client)
+      Pulsar.Consumer.start(topic, "chunking-budget-boundary", @consumer_callback,
+        client: @client,
+        init_args: [forward_to: self()]
+      )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
 
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, message)
 
-    Utils.wait_for(fn -> @consumer_callback.count_messages(consumer) == 1 end)
-
-    [received_msg] = @consumer_callback.get_messages(consumer)
-    assert received_msg.payload == message
+    assert_receive {:consumer, ^consumer, %{payload: ^message} = received_msg}
   end
 
   test "refuses a message whose metadata alone exceeds the broker's limit" do
@@ -435,7 +409,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
         "chunking-evict",
         @consumer_callback,
         client: @client,
-        max_pending_chunked_messages: 2
+        max_pending_chunked_messages: 2,
+        init_args: [forward_to: self()]
       )
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
@@ -476,14 +451,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
     assert metadata.subscription_name == "chunking-evict"
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 1
-    end)
-
-    messages = @consumer_callback.get_messages(consumer)
-    assert length(messages) == 1
-    [received_msg] = messages
-    assert received_msg.payload == large_message
+    assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
     assert received_msg.chunk_metadata.chunked == true
     assert received_msg.chunk_metadata.complete == true
     assert received_msg.chunk_metadata.num_chunks == 2

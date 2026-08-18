@@ -13,12 +13,9 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert %{schema: schema} = state
     assert schema.type == :String
 
-    # Verify messages can be sent and received
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
-    assert message.payload == "test message"
+    assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
   test "subscribes without one, and reads a schema-carrying topic anyway" do
@@ -31,10 +28,8 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert state.schema == nil
 
     {:ok, _} = Pulsar.Producer.send(producer_pid, "test message")
-    Utils.wait_for(fn -> DummyConsumer.count_messages(consumer_pid) >= 1 end)
 
-    [message] = DummyConsumer.get_messages(consumer_pid)
-    assert message.payload == "test message"
+    assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
   test "a consumer whose schema the topic will not accept never becomes ready" do
@@ -81,7 +76,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         topic,
         sub_name,
         DummyConsumer,
-        Keyword.merge([client: @client, initial_position: :earliest], opts)
+        Keyword.merge([client: @client, initial_position: :earliest, init_args: [forward_to: self()]], opts)
       )
 
     :ok = Pulsar.Consumer.await_ready(group)

@@ -35,21 +35,9 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     consumers = Topology.workers(partitioned_consumer_pid)
     assert length(consumers) == 6
 
-    Utils.wait_for(fn ->
-      consumers
-      |> Enum.reduce(0, fn consumer_pid, acc ->
-        @consumer_callback.count_messages(consumer_pid) + acc
-      end)
-      |> Kernel.==(expected_count)
-    end)
-
-    consumed_messages =
-      Enum.reduce(consumers, 0, fn consumer_pid, acc ->
-        @consumer_callback.count_messages(consumer_pid) + acc
-      end)
-
-    assert Enum.count(consumers) == 6
-    assert consumed_messages == expected_count
+    # Every worker forwards here, so the six of them are counted off together.
+    for _message <- 1..expected_count, do: assert_receive({:consumer, _pid, _message})
+    refute_receive {:consumer, _pid, _message}
 
     :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
@@ -117,11 +105,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     assert :ok = Pulsar.Consumer.await_ready(consumer)
     assert Pulsar.Consumer.topic(consumer) == partition_topic
 
-    assert [worker] =
-             Utils.wait_for(fn -> Topology.workers(consumer) end,
-               until: &match?([_worker], &1),
-               description: "explicit partition consumer to start"
-             )
+    assert [worker] = Topology.workers(consumer)
 
     assert Pulsar.Consumer.topic(worker) == partition_topic
 
@@ -134,7 +118,11 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
 
-    contexts = consumer |> Topology.workers() |> Enum.map(&@consumer_callback.context/1)
+    contexts =
+      for _worker <- Topology.workers(consumer) do
+        assert_receive {:consumer_started, _pid, context}
+        context
+      end
 
     assert contexts |> Enum.map(& &1.partition) |> Enum.sort() == [0, 1, 2]
 
@@ -162,13 +150,9 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
 
-    assert [worker] =
-             Utils.wait_for(fn -> Topology.workers(consumer) end,
-               until: &match?([_worker], &1),
-               description: "explicit partition consumer to start"
-             )
+    assert [worker] = Topology.workers(consumer)
 
-    context = @consumer_callback.context(worker)
+    assert_receive {:consumer_started, ^worker, context}
 
     assert context.partition == nil
     assert context.topic == partition_topic
@@ -216,7 +200,8 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       consumer_count: count,
       flow_initial: 1,
       flow_threshold: 0,
-      flow_refill: 1
+      flow_refill: 1,
+      init_args: [forward_to: self()]
     ]
   end
 end

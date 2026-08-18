@@ -34,9 +34,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
 
@@ -60,9 +58,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
 
@@ -85,23 +81,16 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
 
-    # Initially, no messages should be received
-    Process.sleep(500)
-    assert @consumer_callback.count_messages(consumer) == 0
+    refute_receive {:consumer, ^consumer, _message}, 500
 
-    # Manually request 3 messages
     :ok = Pulsar.Consumer.send_flow(consumer, 3)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == 3
-    end)
+    for _message <- 1..3, do: assert_receive({:consumer, ^consumer, _message})
+    refute_receive {:consumer, ^consumer, _message}
 
-    # Request remaining messages
     :ok = Pulsar.Consumer.send_flow(consumer, expected_count - 3)
 
-    Utils.wait_for(fn ->
-      @consumer_callback.count_messages(consumer) == expected_count
-    end)
+    for _message <- 1..(expected_count - 3), do: assert_receive({:consumer, ^consumer, _message})
   end
 
   test "granting permits through the group pid reaches its workers" do
@@ -118,7 +107,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     assert Process.alive?(consumer_group)
     assert Enum.all?(workers, &Process.alive?/1)
 
-    Utils.wait_for(fn -> Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0 end)
+    assert_receive {:consumer, worker, _message}
+    assert worker in workers
 
     Pulsar.Consumer.stop(consumer_group)
   end
@@ -144,7 +134,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
       flow_policy: if(initial == 0, do: {Pulsar.Test.Support.Flow, :never, []}, else: :auto),
       flow_initial: initial,
       flow_threshold: threshold,
-      flow_refill: refill
+      flow_refill: refill,
+      init_args: [forward_to: self()]
     ]
   end
 end
