@@ -53,9 +53,11 @@ defmodule Pulsar.Integration.AccessModesTest do
              )
 
     :ok = Topology.await_ready(group_pid_2, 1_000)
-    Utils.wait_for(fn -> Topology.workers(group_pid_2) == [] end)
 
-    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 0) == {:error, :timeout}
+    # Fenced by the producer already holding the topic, so it gives up rather than ever
+    # becoming ready.
+    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(group_pid_2) == []
 
     assert Process.alive?(group_pid_2)
     assert group_pid_2 in Pulsar.Client.producers(@client)

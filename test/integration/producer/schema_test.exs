@@ -132,10 +132,11 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
       )
 
     :ok = Topology.await_ready(producer_group, 1_000)
-    Utils.wait_for(fn -> Topology.workers(producer_group) == [] end)
 
-    assert Pulsar.Producer.await_ready(producer_group, timeout: 0) ==
-             {:error, :timeout}
+    # The topology comes up, but its worker cannot register under a schema the topic refuses,
+    # so it gives up rather than ever becoming ready.
+    assert Pulsar.Producer.await_ready(producer_group, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(producer_group) == []
 
     assert Process.alive?(producer_group)
     assert producer_group in Pulsar.Client.producers(@client)

@@ -199,18 +199,18 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
         init_args: [forward_to: self()]
       )
 
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+
+    # The dead letter producer is a child of the consumer's own topology, started alongside it.
     dead_letter_root =
-      Utils.wait_for(
-        fn ->
-          consumer_group
-          |> Supervisor.which_children()
-          |> Enum.find_value(fn
-            {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> pid
-            _child -> nil
-          end)
-        end,
-        until: &is_pid/1
-      )
+      consumer_group
+      |> Supervisor.which_children()
+      |> Enum.find_value(fn
+        {{:dead_letter, _topic}, pid, :supervisor, _modules} when is_pid(pid) -> pid
+        _child -> nil
+      end)
+
+    assert is_pid(dead_letter_root)
 
     :ok = Pulsar.Producer.await_ready(dead_letter_root)
     [producer] = Topology.workers(dead_letter_root)

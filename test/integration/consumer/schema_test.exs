@@ -47,10 +47,11 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
       )
 
     :ok = Topology.await_ready(consumer_group, 1_000)
-    Utils.wait_for(fn -> Topology.workers(consumer_group) == [] end)
 
-    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 0) ==
-             {:error, :timeout}
+    # The topology comes up, but its worker cannot subscribe under a schema the topic refuses,
+    # so it gives up rather than ever becoming ready.
+    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 2_000) == {:error, :timeout}
+    assert Topology.workers(consumer_group) == []
 
     assert Process.alive?(consumer_group)
     assert consumer_group in Pulsar.Client.consumers(@client)
