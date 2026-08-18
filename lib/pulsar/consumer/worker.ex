@@ -358,13 +358,19 @@ defmodule Pulsar.Consumer.Worker do
   def handle_info({:broker_message, %Binary.CommandActiveConsumerChange{is_active: true}}, state) do
     Logger.info("Consumer #{state.consumer_id} became the active consumer for subscription #{state.subscription_name}")
 
-    dispatch_active_state_change(state, :became_active)
+    dispatch_event(state, :became_active)
   end
 
   def handle_info({:broker_message, %Binary.CommandActiveConsumerChange{is_active: false}}, state) do
     Logger.info("Consumer #{state.consumer_id} became a passive consumer for subscription #{state.subscription_name}")
 
-    dispatch_active_state_change(state, :became_passive)
+    dispatch_event(state, :became_passive)
+  end
+
+  def handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state) do
+    Logger.info("Consumer #{state.consumer_id} reached the end of terminated topic #{state.topic}")
+
+    dispatch_event(state, :reached_end_of_topic)
   end
 
   def handle_info({:broker_message, message_data}, state) do
@@ -463,7 +469,7 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  defp dispatch_active_state_change(state, callback_fun) do
+  defp dispatch_event(state, callback_fun) do
     case apply(state.callback_module, callback_fun, [state.callback_state]) do
       {:noreply, new_callback_state} ->
         {:noreply, %{state | callback_state: new_callback_state}}
