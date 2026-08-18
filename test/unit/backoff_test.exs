@@ -36,7 +36,7 @@ defmodule Pulsar.BackoffTest do
 
   describe "run/1" do
     test "retries the standard transient broker errors" do
-      for reason <- [:disconnected, {:ServiceNotReady, "try again"}] do
+      for reason <- [:disconnected, :no_broker_available, {:ServiceNotReady, "try again"}] do
         counter = :counters.new(1, [])
 
         assert Backoff.run(fn ->
