@@ -742,16 +742,17 @@ defmodule Pulsar.Broker do
   end
 
   # Informational, so an unknown consumer is only worth a debug line: nothing to clean up.
-  defp handle_command(%Binary.CommandReachedEndOfTopic{consumer_id: consumer_id} = command, broker) do
-    case Map.get(broker.consumers, consumer_id) do
-      nil ->
-        Logger.debug("Received end of topic for unknown consumer #{consumer_id}")
-        :keep_state_and_data
+  defp handle_command(%Binary.CommandReachedEndOfTopic{consumer_id: consumer_id}, %__MODULE__{consumers: consumers})
+       when not is_map_key(consumers, consumer_id) do
+    Logger.debug("Received end of topic for unknown consumer #{consumer_id}")
+    :keep_state_and_data
+  end
 
-      {consumer_pid, _monitor_ref} ->
-        send(consumer_pid, {:broker_message, command})
-        :keep_state_and_data
-    end
+  defp handle_command(%Binary.CommandReachedEndOfTopic{consumer_id: consumer_id} = command, broker) do
+    {consumer_pid, _monitor_ref} = Map.fetch!(broker.consumers, consumer_id)
+    send(consumer_pid, {:broker_message, command})
+
+    :keep_state_and_data
   end
 
   defp handle_command(%Binary.CommandCloseProducer{producer_id: producer_id} = command, broker) do
