@@ -18,7 +18,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     {:ok, expected_count: length(@messages)}
   end
 
-  test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do
+  test ":shared hands each consumer a share of the messages", %{expected_count: expected_count} do
     {:ok, shared_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -50,7 +50,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert @consumer_callback.count_messages(consumer2) == rounds
   end
 
-  test "key_shared subscription partitions by key", %{expected_count: expected_count} do
+  test ":key_shared gives each consumer a set of keys no other one sees", %{expected_count: expected_count} do
     {:ok, key_shared_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -80,7 +80,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
     assert length(messages1) + length(messages2) == expected_count
 
-    # Extract partition keys to verify no key overlap
     extract_keys = fn messages ->
       messages
       |> Enum.map(&Pulsar.Message.key(&1))
@@ -94,7 +93,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert MapSet.size(key_overlap) == 0
   end
 
-  test "failover subscription uses single active consumer", %{expected_count: expected_count} do
+  test ":failover delivers to one consumer and leaves the rest standing by", %{expected_count: expected_count} do
     {:ok, failover_group} =
       Pulsar.Consumer.start(
         @topic,
@@ -126,7 +125,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     assert @consumer_callback.active?(passive_consumer) == false
   end
 
-  test "exclusive subscription receives all messages", %{expected_count: expected_count} do
+  test ":exclusive delivers everything to the one consumer it admits", %{expected_count: expected_count} do
     {:ok, exclusive_group} =
       Pulsar.Consumer.start(
         @topic,

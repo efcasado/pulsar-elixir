@@ -24,7 +24,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     %{producer: group_pid, consumer: consumer}
   end
 
-  test "send message with partition key", %{producer: producer, consumer: consumer} do
+  test "carries the partition key it was sent with", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
              Pulsar.Producer.send(producer, "payload with key", partition_key: "user-123", client: @client)
 
@@ -32,7 +32,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert Pulsar.Message.key(message) == "user-123"
   end
 
-  test "send message with ordering key", %{producer: producer, consumer: consumer} do
+  test "carries the ordering key it was sent with", %{producer: producer, consumer: consumer} do
     assert {:ok, _message_id} =
              Pulsar.Producer.send(producer, "payload with ordering key",
                ordering_key: "order-456",
@@ -43,7 +43,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert Pulsar.Message.ordering_key(message) == "order-456"
   end
 
-  test "send message with properties map", %{producer: producer, consumer: consumer} do
+  test "carries the properties it was sent with", %{producer: producer, consumer: consumer} do
     properties = %{
       "trace_id" => "abc-123",
       "source" => "test-service",
@@ -61,7 +61,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert Pulsar.Message.properties(message) == properties
   end
 
-  test "send message with event time", %{producer: producer, consumer: consumer} do
+  test "carries the event time it was sent with, as milliseconds", %{producer: producer, consumer: consumer} do
     event_time = DateTime.utc_now()
     event_time_ms = DateTime.to_unix(event_time, :millisecond)
 
@@ -75,7 +75,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert Pulsar.Message.event_time(message) == event_time_ms
   end
 
-  test "send message with deliver_at_time option", %{producer: producer, consumer: consumer} do
+  test ":deliver_at_time asks the broker to hold it until then", %{producer: producer, consumer: consumer} do
     deliver_at = DateTime.shift(DateTime.utc_now(), second: 1)
     deliver_at_ms = DateTime.to_unix(deliver_at, :millisecond)
 
@@ -89,7 +89,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert message.raw.metadata.deliver_at_time == deliver_at_ms
   end
 
-  test "send message with deliver_after option", %{producer: producer, consumer: consumer} do
+  test ":deliver_after resolves to a delivery time against the clock", %{producer: producer, consumer: consumer} do
     before_send = :erlang.system_time(:millisecond)
 
     assert {:ok, _message_id} =
@@ -103,7 +103,7 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
     assert_in_delta message.raw.metadata.deliver_at_time, before_send + 1000, 10
   end
 
-  test "send message with all options combined", %{producer: producer, consumer: consumer} do
+  test "carries every option at once, none of them displacing another", %{producer: producer, consumer: consumer} do
     properties = %{
       "trace_id" => "xyz-789",
       "source" => "integration-test",

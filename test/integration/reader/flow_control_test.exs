@@ -12,7 +12,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   end
 
   @tag telemetry_listen: [@flow_control]
-  test "small flow_permits triggers refills" do
+  test "tops the window up as it is spent, when it is smaller than the topic" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 100)
@@ -28,7 +28,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   end
 
   @tag telemetry_listen: [@flow_control]
-  test "flow_permits of 1 triggers refill on every message" do
+  test "a window of one is topped up on every message" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 100)
@@ -44,7 +44,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   end
 
   @tag telemetry_listen: [@flow_control]
-  test "large flow_permits requires only initial request" do
+  test "a window wider than the topic is never topped up" do
     messages =
       @topic
       |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 100)

@@ -35,6 +35,21 @@ defmodule Pulsar.ClientTest do
       assert is_pid(Process.whereis(:default))
     end
 
+    test "runs several clients at once, as long as they are named apart" do
+      start_supervised!({Client, name: :first_of_several, host: "pulsar://127.0.0.1:1"})
+      start_supervised!({Client, name: :second_of_several, host: "pulsar://127.0.0.1:1"})
+
+      assert Process.alive?(Process.whereis(:first_of_several))
+      assert Process.alive?(Process.whereis(:second_of_several))
+    end
+
+    test "refuses a name another client is already running under" do
+      start_supervised!({Client, name: :taken_name, host: "pulsar://127.0.0.1:1"})
+
+      assert {:error, {:already_started, _pid}} =
+               Client.start_link(name: :taken_name, host: "pulsar://127.0.0.1:1")
+    end
+
     test "rejects an option of the wrong type" do
       assert_raise NimbleOptions.ValidationError, ~r/invalid value for :conn_timeout/, fn ->
         Client.start_link(name: :bad_type, host: "pulsar://localhost:6650", conn_timeout: "soon")
@@ -292,6 +307,13 @@ defmodule Pulsar.ClientTest do
       assert Pulsar.Producer.stop(consumer) == {:error, :not_found}
       assert Process.alive?(producer)
       assert Process.alive?(consumer)
+    end
+
+    test "a reader reports a client that was never started rather than starting one" do
+      assert [{:error, _reason}] =
+               "persistent://public/default/reader"
+               |> Pulsar.Reader.stream(client: :never_started, timeout: 100)
+               |> Enum.take(1)
     end
 
     test "a reader reports a startup timeout and removes its consumer" do

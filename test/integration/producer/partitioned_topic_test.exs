@@ -12,7 +12,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok
   end
 
-  test "creates producer groups for each partition" do
+  test "starts a worker for every partition of the topic" do
     {:ok, producer_pid} =
       Pulsar.Producer.start(@topic,
         client: @client,
@@ -28,7 +28,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.Producer.stop(producer_pid)
   end
 
-  test "messages with same key consumed from same partition" do
+  test "routes messages sharing a partition key to one partition" do
     test_id = :erlang.unique_integer([:positive])
     subscription = "partitioned-test-#{test_id}"
     producer_name = "partitioned-producer-test-#{test_id}"
@@ -71,13 +71,11 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
       |> Enum.flat_map(&DummyConsumer.get_messages/1)
       |> Enum.filter(fn msg -> msg.payload in messages end)
 
-    # All messages should have the same partition_key
     assert [^partition_key] =
              our_messages
              |> Enum.map(fn msg -> Pulsar.Message.key(msg) end)
              |> Enum.uniq()
 
-    # All messages should have been routed to the same partition
     assert [_single_partition] =
              our_messages
              |> Enum.map(fn msg -> msg.raw.command.message_id.partition end)
@@ -87,7 +85,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(consumer_pid)
   end
 
-  test "messages without partition_key are distributed randomly across partitions" do
+  test "spreads keyless messages across every partition" do
     test_id = :erlang.unique_integer([:positive])
     subscription = "partitioned-random-test-#{test_id}"
     producer_name = "partitioned-producer-random-test-#{test_id}"

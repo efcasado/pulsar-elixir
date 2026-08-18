@@ -26,7 +26,7 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     %{consumer: consumer_pid}
   end
 
-  test "a callback that does not opt in never sees it" do
+  test "a callback without handle_invalid_message/2 never sees an invalid message" do
     defmodule PlainConsumer do
       @moduledoc false
       use Pulsar.Consumer.Callback

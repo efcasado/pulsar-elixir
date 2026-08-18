@@ -3,7 +3,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
 
   alias Pulsar.Test.Support.DummyConsumer
 
-  test "consumer successfully registers schema with broker" do
+  test "subscribes with a schema and reads what was published under it" do
     topic = "persistent://public/default/consumer-schema-registration-test-#{:erlang.unique_integer([:positive])}"
 
     producer_pid = start_producer(topic, schema: [type: :String])
@@ -21,7 +21,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert message.payload == "test message"
   end
 
-  test "consumer can subscribe without schema" do
+  test "subscribes without one, and reads a schema-carrying topic anyway" do
     topic = "persistent://public/default/consumer-no-schema-test-#{:erlang.unique_integer([:positive])}"
 
     producer_pid = start_producer(topic, schema: [type: :String])
@@ -37,7 +37,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert message.payload == "test message"
   end
 
-  test "incompatible schema types are rejected" do
+  test "a consumer whose schema the topic will not accept never becomes ready" do
     topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
 
     start_producer(topic, schema: [type: :String])

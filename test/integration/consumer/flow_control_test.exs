@@ -20,7 +20,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   end
 
   @tag telemetry_listen: [@flow_control]
-  test "tiny permits with zero threshold triggers refill on every message", %{
+  test "a window of one is topped up on every message", %{
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
@@ -46,7 +46,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   end
 
   @tag telemetry_listen: [@flow_control]
-  test "threshold triggers refill when outstanding permits drop below threshold", %{
+  test "is topped up once the window falls to its threshold", %{
     expected_count: expected_count
   } do
     {:ok, consumer_group} =
@@ -73,7 +73,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     refute_granted(consumer_id)
   end
 
-  test "manual flow control with zero initial permits", %{expected_count: expected_count} do
+  test "grants nothing until the caller asks, when it starts with no window", %{expected_count: expected_count} do
     {:ok, consumer_group} =
       Pulsar.Consumer.start(
         @topic,

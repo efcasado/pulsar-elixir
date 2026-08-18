@@ -8,7 +8,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
   describe "batch producer" do
     @tag telemetry_listen: [@batch_published]
-    test "sends multiple batches when messages exceed batch_size" do
+    test "fills one entry per :batch_size messages, and sends each as it fills" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
 
@@ -155,7 +155,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     end
 
     @tag telemetry_listen: [@batch_published]
-    test "flushes single message batch on timer" do
+    test "sends a batch the timer came due on, however little it holds" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
 
@@ -169,7 +169,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     end
 
     @tag telemetry_listen: [@batch_published]
-    test "empty batch flush is no-op" do
+    test "sends nothing when the timer comes due on an empty batch" do
       {_consumer_pid, producer_pid} =
         setup_producer_consumer("empty-batch", batch_size: 10, flush_interval: 50)
 

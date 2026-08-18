@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
   end
 
-  test "handles interleaved chunks from multiple chunked messages" do
+  test "reassembles two chunked messages whose chunks arrive interleaved" do
     topic = isolated_topic("interleaved")
     p1_large_message = "This is a test message that will be chunked from producer 1."
     p2_large_message = "This is a test message that will be chunked from producer 2."
@@ -108,7 +108,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   @tag telemetry_listen: [[:pulsar, :producer, :message, :published]]
-  test "handles mix of chunked and non-chunked messages" do
+  test "delivers chunked and unchunked messages off the same producer" do
     topic = isolated_topic("mixed")
     small_message = "Small message"
     large_message = "This is a test message that will be chunked."
@@ -156,7 +156,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
   end
 
-  test "producer with chunking disabled cannot send 5MB messages" do
+  test "refuses an oversized message outright when chunking is off" do
     topic = isolated_topic("disabled")
     very_large_message = String.duplicate("x", 6_291_456)
 
@@ -180,7 +180,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, "still connected")
   end
 
-  test "producer with chunking enabled can send and receive messages larger than 5MB" do
+  test "splits a message past the broker's limit and reassembles it whole" do
     topic = isolated_topic("5mb")
     very_large_message = String.duplicate("x", 6_291_456)
 
@@ -417,7 +417,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   end
 
   @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :discarded]]
-  test "evicts oldest incomplete chunked message when queue is full" do
+  test "evicts the message that has been waiting longest when the queue is full" do
     topic = isolated_topic("evict")
 
     {:ok, producer} =

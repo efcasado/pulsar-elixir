@@ -3,7 +3,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
   alias Pulsar.Test.Support.DummyConsumer
 
-  test "json schema" do
+  test "registers a Json schema and carries it on what it publishes" do
     topic = "persistent://public/default/producer-schema-test-json"
     :ok = System.create_topic(topic)
     json_definition = %{type: "record", name: "TestRecord", fields: [%{name: "name", type: "string"}]}
@@ -17,7 +17,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
   end
 
-  test "avro schema" do
+  test "registers an Avro schema and carries it on what it publishes" do
     topic = "persistent://public/default/producer-schema-test-avro"
     :ok = System.create_topic(topic)
 
@@ -46,7 +46,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     defstruct [:type, :name, :fields]
   end
 
-  test "json schema with struct definition" do
+  test "encodes a struct definition to the JSON the broker stores" do
     topic = "persistent://public/default/producer-schema-test-json-struct"
     :ok = System.create_topic(topic)
 
@@ -69,7 +69,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert_send(producer_pid, consumer_pid, ~s({"name": "test"}))
   end
 
-  test "batched messages work with schema" do
+  test "applies the schema to messages that go out in a batch" do
     topic = "persistent://public/default/schema-with-batching-test"
     :ok = System.create_topic(topic)
 
@@ -93,7 +93,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert Enum.all?(messages, &(&1 in received))
   end
 
-  test "we get schema version from broker" do
+  test "records the version the broker assigned the schema" do
     topic = "persistent://public/default/producer-schema-version-test"
     :ok = System.create_topic(topic)
 
@@ -105,7 +105,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert is_binary(version), "expected schema_version to be binary, got: #{inspect(version)}"
   end
 
-  test "message metadata includes schema version" do
+  test "stamps each message with the schema version it was published under" do
     topic = "persistent://public/default/producer-schema-msg-version-test"
     :ok = System.create_topic(topic)
 
@@ -119,7 +119,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert message.raw.metadata.schema_version
   end
 
-  test "incompatible schema types are rejected on same topic" do
+  test "a producer whose schema the topic will not accept never becomes ready" do
     topic = "persistent://public/default/producer-schema-compat-test"
     :ok = System.create_topic(topic)
 
@@ -148,7 +148,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     refute producer_group in Pulsar.Client.producers(@client)
   end
 
-  test "compatible schema changes produce different versions" do
+  test "an evolved schema is stored as a new version of the old one" do
     topic = "persistent://public/default/producer-schema-evolution-test"
     :ok = System.create_topic(topic)
 

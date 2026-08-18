@@ -39,7 +39,17 @@ defmodule Pulsar.Integration.Reader.CommonTest do
     assert payloads == Enum.map(1..@num_messages, &"Message #{&1}")
   end
 
-  test "empty stream when no messages available from latest" do
+  test "closes the consumer it opened once the stream is done with it" do
+    assert @topic
+           |> Pulsar.Reader.stream(client: @client, timeout: 100)
+           |> Enum.count() == @num_messages
+
+    Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end,
+      description: "the reader's consumer to be removed from the client"
+    )
+  end
+
+  test "reading from :latest yields nothing published before it" do
     unique_topic = "persistent://public/default/reader-empty-#{:erlang.unique_integer([:positive])}"
 
     {:ok, _producer} =

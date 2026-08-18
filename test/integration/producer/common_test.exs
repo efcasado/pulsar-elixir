@@ -10,12 +10,12 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     :ok = System.create_topic(@topic)
   end
 
-  test "send returns error when producer not found" do
+  test "reports a producer name nothing is registered under" do
     assert {:error, :not_found} =
              Pulsar.Producer.send("non-existent-producer-group", "message", client: @client)
   end
 
-  test "await_ready waits for producer registration" do
+  test "await_ready/2 waits for the producer to register, and honours its timeout" do
     {:ok, producer} =
       Pulsar.Producer.start(@topic,
         client: @client,
@@ -31,7 +31,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
   end
 
   @tag telemetry_listen: [@opened, @closed, @published]
-  test "create and send message" do
+  test "reports opening, publishing and closing as it goes" do
     producer_group_name = "my-producer"
 
     assert {:ok, group_pid} =
@@ -70,7 +70,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     refute_receive {:telemetry_event, %{event: @closed, metadata: %{producer_name: ^worker_name}}}
   end
 
-  test "send multiple messages asynchronously" do
+  test "send_async/3 answers every caller, whatever order they are awaited in" do
     {:ok, producer} =
       Pulsar.Producer.start(@topic,
         client: @client,

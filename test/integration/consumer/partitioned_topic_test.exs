@@ -20,7 +20,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     {:ok, expected_count: length(@messages)}
   end
 
-  test "partitioned consumers", %{expected_count: expected_count} do
+  test "reads every partition, across the workers of every consumer", %{expected_count: expected_count} do
     {:ok, partitioned_consumer_pid} =
       Pulsar.Consumer.start(
         @topic,

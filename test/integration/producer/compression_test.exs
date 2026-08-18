@@ -9,7 +9,7 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
     :ok = System.create_topic(@topic)
   end
 
-  test "produce and consume compressed messages successfully" do
+  test "a consumer decodes what every codec produced, without being told which" do
     {:ok, _} =
       Pulsar.Producer.start(
         @topic,

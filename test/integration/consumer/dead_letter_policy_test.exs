@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     assert Pulsar.Consumer.topic(consumer) == topic
   end
 
-  test "dead letter policy with max_redelivery sends messages to DLQ after threshold" do
+  test "diverts a message once it has been redelivered :max_redelivery times" do
     topic = @topic
     subscription = "failing"
     dlq_topic = topic <> "-" <> subscription <> "-DLQ"
@@ -111,7 +111,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     assert dlq_payloads == @messages
   end
 
-  test "no dead letter policy means no DLQ" do
+  test "redelivers forever, and creates no topic, when no policy is set" do
     topic = @topic
     subscription = "no-dlq"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
@@ -139,7 +139,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     refute expected_dlq_topic in topics
   end
 
-  test "dead letter policy with default DLQ topic name" do
+  test "names the topic after the subscription when the policy does not" do
     topic = @topic
     subscription = "default-name"
     expected_dlq_topic = "#{topic}-#{subscription}-DLQ"
