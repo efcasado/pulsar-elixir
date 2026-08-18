@@ -30,10 +30,8 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     :ok = Pulsar.Consumer.await_ready(shared_group)
     [consumer1, consumer2] = Topology.workers(shared_group)
 
-    # With manual flow control, grant one permit to each consumer per round so
-    # the broker dispatches exactly one message to each. This makes the Shared
-    # distribution deterministic (verifying round-robin) instead of racing on
-    # which consumer drains the pre-produced backlog first.
+    # A permit each per round, so the broker has exactly one message to give each. Left to
+    # itself, whichever consumer drained the backlog first would take all of it.
     rounds = div(expected_count, 2)
 
     for _round <- 1..rounds do
@@ -59,10 +57,9 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     :ok = Pulsar.Consumer.await_ready(key_shared_group)
     [consumer1, consumer2] = Topology.workers(key_shared_group)
 
-    # With manual flow control, only grant permits once BOTH consumers are
-    # subscribed, so Key_Shared hash ranges are split between them before any
-    # message is dispatched. Otherwise the first consumer can drain backlog for
-    # keys that later belong to the second consumer's range, causing key overlap.
+    # Granted only once both have subscribed, so the broker has split the hash range before it
+    # dispatches anything. Earlier, and the first consumer takes keys that later belong to the
+    # second.
     :ok = Pulsar.Consumer.send_flow(consumer1, expected_count)
     :ok = Pulsar.Consumer.send_flow(consumer2, expected_count)
 

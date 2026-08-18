@@ -219,7 +219,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
 
     # Both differ from the schema defaults, :none and false, so a default cannot satisfy them.
     assert producer_state.compression == :lz4
-    assert producer_state.batch_enabled == true
+    assert producer_state.batch_enabled
   end
 
   @tag telemetry_listen: [

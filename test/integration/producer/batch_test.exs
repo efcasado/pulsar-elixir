@@ -177,7 +177,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       [producer] = Topology.workers(producer_pid)
       state = :sys.get_state(producer)
-      assert state.ready == true
+      assert state.ready
       assert state.batch == []
 
       refute_batch_published(state.producer_name)

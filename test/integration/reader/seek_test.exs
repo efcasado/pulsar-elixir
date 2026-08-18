@@ -49,7 +49,6 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       )
       |> Enum.take(6)
 
-    assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)
     assert payloads == ["Message 5", "Message 6", "Message 7", "Message 8", "Message 9", "Message 10"]
   end
@@ -65,7 +64,6 @@ defmodule Pulsar.Integration.Reader.SeekTest do
       )
       |> Enum.take(6)
 
-    assert length(messages) == 6
     payloads = Enum.map(messages, & &1.payload)
     assert payloads == ["Message 5", "Message 6", "Message 7", "Message 8", "Message 9", "Message 10"]
   end

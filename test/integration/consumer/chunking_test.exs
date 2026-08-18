@@ -38,8 +38,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
     assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
 
     # Workers pick these up from their options by name, so a rename empties every event.
@@ -206,8 +206,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert_receive {:consumer, ^consumer, %{payload: ^very_large_message} = received_msg}
 
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
@@ -247,7 +247,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
 
       assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
-      assert received_msg.chunk_metadata.complete == true
+      assert received_msg.chunk_metadata.complete
       assert received_msg.chunk_metadata.num_chunks > 1
 
       # Every chunk describes the message it belongs to, not the slice it carries.
@@ -452,8 +452,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.subscription_name == "chunking-evict"
 
     assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
-    assert received_msg.chunk_metadata.chunked == true
-    assert received_msg.chunk_metadata.complete == true
+    assert received_msg.chunk_metadata.chunked
+    assert received_msg.chunk_metadata.complete
     assert received_msg.chunk_metadata.num_chunks == 2
   end
 
