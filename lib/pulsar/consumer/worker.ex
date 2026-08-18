@@ -186,7 +186,7 @@ defmodule Pulsar.Consumer.Worker do
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
-        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled])),
+        acks: Ack.new(Keyword.take(opts, [:ack_type])),
         schema: build_schema(Keyword.get(opts, :schema)),
         max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
@@ -619,7 +619,7 @@ defmodule Pulsar.Consumer.Worker do
   defp send_ack(state, message_ids, validation_error) do
     ack_command = %Binary.CommandAck{
       consumer_id: state.consumer_id,
-      ack_type: :Individual,
+      ack_type: Protocol.to_ack_type(state.acks.ack_type),
       message_id: message_ids,
       validation_error: validation_error
     }

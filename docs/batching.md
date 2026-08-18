@@ -138,7 +138,7 @@ Three consequences:
   advance past the entry until every message in it is acknowledged, so the backlog moves at entry
   boundaries rather than after each processed message.
 
-### Narrowing redelivery with `:batch_index_ack_enabled`
+### Narrowing redelivery with `ack_type: :batch_index`
 
 A consumer can tell the broker exactly which messages of an entry an ack covered, so that a
 redelivery brings back only the rest:
@@ -146,19 +146,31 @@ redelivery brings back only the rest:
 ```elixir
 {:ok, consumer} = Pulsar.Consumer.start(
   "orders", "billing", MyConsumer,
-  batch_index_ack_enabled: true
+  ack_type: :batch_index
 )
 ```
 
 > #### Requires broker support, and cannot be detected {: .warning}
 >
-> `:batch_index_ack_enabled` needs `acknowledgmentAtBatchIndexLevelEnabled=true` on the broker.
-> Without it the broker ignores the set and acknowledges the **whole entry**, losing the messages
-> batched alongside the acked one. Nothing in the protocol reports the setting, so the client
-> cannot check: Pulsar's shipped `broker.conf` enables it, `standalone.conf` does not.
+> `:batch_index` needs `acknowledgmentAtBatchIndexLevelEnabled=true` on the broker. Without it
+> the broker ignores the set and acknowledges the **whole entry**, losing the messages batched
+> alongside the acked one. Nothing in the protocol reports the setting, so the client cannot
+> check: Pulsar's shipped `broker.conf` enables it, `standalone.conf` does not.
 
 It costs one ack command per message rather than one per entry, so it only pays for itself when
 messages in a batch meet different fates.
+
+### Batches and `ack_type: :cumulative`
+
+A cumulative ack moves the subscription cursor, and a cursor names entries — so it cannot stop
+part-way through a batch. Acking one message of an entry moves the cursor only as far as the
+**entry before**, leaving the batch to be redelivered whole rather than acknowledging the
+messages batched after the acked one.
+
+The two cannot be combined to narrow that. The broker applies an `ack_set` to individual
+acknowledgements only; on a cumulative one it acknowledges the entry whatever set the ack
+carries, which is why `:ack_type` is one choice of three rather than a flag alongside them.
+Reach for `:batch_index` when a partly consumed batch must not come back whole.
 
 ## Keys and `Key_Shared`
 
@@ -250,8 +262,8 @@ accepted before it, then publishes it as its own entry. This is what the Java an
     subscription_name: "billing",
     callback_module: MyConsumer,
 
-    batch_index_ack_enabled: false,  # Ask the broker to track per-message acks (default: false)
-    redelivery_interval: 5_000       # Needed for a nack to bring anything back
+    ack_type: :batch_index,     # Ask the broker to track per-message acks (default: :individual)
+    redelivery_interval: 5_000  # Needed for a nack to bring anything back
    ]
  ]}
 ```
@@ -275,8 +287,9 @@ accepted before it, then publishes it as its own entry. This is what the Java an
 - **`max_pending_messages`**: Sends the producer can carry before refusing more. Defaults to
   1,000 and counts messages both before and after a batch is flushed, until their sends finish.
 
-- **`batch_index_ack_enabled`**: Whether acks name individual messages of an entry. Requires
-  broker support, as described above.
+- **`ack_type`**: What an acknowledgement covers — `:individual` (entries), `:batch_index`
+  (messages within an entry, requiring broker support as described above), or `:cumulative`
+  (everything up to the acked message). One choice, not layers.
 
 ## Example: Batched Orders with Per-Key Ordering
 

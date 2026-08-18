@@ -175,9 +175,65 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "acking cumulatively" do
+    defp cumulative(answers, opts \\ []) do
+      worker_state(answers, Keyword.merge([ack_type: :cumulative, subscription_type: :failover], opts))
+    end
+
+    test "sends the wire ack type the subscription cursor moves on" do
+      deliver_unbatched(cumulative(%{}), "solo")
+
+      assert [%Binary.CommandAck{ack_type: :Cumulative}] = acks()
+    end
+
+    test "does not acknowledge the entry while messages batched after the acked one are deferred" do
+      deliver(cumulative(%{"b" => :defer, "c" => :defer}), ["a", "b", "c"])
+
+      # Acking the entry would take "b" and "c" with it, which nothing has processed. The entry
+      # before is as far as the cursor can go, and it moves the rest of the way once "c" is acked.
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: 41, batch_index: -1}] = ack.message_id
+    end
+
+    test "acknowledges the entry once its last message is acked" do
+      deliver(cumulative(%{"a" => :defer, "b" => :defer}), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: @entry, batch_index: -1}] = ack.message_id
+    end
+
+    test "leaves a deferred entry unacknowledged until something passes it" do
+      state = deliver_unbatched(cumulative(%{"a" => :defer}), "a")
+      assert [] == acks()
+
+      deliver_unbatched(state, "b", entry: @entry + 1)
+
+      assert [ack] = acks()
+      assert [%{entryId: 43}] = ack.message_id
+    end
+
+    test "sends nothing for a message that does not move the cursor on" do
+      # "a" and "b" both take the cursor to the entry before this one, so only the first of them
+      # is worth a command; "c" then covers the entry itself.
+      deliver(cumulative(%{"c" => :defer}), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{entryId: 41}] = ack.message_id
+    end
+
+    test "does not ack an entry the cursor has already passed" do
+      state = deliver_unbatched(cumulative(%{}), "b", entry: @entry + 1)
+      assert [%{message_id: [%{entryId: 43}]}] = acks()
+
+      deliver_unbatched(state, "a")
+
+      assert [] == acks()
+    end
+  end
+
   describe "batch index acking" do
     test "reports what is still outstanding in the entry as each message is acked" do
-      deliver(worker_state(%{}, batch_index_ack_enabled: true), ["a", "b", "c"])
+      deliver(worker_state(%{}, ack_type: :batch_index), ["a", "b", "c"])
 
       # Set bits are the messages still owed, clearing as the acks come in.
       assert [first, second, third] = Enum.map(acks(), fn ack -> hd(ack.message_id) end)
@@ -201,7 +257,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       # Everything but message 0 is deferred, so one ack goes out reporting the other 69.
       answers = Map.new(tl(payloads), &{&1, :defer})
 
-      deliver(worker_state(answers, batch_index_ack_enabled: true), payloads)
+      deliver(worker_state(answers, ack_type: :batch_index), payloads)
 
       assert [ack] = acks()
       assert [%{ack_set: [low, high], batch_size: 70}] = ack.message_id
@@ -271,7 +327,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
 
     test "keeps its full width under batch index acking, so it can still complete" do
-      state = worker_state(%{}, batch_index_ack_enabled: true)
+      state = worker_state(%{}, ack_type: :batch_index)
 
       # "a" was acked by whoever held the entry before, so only "b" and "c" are delivered.
       state = deliver(state, ["a", "b", "c"], ack_set: [0b110])
@@ -471,7 +527,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   defp worker_state(answers, opts \\ []) do
-    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled])
+    {ack_opts, opts} = Keyword.split(opts, [:ack_type])
 
     struct(
       Worker,

@@ -20,6 +20,89 @@ defmodule Pulsar.Consumer.AckTest do
     end
   end
 
+  describe "record_ack/2 when cumulative" do
+    setup do: %{ack: Ack.new(ack_type: :cumulative)}
+
+    test "sends only the furthest of the ids it is given", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [id(41), id(43), id(42)])
+
+      assert acked.entryId == 43
+    end
+
+    test "orders by ledger before entry, so a new ledger wins a lower entry id", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [%{id(99) | ledgerId: 7}, %{id(1) | ledgerId: 8}])
+
+      assert {acked.ledgerId, acked.entryId} == {8, 1}
+    end
+
+    test "counts nothing off, since one ack covers the messages before it", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert ack.acked == %{}
+    end
+
+    test "sends nothing for an id the cursor has already passed", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+
+      assert {[], ^ack} = Ack.record_ack(ack, [id(42)])
+      assert {[], ^ack} = Ack.record_ack(ack, [id(43)])
+    end
+
+    test "sends again once an id moves the cursor on", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+      {[acked], _ack} = Ack.record_ack(ack, [id(44)])
+
+      assert acked.entryId == 44
+    end
+
+    test "has nothing to send for no ids at all", %{ack: ack} do
+      assert {[], ^ack} = Ack.record_ack(ack, [])
+    end
+  end
+
+  # The cursor names entries, so stopping part-way through a batch is what the broker cannot be
+  # asked for directly. Acknowledging the entry instead would take the messages batched after
+  # the acked one, which may be deferred, nacked, or still being processed.
+  describe "record_ack/2 when cumulative, stopping inside a batch" do
+    setup do: %{ack: Ack.new(ack_type: :cumulative)}
+
+    # No ack_set goes out to narrow this: the broker honours one on an individual ack but not on
+    # a cumulative one, where it acknowledges the entry regardless.
+    test "goes no further than the entry before, rather than acknowledging the rest", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert {acked.entryId, acked.batch_index} == {41, -1}
+      assert {acked.ack_set, acked.batch_size} == {[], nil}
+    end
+
+    test "acknowledges the entry whole once its last message is acked", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+
+      assert {acked.entryId, acked.batch_index, acked.ack_set} == {42, -1, []}
+    end
+
+    test "moves on to the entry itself once the batch is complete", %{ack: ack} do
+      {[before], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+      {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      {[whole], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+
+      assert {before.entryId, whole.entryId} == {41, 42}
+    end
+
+    test "stays put while the same message is acked again", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+
+      assert {[], ^ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      assert {[], ^ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+    end
+
+    test "treats a batch of one as a whole entry, since there is nothing to stop before", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 1)])
+
+      assert {acked.entryId, acked.batch_index} == {42, -1}
+    end
+  end
+
   describe "entry_id/1" do
     test "leaves an id that names no batch untouched" do
       assert Ack.entry_id(id()) == id()
@@ -106,7 +189,7 @@ defmodule Pulsar.Consumer.AckTest do
     acked = Enum.reject(0..(size - 1), &(&1 in owed))
 
     {ids, _ack} =
-      Enum.reduce(acked, {[], Ack.new(batch_index_ack_enabled: true)}, fn index, {ids, ack} ->
+      Enum.reduce(acked, {[], Ack.new(ack_type: :batch_index)}, fn index, {ids, ack} ->
         {ackable, ack} = Ack.record_ack(ack, [batch_id(index, size)])
         {ids ++ ackable, ack}
       end)

@@ -193,16 +193,26 @@ defmodule Pulsar.Consumer do
 
   ## Batched messages
 
-  The broker acknowledges entries, not the messages inside them, so acking a batched message
-  only counts it off: its entry is acknowledged once every message in it has been acked. The
-  call is unchanged, but a message left unacked holds the ones batched with it, and a nack
-  brings the whole entry back — including messages already acked from it.
+  The call is the same whichever `:ack_type` the consumer uses, but what an ack reaches
+  differs, because the broker acknowledges entries rather than the messages inside them.
 
-  `:batch_index_ack_enabled` narrows that to just the unacked messages, on brokers configured
-  for it.
+  Under `:individual`, acking a batched message only counts it off: its entry is acknowledged
+  once every message in it has been acked. A message left unacked holds the ones batched with
+  it, and a nack brings the whole entry back — including messages already acked from it. Every
+  message must be acked eventually, or nacked with a `:redelivery_interval` configured to bring
+  it back; one that is neither holds its entry's bookkeeping for the life of the consumer.
 
-  Every message must be acked eventually, or nacked with a `:redelivery_interval` configured to
-  bring it back. One that is neither holds its entry's bookkeeping for the life of the consumer.
+  Under `:batch_index`, each ack goes out naming the messages of the entry it was for, so a
+  nack redelivers only the rest. This needs a broker configured for it.
+
+  Under `:cumulative`, nothing is counted off: an ack covers everything up to and including the
+  message, so one left unacked is acknowledged by the next ack that passes it. A cursor names
+  entries, so acking part of a batch moves it only to the entry before — the rest of the entry
+  is redelivered rather than acknowledged unread. `:batch_index` cannot be combined with it to
+  narrow that: the broker applies an `ack_set` to individual acknowledgements only.
+
+  `:cumulative` is available on `:exclusive` and `:failover` subscriptions only. See the
+  `:ack_type` option for the full comparison.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
