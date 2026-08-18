@@ -10,6 +10,10 @@
 /priv/plts/*.plt
 /priv/plts/*.plt.hash
 /test/reports/
+/benchmarks/results/
+/benchmarks/**/__pycache__/
+/benchmarks/java/target/
+/benchmarks/go/pulsar-benchmark-go
 cache.ets
 erl_crash.dump
 *.ez
