@@ -33,6 +33,15 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
   end
 
+  defmodule StoppingCallback do
+    @moduledoc false
+    use Pulsar.Consumer.Callback
+
+    def handle_message(_message, state), do: {:ok, state}
+
+    def reached_end_of_topic(state), do: {:stop, :normal, state}
+  end
+
   @topic "persistent://public/default/orders"
   @chunked "first second"
 
@@ -410,6 +419,21 @@ defmodule Pulsar.Consumer.WorkerTest do
 
       assert map_size(state.chunked_message_contexts) == 1
       refute_received {:telemetry, _measurements, _metadata}
+    end
+  end
+
+  describe "reaching the end of a terminated topic" do
+    test "keeps consuming by default" do
+      state = %{worker_state() | callback_state: :unchanged}
+
+      assert {:noreply, ^state} = Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
+    end
+
+    test "lets the callback stop the worker" do
+      state = %{worker_state() | callback_module: StoppingCallback}
+
+      assert {:stop, :normal, ^state} =
+               Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
   end
 

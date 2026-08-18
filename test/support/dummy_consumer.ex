@@ -8,13 +8,15 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     * `{:consumer, pid, message}` for every message, valid or not
     * `{:consumer_active, pid, active?}` when the broker makes it the active consumer of a
       `:failover` subscription, or takes that over
+    * `{:consumer_end_of_topic, pid}` when it has drained a terminated topic
 
   `pid` is the worker itself, which is what tells the consumers of one topic apart. A test
   asserts on deliveries with `assert_receive`, and on the absence of one with `refute_receive`,
   rather than asking the callback what it has collected.
 
   The only thing it decides for itself is what to answer with: `fail_all: true` rejects every
-  message, so redelivery and dead lettering have something to act on.
+  message, so redelivery and dead lettering have something to act on, and
+  `stop_at_end_of_topic: true` shuts the worker down once it reaches the end of one.
 
   A consumer started in `setup_all` cannot forward to the test that asserts on it, since that
   callback runs in its own process. Either start it in the test, or point it at the right one
@@ -26,7 +28,12 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     forward_to = Keyword.get(opts, :forward_to)
     notify(forward_to, {:consumer_started, self(), context})
 
-    {:ok, %{forward_to: forward_to, fail_all: Keyword.get(opts, :fail_all, false)}}
+    {:ok,
+     %{
+       forward_to: forward_to,
+       fail_all: Keyword.get(opts, :fail_all, false),
+       stop_at_end_of_topic: Keyword.get(opts, :stop_at_end_of_topic, false)
+     }}
   end
 
   @doc """
@@ -65,6 +72,12 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     notify(state.forward_to, {:consumer_active, self(), false})
 
     {:noreply, state}
+  end
+
+  def reached_end_of_topic(state) do
+    notify(state.forward_to, {:consumer_end_of_topic, self()})
+
+    if state.stop_at_end_of_topic, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
   def handle_call({:forward_to, pid}, _from, state) do
