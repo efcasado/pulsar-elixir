@@ -133,6 +133,19 @@ defmodule Pulsar.Test.Support.System do
     end
   end
 
+  # Closes the topic to new messages, so a consumer that drains it is told it has reached the end.
+  # A partitioned topic needs `partitioned?: true`, since the plain command is refused for it.
+  def terminate_topic(topic, opts \\ []) do
+    broker = broker()
+    subcommand = if Keyword.get(opts, :partitioned?, false), do: "partitioned-terminate", else: "terminate"
+    command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", subcommand, topic]
+
+    case docker_exec(command) do
+      {_output, 0} -> :ok
+      {output, code} -> raise "terminating #{topic} failed (exit #{code}): #{output}"
+    end
+  end
+
   def unload_topic(topic) do
     broker = broker()
     command = ["bin/pulsar-admin", "--admin-url", broker.admin_url, "topics", "unload", topic]

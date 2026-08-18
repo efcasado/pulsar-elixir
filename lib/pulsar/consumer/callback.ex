@@ -40,6 +40,7 @@ defmodule Pulsar.Consumer.Callback do
   - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
   - `became_active/1` - Called when this consumer becomes the active consumer of a `:failover` subscription (default: `{:noreply, state}`)
   - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:failover` subscription (default: `{:noreply, state}`)
+  - `reached_end_of_topic/1` - Called when this consumer has drained a terminated topic (default: `{:noreply, state}`)
   - `handle_invalid_message/2` - Called instead of `handle_message/2` for a message whose
     bytes could not be trusted (default: log a warning and acknowledge it, so it is not
     redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
@@ -193,6 +194,41 @@ defmodule Pulsar.Consumer.Callback do
   takeover; not meaningful for other subscription types. A passive consumer
   never receives messages, so there is nothing to pause or resume.
 
+  ## End of Topic
+
+  `reached_end_of_topic/1` is called when the consumer has read to the end of a topic that
+  has been terminated, meaning no further message will ever be published to it. The default
+  implementation keeps the consumer running, which is what a partitioned consumer wants:
+  each partition reaches its end separately, and the others still have messages to deliver.
+
+  Every consumer on the subscription is told, not just whichever one read last: each of the
+  `:consumer_count` processes on a shared subscription hears it, both the active and the
+  passive consumers of a failover one, and each partition's process separately. A shutdown
+  that waits for the whole topic waits for every worker to report, not for the first.
+
+  A worker can be told more than once. Unacknowledged messages are redelivered after the
+  notification, and draining them reaches the end again; so does every reconnect, since the
+  broker sends it to each new session on a terminated topic. Track which workers have
+  reported rather than counting notifications, and keep whatever the callback does here
+  idempotent.
+
+  This says the topic is finished, not the subscription. Answer `{:stop, reason, state}` to
+  shut this worker down once it has nothing left to read:
+
+      def reached_end_of_topic(state) do
+        {:stop, :normal, state}
+      end
+
+  > #### Stopping here is not yet permanent {: .warning}
+  >
+  > A stopped worker is not restarted, but neither outcome of stopping one is what you want.
+  > Stop the last worker of a group and the group shuts down with it, and topology
+  > reconciliation revives it about a minute later: it subscribes again, reaches the end
+  > again, and stops again, on a loop. Stop only some of a `:consumer_count` and the group
+  > keeps running short of workers, since reconciliation only revives whole groups, never
+  > refills one. Use `Pulsar.Consumer.stop/2` from another process to take a consumer down
+  > for good.
+
   ## Manual Acknowledgment
 
   When you return `{:noreply, state}` from `handle_message/2`, the message will NOT be automatically
@@ -262,6 +298,7 @@ defmodule Pulsar.Consumer.Callback do
                       handle_info: 2,
                       became_active: 1,
                       became_passive: 1,
+                      reached_end_of_topic: 1,
                       handle_invalid_message: 2
   @callback terminate(reason, state) :: term()
   @callback handle_call(term(), GenServer.from(), state) ::
@@ -284,6 +321,10 @@ defmodule Pulsar.Consumer.Callback do
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
   @callback became_passive(state) ::
+              {:noreply, state}
+              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
+              | {:stop, term(), state}
+  @callback reached_end_of_topic(state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
               | {:stop, term(), state}
@@ -322,6 +363,10 @@ defmodule Pulsar.Consumer.Callback do
         {:noreply, state}
       end
 
+      def reached_end_of_topic(state) do
+        {:noreply, state}
+      end
+
       def handle_invalid_message(message, state) do
         require Logger
 
@@ -337,6 +382,7 @@ defmodule Pulsar.Consumer.Callback do
                      handle_info: 2,
                      became_active: 1,
                      became_passive: 1,
+                     reached_end_of_topic: 1,
                      handle_invalid_message: 2
     end
   end

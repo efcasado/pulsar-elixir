@@ -242,6 +242,24 @@ defmodule Pulsar.BrokerTest do
     assert log =~ "No requester found for request 12345"
   end
 
+  describe "reaching the end of a terminated topic" do
+    test "hands the command to the consumer it names" do
+      broker = %Broker{consumers: %{7 => {self(), make_ref()}}}
+      command = %Proto.CommandReachedEndOfTopic{consumer_id: 7}
+
+      assert :keep_state_and_data = Broker.connected(:internal, {:command, command}, broker)
+      assert_receive {:broker_message, ^command}
+    end
+
+    test "drops it for a consumer that has already gone" do
+      broker = %Broker{consumers: %{}}
+      command = %Proto.CommandReachedEndOfTopic{consumer_id: 7}
+
+      assert :keep_state_and_data = Broker.connected(:internal, {:command, command}, broker)
+      refute_receive {:broker_message, _command}, 100
+    end
+  end
+
   describe "drop_ssl_opts/1" do
     test "strips TLS-only options before a plain TCP connect" do
       opts = [verify: :verify_peer, cacertfile: "/ca.pem", certfile: "/c.pem", keyfile: "/k.pem"]
