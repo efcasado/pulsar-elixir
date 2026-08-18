@@ -1,9 +1,9 @@
 defmodule Pulsar.Topology.Discovery do
   @moduledoc false
 
-  # Initializes a topology from broker metadata, polls for partition growth when enabled,
-  # and reconciles known groups locally. Resolution and retry happen in this process so the
-  # stable Pulsar.Topology root can start even while no broker is available.
+  # Initializes a topology from broker metadata and polls for partition growth when enabled.
+  # Resolution and retry happen in this process so the stable Pulsar.Topology root can start
+  # even while no broker is available.
 
   use GenServer
 

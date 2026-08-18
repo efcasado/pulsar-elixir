@@ -120,7 +120,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     refute_receive {:consumer, ^consumer, _message}
   end
 
-  # An :exclusive subscription admits one consumer; :failover is the way to keep standbys.
   test "exclusive subscription refuses a consumer count above one" do
     assert_raise ArgumentError, ~r/admits a single consumer/, fn ->
       Pulsar.Consumer.start(@topic, "exclusive-multi", @consumer_callback, subscription_options(:exclusive, 2))

@@ -219,15 +219,10 @@ defmodule Pulsar.Consumer.Callback do
         {:stop, :normal, state}
       end
 
-  > #### Stopping here is not yet permanent {: .warning}
-  >
-  > A stopped worker is not restarted, but neither outcome of stopping one is what you want.
-  > Stop the last worker of a group and the group shuts down with it, and topology
-  > reconciliation revives it about a minute later: it subscribes again, reaches the end
-  > again, and stops again, on a loop. Stop only some of a `:consumer_count` and the group
-  > keeps running short of workers, since reconciliation only revives whole groups, never
-  > refills one. Use `Pulsar.Consumer.stop/2` from another process to take a consumer down
-  > for good.
+  Stopping is permanent. A stopped worker is not restarted, a group shuts down once its last
+  worker stops, and the consumer shuts down once its last group does, so a non-partitioned
+  consumer that stops here goes away entirely. Stopping only some of a `:consumer_count`
+  leaves the group running with fewer workers.
 
   ## Manual Acknowledgment
 

@@ -18,7 +18,7 @@ defmodule Pulsar.Topology do
   # A broker losing its connection exits every worker registered with it at once, so a group of
   # N workers sees N restarts in the same instant. Correlated failures can likewise reach several
   # partition groups or topology roots. OTP's default of 3 in 5 seconds would treat that fan-out
-  # as a crash loop, degrading groups until reconciliation, replacing stable root pids, or
+  # as a crash loop, shutting groups down for good, replacing stable root pids, or
   # rebuilding a resource branch. This budget absorbs several full reconnects; bounded worker
   # retries handle fast loops, and the supervisors above the resource branches retain OTP's
   # default as the final escalation boundary.

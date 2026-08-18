@@ -204,8 +204,7 @@ defmodule Pulsar.Consumer.Options do
       default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables later metadata checks, but not initial topic discovery or local
-      recovery of groups that have stopped.
+      `false` disables later metadata checks, but not initial topic discovery.
       """
     ],
     startup_delay_ms: [

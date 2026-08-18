@@ -256,8 +256,8 @@ defmodule Pulsar.Producer do
   A pid must be the stable root returned by `start/1` or `start_link/1`. Group and worker pids
   are not producer roots and return `{:error, :not_found}` here.
 
-  A root started as a static child will be restarted by its supervisor; remove that child
-  from the supervision tree instead.
+  A root started as a static child is `:transient`, so stopping it leaves it stopped, but its
+  child spec stays in the supervision tree until that supervisor restarts.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
