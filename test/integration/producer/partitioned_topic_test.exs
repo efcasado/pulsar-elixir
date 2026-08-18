@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
   @topic "persistent://public/default/partitioned-producer-test"
   @discovery_interval_ms 200
+  @reconciliation [:pulsar, :topology, :reconciliation, :stop]
 
   setup_all do
     System.create_topic(@topic, 3)
@@ -131,6 +132,7 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
     end
   end
 
+  @tag telemetry_listen: [@reconciliation]
   test "discovers partitions added to the topic" do
     test_id = :erlang.unique_integer([:positive])
     topic = "persistent://public/default/partition-discovery-producer-#{test_id}"
@@ -144,23 +146,22 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
         partition_discovery_interval_ms: @discovery_interval_ms
       )
 
-    initial_workers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: &(length(&1) == 3),
-        description: "initial producer partitions to start"
-      )
+    assert_receive {:telemetry_event, %{event: @reconciliation, metadata: %{topic: ^topic, partition_count: 3}}}
+
+    initial_workers = Topology.workers(producer_pid)
 
     System.update_partitions(topic, 6)
 
-    # The discovery poller should pick up the new partitions and start a
-    # producer group for each one, without restarting the existing groups.
-    current_workers =
-      Utils.wait_for(fn -> Topology.workers(producer_pid) end,
-        until: &(length(&1) == 6),
-        description: "added producer partitions to start"
-      )
+    # The poller picks the new partitions up and starts a group for each, leaving the groups
+    # already running where they were.
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @reconciliation,
+                      metadata: %{topic: ^topic, partition_count: 6, added_groups: [3, 4, 5]}
+                    }},
+                   10_000
 
-    assert Enum.all?(initial_workers, &(&1 in current_workers))
+    assert Enum.all?(initial_workers, &(&1 in Topology.workers(producer_pid)))
 
     :ok = Pulsar.Producer.stop(producer_pid)
   end

@@ -13,14 +13,8 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   test "producer recovers from broker crash" do
     {:ok, group_pid} = Pulsar.Producer.start(@topic, producer_options())
 
-    assert_worker_restarts(group_pid, fn producer ->
-      broker =
-        Utils.wait_for(fn -> broker(producer) end,
-          until: &is_pid/1,
-          description: "producer to connect to a broker"
-        )
-
-      Process.exit(broker, :kill)
+    assert_worker_restarts(Pulsar.Producer, group_pid, fn producer ->
+      Process.exit(broker(producer), :kill)
     end)
   end
 
@@ -32,8 +26,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
 
     {:ok, group_pid} = Pulsar.Producer.start(topic, producer_options())
 
-    assert_worker_restarts(group_pid, fn producer ->
-      Utils.wait_for(fn -> :sys.get_state(producer).ready end)
+    assert_worker_restarts(Pulsar.Producer, group_pid, fn _producer ->
       :ok = System.unload_topic(topic)
     end)
 
@@ -49,14 +42,8 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    assert_worker_restarts(group_pid, fn consumer ->
-      broker =
-        Utils.wait_for(fn -> broker(consumer) end,
-          until: &is_pid/1,
-          description: "consumer to connect to a broker"
-        )
-
-      Process.exit(broker, :kill)
+    assert_worker_restarts(Pulsar.Consumer, group_pid, fn consumer ->
+      Process.exit(broker(consumer), :kill)
     end)
   end
 
@@ -69,17 +56,15 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    assert_worker_restarts(group_pid, fn _consumer ->
+    assert_worker_restarts(Pulsar.Consumer, group_pid, fn _consumer ->
       :ok = System.unload_topic(@topic)
     end)
   end
 
-  defp assert_worker_restarts(group, restart) do
-    [before] =
-      Utils.wait_for(fn -> Topology.workers(group) end,
-        until: &match?([_worker], &1),
-        description: "topology worker to start"
-      )
+  # A ready worker has already resolved its broker, which is what the restart below needs.
+  defp assert_worker_restarts(facade, group, restart) do
+    :ok = facade.await_ready(group)
+    [before] = Topology.workers(group)
 
     ref = Process.monitor(before)
     restart.(before)
@@ -98,12 +83,8 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   end
 
   defp broker(worker) do
-    case :sys.get_state(worker) do
-      %{broker_pid: broker} when is_pid(broker) -> broker
-      _state -> nil
-    end
-  catch
-    :exit, _reason -> nil
+    %{broker_pid: broker} = :sys.get_state(worker)
+    broker
   end
 
   defp subscription_options do

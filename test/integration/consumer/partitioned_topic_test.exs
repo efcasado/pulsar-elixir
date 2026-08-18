@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
   @topic "persistent://public/default/partition-topic-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @discovery_interval_ms 200
+  @reconciliation [:pulsar, :topology, :reconciliation, :stop]
   @messages [
     {"key1", "Message 1 for key1"},
     {"key2", "Message 1 for key2"},
@@ -42,6 +43,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
 
+  @tag telemetry_listen: [@reconciliation]
   test "discovers partitions added to the topic" do
     test_id = :erlang.unique_integer([:positive])
     topic = "persistent://public/default/partition-discovery-consumer-#{test_id}"
@@ -53,23 +55,22 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     {:ok, partitioned_consumer_pid} =
       Pulsar.Consumer.start(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
 
-    initial_workers =
-      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
-        until: &(length(&1) == 3),
-        description: "initial consumer partitions to start"
-      )
+    assert_receive {:telemetry_event, %{event: @reconciliation, metadata: %{topic: ^topic, partition_count: 3}}}
+
+    initial_workers = Topology.workers(partitioned_consumer_pid)
 
     System.update_partitions(topic, 6)
 
-    # The discovery poller should pick up the new partitions and start a
-    # consumer group for each one, without restarting the existing groups.
-    current_workers =
-      Utils.wait_for(fn -> Topology.workers(partitioned_consumer_pid) end,
-        until: &(length(&1) == 6),
-        description: "added consumer partitions to start"
-      )
+    # The poller picks the new partitions up and starts a group for each, leaving the groups
+    # already running where they were.
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @reconciliation,
+                      metadata: %{topic: ^topic, partition_count: 6, added_groups: [3, 4, 5]}
+                    }},
+                   10_000
 
-    assert Enum.all?(initial_workers, &(&1 in current_workers))
+    assert Enum.all?(initial_workers, &(&1 in Topology.workers(partitioned_consumer_pid)))
 
     :ok = Pulsar.Consumer.stop(partitioned_consumer_pid)
   end
