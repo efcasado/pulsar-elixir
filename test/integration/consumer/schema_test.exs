@@ -48,7 +48,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
 
     ref = Process.monitor(consumer_group)
 
-    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^consumer_group, :shutdown}, 5_000
 
     assert Pulsar.Consumer.await_ready(consumer_group, timeout: 1_000) == {:error, :not_found}
     refute consumer_group in Pulsar.Client.consumers(@client)

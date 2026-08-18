@@ -399,9 +399,7 @@ defmodule Pulsar.TopologyTest do
     end
 
     test "leaves a stopped partition group down while its siblings keep running" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, partition_discovery_interval_ms: 10)
-
-      :ok = Topology.await_ready(root, 1_000)
+      {root, _registry} = start_topology(2)
 
       groups = Map.new(Topology.groups(root))
       stopped = Map.fetch!(groups, 0)
@@ -412,11 +410,12 @@ defmodule Pulsar.TopologyTest do
       :ok = Agent.stop(worker)
       assert_receive {:DOWN, ^ref, :process, ^stopped, _reason}
 
-      # Several rounds of metadata polling.
-      Process.sleep(100)
+      discovery = discovery(root)
+      for _poll <- 1..3, do: send(discovery, :discover)
+      assert GenServer.call(discovery, :status) == {:ready, {:partitioned, 2}}
 
       assert Process.alive?(root)
-      assert Topology.groups(root) == [{0, :undefined}, {1, surviving}]
+      assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
     end
 
     test "stops the topology once its last group has stopped" do
@@ -499,6 +498,11 @@ defmodule Pulsar.TopologyTest do
         refute Keyword.has_key?(opts, :companions)
       end
     end
+  end
+
+  defp discovery(root) do
+    [pid] = for {{Discovery, _kind, _topic, _scheme}, pid, _type, _modules} <- Supervisor.which_children(root), do: pid
+    pid
   end
 
   defp worker_opts(root) do

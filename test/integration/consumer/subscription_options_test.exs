@@ -241,7 +241,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
 
     ref = Process.monitor(no_force_create_group)
 
-    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, _reason}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, :shutdown}, 5_000
 
     assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 1_000) == {:error, :not_found}
     refute no_force_create_group in Pulsar.Client.consumers(@client)

@@ -133,7 +133,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
 
     ref = Process.monitor(producer_group)
 
-    assert_receive {:DOWN, ^ref, :process, ^producer_group, _reason}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^producer_group, :shutdown}, 5_000
 
     assert Pulsar.Producer.await_ready(producer_group, timeout: 1_000) == {:error, :not_found}
     refute producer_group in Pulsar.Client.producers(@client)

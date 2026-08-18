@@ -142,7 +142,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
 
     ref = Process.monitor(contender)
 
-    assert_receive {:DOWN, ^ref, :process, ^contender, _reason}, 10_000
+    assert_receive {:DOWN, ^ref, :process, ^contender, :shutdown}, 10_000
     refute contender in Pulsar.Client.consumers(@client)
 
     assert Process.alive?(holder)

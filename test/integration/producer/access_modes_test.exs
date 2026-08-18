@@ -60,7 +60,7 @@ defmodule Pulsar.Integration.AccessModesTest do
                       metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
                     }}
 
-    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, _reason}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, :shutdown}, 5_000
 
     assert Pulsar.Producer.await_ready(group_pid_2, timeout: 1_000) == {:error, :not_found}
     refute group_pid_2 in Pulsar.Client.producers(@client)

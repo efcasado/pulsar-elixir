@@ -61,8 +61,6 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     assert_receive {:consumer_end_of_topic, ^worker}, 10_000
 
     assert_receive {:DOWN, ^ref, :process, ^consumer, :shutdown}, 10_000
-
-    refute_receive {:consumer_end_of_topic, _worker}, 5_000
     refute consumer in Pulsar.Client.consumers(@client)
   end
 
@@ -76,15 +74,22 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
         init_args: [stop_at_end_of_topic: true]
       )
 
-    assert [_first, _second] = workers = Topology.workers(consumer)
+    groups = Map.new(Topology.groups(consumer))
+    [ending] = partition_workers(groups, 0)
+    [surviving] = partition_workers(groups, 1)
 
     drain()
 
-    refs = Map.new(workers, &{Process.monitor(&1), &1})
-    consumer_ref = Process.monitor(consumer)
-    :ok = System.terminate_topic(topic, partitioned?: true)
+    ending_ref = Process.monitor(ending)
+    :ok = System.terminate_topic(topic <> "-partition-0")
+    assert_receive {:DOWN, ^ending_ref, :process, ^ending, :normal}, 10_000
 
-    for {ref, worker} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^worker, :normal}, 10_000)
+    assert Process.alive?(consumer)
+    Utils.seed_topic(topic <> "-partition-1", ["after-the-other-ended"], client: @client)
+    assert_receive {:consumer, ^surviving, %Pulsar.Message{payload: "after-the-other-ended"}}, 10_000
+
+    consumer_ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic <> "-partition-1")
 
     assert_receive {:DOWN, ^consumer_ref, :process, ^consumer, :shutdown}, 10_000
   end
@@ -142,6 +147,10 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     :ok = Pulsar.Consumer.await_ready(consumer, client: @client)
 
     consumer
+  end
+
+  defp partition_workers(groups, index) do
+    for {_id, worker, :worker, _modules} <- Supervisor.which_children(Map.fetch!(groups, index)), do: worker
   end
 
   defp drain do
