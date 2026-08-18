@@ -1,5 +1,36 @@
 # Changelog
 
+## [3.1.0](https://github.com/efcasado/pulsar-elixir/compare/v3.0.1...v3.1.0) (2026-08-18)
+
+
+### Features
+
+* **consumer:** report reaching the end of a terminated topic ([#196](https://github.com/efcasado/pulsar-elixir/issues/196)) ([5bc1936](https://github.com/efcasado/pulsar-elixir/commit/5bc1936a811d146a88836315c0c11b7942d1fdf5))
+
+
+### Bug Fixes
+
+* **broker:** a close-on-exit ack was logged as an unknown request ([#197](https://github.com/efcasado/pulsar-elixir/issues/197)) ([8034d33](https://github.com/efcasado/pulsar-elixir/commit/8034d331b71bb1ad37661683b746d27e308dd08e))
+* **consumer:** recover from a payload that cannot be decompressed ([#204](https://github.com/efcasado/pulsar-elixir/issues/204)) ([1cf1c5c](https://github.com/efcasado/pulsar-elixir/commit/1cf1c5c47db7c1ec8f0a7f93f62a64974c71429b))
+
+
+### Dependencies
+
+* bump castore from 1.0.20 to 1.0.21 ([#208](https://github.com/efcasado/pulsar-elixir/issues/208)) ([2356b2d](https://github.com/efcasado/pulsar-elixir/commit/2356b2dada6409f261c08515564fa184ded76af3))
+* bump jdx/mise-action from 4.2.4 to 4.2.5 ([#209](https://github.com/efcasado/pulsar-elixir/issues/209)) ([edcc939](https://github.com/efcasado/pulsar-elixir/commit/edcc9391db89baf3a2fac7229f9630b11cff2c00))
+
+
+### Documentation
+
+* add a 2.x to 3.0 upgrade guide ([#200](https://github.com/efcasado/pulsar-elixir/issues/200)) ([c8224bf](https://github.com/efcasado/pulsar-elixir/commit/c8224bf2f367f76145787165a29c8c055deb79c0))
+
+
+### Tests
+
+* cleaner and improved tests ([#207](https://github.com/efcasado/pulsar-elixir/issues/207)) ([82c251b](https://github.com/efcasado/pulsar-elixir/commit/82c251bd3f1a86e13ec4f86f7345f2d6854949c2))
+* **consumer:** cover that stopping a consumer removes it ([#199](https://github.com/efcasado/pulsar-elixir/issues/199)) ([75826cb](https://github.com/efcasado/pulsar-elixir/commit/75826cb49d9a9c52a34233fab599668af324d8cd))
+* **producer:** wait for the deduplicated event instead of racing it ([#201](https://github.com/efcasado/pulsar-elixir/issues/201)) ([625aae4](https://github.com/efcasado/pulsar-elixir/commit/625aae405836e3e3e55dbb6e6a1a75b7321282b4))
+
 ## [3.0.1](https://github.com/efcasado/pulsar-elixir/compare/v3.0.0...v3.0.1) (2026-08-15)
 
 
