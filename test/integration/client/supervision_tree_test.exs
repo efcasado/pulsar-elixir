@@ -3,7 +3,6 @@ defmodule Pulsar.Integration.Client.SupervisionTreeTest do
 
   alias Pulsar.Client
   alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
 

@@ -262,7 +262,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
       # removed a byte.
       assert received_msg.chunk_metadata.num_chunks == ceil(total / @chunk_size)
 
-      if compression == :none do
+      if unquote(compression == :none) do
         assert total == byte_size(large_message)
       else
         assert total < byte_size(large_message)
@@ -368,7 +368,7 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
 
     assert {:ok, _msg_id} = Pulsar.Producer.send(producer, message)
 
-    assert_receive {:consumer, ^consumer, %{payload: ^message} = received_msg}
+    assert_receive {:consumer, ^consumer, %{payload: ^message}}
   end
 
   test "refuses a message whose metadata alone exceeds the broker's limit" do

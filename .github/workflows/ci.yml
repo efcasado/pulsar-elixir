@@ -143,7 +143,7 @@ jobs:
     - name: Run ${{ matrix.suite }} tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: mix coveralls.github ${{ matrix.args }} --parallel
+      run: mix coveralls.github ${{ matrix.args }} --parallel --warnings-as-errors
 
     - name: Publish Test Report
       uses: dorny/test-reporter@v3.0.0
