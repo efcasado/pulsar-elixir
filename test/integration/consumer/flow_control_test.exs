@@ -2,6 +2,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   use Pulsar.Test.Case, async: true
 
   @topic "persistent://public/default/flow-control"
+  @flow_control [:pulsar, :consumer, :flow_control, :stop]
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
     {"key1", "Message 1"},
@@ -18,7 +19,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     {:ok, expected_count: length(@messages)}
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+  @tag telemetry_listen: [@flow_control]
   test "tiny permits with zero threshold triggers refill on every message", %{
     expected_count: expected_count
   } do
@@ -38,14 +39,13 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     end)
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
-    stats = Utils.collect_flow_stats()
 
-    # 1 initial + 6 refills (one per message) = 7 total events
-    # Each event requests 1 permit, so requested_total should be 7
-    assert %{^consumer_id => %{event_count: 7, requested_total: 7}} = stats
+    # One permit up front and one back per message consumed, so seven grants of one.
+    for _grant <- 1..7, do: assert_granted(consumer_id, 1)
+    refute_granted(consumer_id)
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
+  @tag telemetry_listen: [@flow_control]
   test "threshold triggers refill when outstanding permits drop below threshold", %{
     expected_count: expected_count
   } do
@@ -65,13 +65,12 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     end)
 
     consumer_id = consumer |> :sys.get_state() |> Map.get(:consumer_id)
-    stats = Utils.collect_flow_stats()
 
-    # Initial: 5 permits
-    # After 2 messages: 3 permits remaining (within threshold of 3) -> refill 4 = 7 permits
-    # After 4 messages: 3 permits remaining (within threshold of 3) -> no more messages
-    # Expected: 3 events (initial + 2 refill)
-    assert %{^consumer_id => %{event_count: 3, requested_total: 13}} = stats
+    # Five up front, then a refill of four each time the window falls to the threshold of three.
+    assert_granted(consumer_id, 5)
+    assert_granted(consumer_id, 4)
+    assert_granted(consumer_id, 4)
+    refute_granted(consumer_id)
   end
 
   test "manual flow control with zero initial permits", %{expected_count: expected_count} do
@@ -125,6 +124,19 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     assert Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0
 
     Pulsar.Consumer.stop(consumer_group)
+  end
+
+  # Every test listening for this event is sent every consumer's, so the id picks out ours.
+  defp assert_granted(consumer_id, permits) do
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @flow_control,
+                      metadata: %{consumer_id: ^consumer_id, permits_requested: ^permits}
+                    }}
+  end
+
+  defp refute_granted(consumer_id) do
+    refute_receive {:telemetry_event, %{event: @flow_control, metadata: %{consumer_id: ^consumer_id}}}
   end
 
   defp subscription_options(count, initial, threshold, refill) do

@@ -5,6 +5,7 @@ defmodule Pulsar.Integration.AccessModesTest do
   @exclusive_topic "persistent://public/default/producer-exclusive-test"
   @wait_exclusive_topic "persistent://public/default/producer-wait-exclusive-test"
   @exclusive_with_fencing_topic "persistent://public/default/producer-exclusive-fencing-test"
+  @opened [:pulsar, :producer, :opened, :stop]
 
   setup_all do
     :ok = System.create_topic(@shared_topic)
@@ -35,7 +36,7 @@ defmodule Pulsar.Integration.AccessModesTest do
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
+  @tag telemetry_listen: [@opened]
   test "only one producer can connect with :exclusive access mode" do
     # Start first producer with :exclusive
     assert {:ok, group_pid_1} =
@@ -63,13 +64,11 @@ defmodule Pulsar.Integration.AccessModesTest do
     assert group_pid_2 in Pulsar.Client.producers(@client)
     assert {:error, :no_producers_available} = Pulsar.Producer.send(group_pid_2, "Rejected message")
 
-    events = Utils.collect_events([:pulsar, :producer, :opened, :stop], producer_names: ["exclusive-2"])
-
-    assert Enum.any?(
-             events,
-             &(&1.success == false and &1.error == :producer_fenced and
-                 String.starts_with?(&1.producer_name, "exclusive-2"))
-           )
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @opened,
+                      metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
+                    }}
 
     assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
     Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
@@ -146,7 +145,7 @@ defmodule Pulsar.Integration.AccessModesTest do
     Pulsar.Producer.stop(group_pid_2)
   end
 
-  @tag telemetry_listen: [[:pulsar, :producer, :opened, :stop]]
+  @tag telemetry_listen: [@opened]
   test ":exclusive_with_fencing takes over and fences old producer" do
     {:ok, group_pid_1} =
       Pulsar.Producer.start(@exclusive_with_fencing_topic,
@@ -195,35 +194,26 @@ defmodule Pulsar.Integration.AccessModesTest do
       match?({:ok, _}, Pulsar.Producer.send(group_pid_2, "Probe message", client: @client))
     end)
 
-    fenced? =
-      &(&1.success == false and &1.error == :producer_fenced and
-          String.starts_with?(&1.producer_name, "original-exclusive"))
+    # Both opened before either was fenced. A worker is named after its group with an index
+    # suffix, so the prefix is what identifies it.
+    assert_receive {:telemetry_event,
+                    %{event: @opened, metadata: %{success: true, producer_name: "original-exclusive" <> _}}}
 
-    # Fencing is observed asynchronously after the broker reconnects, so accumulate events
-    # across collection windows until the original producer reports the terminal error.
-    all_events =
-      Enum.reduce_while(1..150, [], fn _attempt, collected ->
-        collected =
-          collected ++
-            Utils.collect_events([:pulsar, :producer, :opened, :stop],
-              producer_names: ["original-exclusive", "fencing-takeover"]
-            )
+    assert_receive {:telemetry_event,
+                    %{event: @opened, metadata: %{success: true, producer_name: "fencing-takeover" <> _}}}
 
-        if Enum.any?(collected, fenced?) do
-          {:halt, collected}
-        else
-          Process.sleep(100)
-          {:cont, collected}
-        end
-      end)
+    # Fencing is only observed once the broker has reconnected, which is what the wait is for.
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @opened,
+                      metadata: %{
+                        success: false,
+                        error: :producer_fenced,
+                        producer_name: "original-exclusive" <> _
+                      }
+                    }},
+                   15_000
 
-    for group <- ["original-exclusive", "fencing-takeover"] do
-      assert Enum.any?(all_events, &(&1.success and String.starts_with?(&1.producer_name, group)))
-    end
-
-    assert Enum.any?(all_events, fenced?)
-
-    # Cleanup
     Pulsar.Producer.stop(group_pid_2)
   end
 end

@@ -15,8 +15,9 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
     assert {:ok, broker_pid} = Resolver.lookup_topic(@topic, client: @client)
     assert Process.alive?(broker_pid)
 
-    assert %{success_count: 1, failure_count: 0, total_count: 1} =
-             Utils.collect_stats(@lookup, client: @client)
+    # Every test listening for this event is sent every client's, so the client picks out ours.
+    assert_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client, success: true}}}
+    refute_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client}}}
   end
 
   @tag telemetry_listen: [@lookup]
@@ -24,7 +25,10 @@ defmodule Pulsar.Integration.Topology.ResolverTest do
     assert {:error, _reason} = Resolver.lookup_topic("persistent://fake/fake/fake", client: @client)
     assert {:error, _reason} = Resolver.lookup_topic("persistent://public/fake/fake", client: @client)
 
-    assert %{success_count: 0, failure_count: 2, total_count: 2} =
-             Utils.collect_stats(@lookup, client: @client)
+    for _lookup <- 1..2 do
+      assert_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client, success: false}}}
+    end
+
+    refute_receive {:telemetry_event, %{event: @lookup, metadata: %{client: @client}}}
   end
 end

@@ -4,9 +4,10 @@ defmodule Pulsar.Integration.Producer.BatchTest do
   alias Pulsar.Test.Support.DummyConsumer
 
   @topic "persistent://public/default/producer-batch-test"
+  @batch_published [:pulsar, :producer, :batch, :published]
 
   describe "batch producer" do
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "sends multiple batches when messages exceed batch_size" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("multi-batch", batch_size: 3, flush_interval: 30_000)
@@ -19,15 +20,14 @@ defmodule Pulsar.Integration.Producer.BatchTest do
 
       assert_messages_received(consumer_pid, messages)
 
-      # Should have 4 batch events (3+3+3+3=12 messages)
-      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-      assert length(events) == 4
-      assert Enum.all?(events, fn %{count: c} -> c == 3 end)
+      # Twelve messages at three to a batch, and nothing left over.
+      for _batch <- 1..4, do: assert_batch_published(producer_name, 3)
+      refute_batch_published(producer_name)
     end
 
     # A batched message carries its key, properties and event time per entry rather than on the
     # message that carried them, so this is the shape Pulsar.Message's accessors have to resolve.
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "each message in a batch keeps its own key, properties and event time" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("per-entry-metadata", batch_size: 3, flush_interval: 30_000)
@@ -68,7 +68,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       end
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "key-based batching gives every key an entry of its own, not just the first" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("key-based",
@@ -95,8 +95,9 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert_messages_received(consumer_pid, expected_payloads)
 
       # One entry per key, rather than the single entry the default builder would have sent.
-      events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-      assert [%{count: 2}, %{count: 2}] = events
+      assert_batch_published(producer_name, 2)
+      assert_batch_published(producer_name, 2)
+      refute_batch_published(producer_name)
 
       # Every message dispatches on its own key, not on whichever one led the batch.
       for message <- DummyConsumer.get_messages(consumer_pid) do
@@ -104,7 +105,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       end
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "the entry a batch arrives as carries a key for Key_Shared to dispatch on" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("entry-key", batch_size: 2, flush_interval: 30_000)
@@ -130,7 +131,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
     # A batch spends one sequence id per message it carries, so the next batch has to start
     # past the whole range. Starting at the previous batch's first id repeats the ids consumers
     # see and understates the high-water mark the broker reports back on reconnect.
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "consecutive batches claim sequence id ranges that do not overlap" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("sequence-ids", batch_size: 3, flush_interval: 30_000)
@@ -153,7 +154,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert sequence_ids == Enum.to_list(1..9)
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "flushes single message batch on timer" do
       {consumer_pid, producer_pid} =
         setup_producer_consumer("single-msg", batch_size: 100, flush_interval: 100)
@@ -167,7 +168,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert_batch_telemetry(count: 1, producer_name: producer_name)
     end
 
-    @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]
+    @tag telemetry_listen: [@batch_published]
     test "empty batch flush is no-op" do
       {_consumer_pid, producer_pid} =
         setup_producer_consumer("empty-batch", batch_size: 10, flush_interval: 50)
@@ -180,7 +181,7 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       assert state.ready == true
       assert state.batch == []
 
-      assert [] = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [state.producer_name])
+      refute_batch_published(state.producer_name)
     end
 
     test "refuses a batch the broker would reject, and keeps the connection" do
@@ -277,7 +278,22 @@ defmodule Pulsar.Integration.Producer.BatchTest do
   end
 
   defp assert_batch_telemetry(count: expected_count, producer_name: producer_name) do
-    events = Utils.collect_events([:pulsar, :producer, :batch, :published], producer_names: [producer_name])
-    assert [%{count: ^expected_count}] = events
+    assert_batch_published(producer_name, expected_count)
+    refute_batch_published(producer_name)
+  end
+
+  # Every test listening for this event is sent every producer's, so the name is what picks
+  # this producer's out of the mailbox.
+  defp assert_batch_published(producer_name, count) do
+    assert_receive {:telemetry_event,
+                    %{
+                      event: @batch_published,
+                      measurements: %{count: ^count},
+                      metadata: %{producer_name: ^producer_name}
+                    }}
+  end
+
+  defp refute_batch_published(producer_name) do
+    refute_receive {:telemetry_event, %{event: @batch_published, metadata: %{producer_name: ^producer_name}}}
   end
 end

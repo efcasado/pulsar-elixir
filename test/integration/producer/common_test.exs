@@ -2,6 +2,9 @@ defmodule Pulsar.Integration.Producer.CommonTest do
   use Pulsar.Test.Case, async: true
 
   @topic "persistent://public/default/producer-common-test"
+  @opened [:pulsar, :producer, :opened, :stop]
+  @closed [:pulsar, :producer, :closed, :stop]
+  @published [:pulsar, :producer, :message, :published]
 
   setup_all do
     :ok = System.create_topic(@topic)
@@ -27,11 +30,7 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     assert :ok = Pulsar.Producer.stop(producer, client: @client)
   end
 
-  @tag telemetry_listen: [
-         [:pulsar, :producer, :opened, :stop],
-         [:pulsar, :producer, :closed, :stop],
-         [:pulsar, :producer, :message, :published]
-       ]
+  @tag telemetry_listen: [@opened, @closed, @published]
   test "create and send message" do
     producer_group_name = "my-producer"
 
@@ -43,9 +42,11 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     :ok = Pulsar.Producer.await_ready(group_pid)
     [producer] = Topology.workers(group_pid)
+    worker_name = :sys.get_state(producer).producer_name
 
-    assert %{success_count: 1, failure_count: 0, total_count: 1} =
-             Utils.collect_stats([:pulsar, :producer, :opened, :stop], producer_names: [producer_group_name])
+    assert_receive {:telemetry_event, %{event: @opened, metadata: %{success: true, producer_name: ^worker_name}}}
+
+    refute_receive {:telemetry_event, %{event: @opened, metadata: %{producer_name: ^worker_name}}}
 
     assert {:ok, message_id_data} = Pulsar.Producer.send(producer_group_name, "Hello, Pulsar!", client: @client)
 
@@ -54,14 +55,18 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     assert {:ok, _message_id_data2} = Pulsar.Producer.send(group_pid, "Another message with pid!")
 
-    assert [_first, _second] =
-             Utils.collect_events([:pulsar, :producer, :message, :published], producer_names: [producer_group_name])
+    for _published <- 1..2 do
+      assert_receive {:telemetry_event, %{event: @published, metadata: %{producer_name: ^worker_name}}}
+    end
+
+    refute_receive {:telemetry_event, %{event: @published, metadata: %{producer_name: ^worker_name}}}
 
     assert :ok = Pulsar.Producer.stop(group_pid)
     Utils.wait_for(fn -> not Process.alive?(producer) end)
 
-    assert %{success_count: 1, failure_count: 0, total_count: 1} =
-             Utils.collect_stats([:pulsar, :producer, :closed, :stop], producer_names: [producer_group_name])
+    assert_receive {:telemetry_event, %{event: @closed, metadata: %{success: true, producer_name: ^worker_name}}}
+
+    refute_receive {:telemetry_event, %{event: @closed, metadata: %{producer_name: ^worker_name}}}
   end
 
   test "send multiple messages asynchronously" do
