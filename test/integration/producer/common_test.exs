@@ -61,8 +61,9 @@ defmodule Pulsar.Integration.Producer.CommonTest do
 
     refute_receive {:telemetry_event, %{event: @published, metadata: %{producer_name: ^worker_name}}}
 
+    ref = Process.monitor(producer)
     assert :ok = Pulsar.Producer.stop(group_pid)
-    Utils.wait_for(fn -> not Process.alive?(producer) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer, _reason}
 
     assert_receive {:telemetry_event, %{event: @closed, metadata: %{success: true, producer_name: ^worker_name}}}
 

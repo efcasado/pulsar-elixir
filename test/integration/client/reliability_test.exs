@@ -81,8 +81,9 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         description: "topology worker to start"
       )
 
+    ref = Process.monitor(before)
     restart.(before)
-    Utils.wait_for(fn -> not Process.alive?(before) end)
+    assert_receive {:DOWN, ^ref, :process, ^before, _reason}
 
     [after_restart] =
       Utils.wait_for(fn -> Topology.workers(group) end,

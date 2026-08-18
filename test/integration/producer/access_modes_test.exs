@@ -70,13 +70,15 @@ defmodule Pulsar.Integration.AccessModesTest do
                       metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
                     }}
 
+    ref = Process.monitor(group_pid_2)
     assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(group_pid_2) end)
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, _reason}
     refute group_pid_2 in Pulsar.Client.producers(@client)
 
     # Stop the first producer to release exclusive lock
+    ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_1, _reason}
 
     # New exclusive producer should now succeed
     assert {:ok, group_pid_2} =
@@ -133,8 +135,9 @@ defmodule Pulsar.Integration.AccessModesTest do
              Pulsar.Producer.send(group_pid_2, "Message from second producer while waiting", client: @client)
 
     # Now stop the first producer to release exclusive access
+    ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_1, _reason}
 
     # Second producer should now get exclusive access
     :ok = Pulsar.Producer.await_ready(group_pid_2)
@@ -156,6 +159,9 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     :ok = Pulsar.Producer.await_ready(group_pid_1)
     [producer_1] = Topology.workers(group_pid_1)
+
+    # Taken before the fencing below, which is what brings this producer down.
+    fenced_ref = Process.monitor(producer_1)
 
     assert :sys.get_state(producer_1).topic_epoch == 0
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from original producer", client: @client)
@@ -186,8 +192,9 @@ defmodule Pulsar.Integration.AccessModesTest do
       )
     end)
 
-    Utils.wait_for(fn -> not Process.alive?(producer_1) end)
-    refute Process.alive?(producer_1), "Old producer should be fenced and stopped"
+    assert_receive {:DOWN, ^fenced_ref, :process, ^producer_1, _reason},
+                   5_000,
+                   "the fenced producer should have been stopped"
 
     # Step 4: Wait for broker to reconnect and producer to be ready to send
     Utils.wait_for(fn ->

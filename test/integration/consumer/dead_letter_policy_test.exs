@@ -104,10 +104,6 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     # sees a message on every attempt below it and never on the one that dead letters it.
     assert failing_consumer_count == length(@messages) * max_redelivery
 
-    Utils.wait_for(fn ->
-      DummyConsumer.count_messages(dlq_consumer) == length(@messages)
-    end)
-
     dlq_messages = DummyConsumer.get_messages(dlq_consumer)
     assert length(dlq_messages) == length(@messages)
 
@@ -138,9 +134,6 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     Utils.wait_for(fn ->
       DummyConsumer.count_messages(failing_consumer) >= length(@messages) * 2
     end)
-
-    failing_consumer_count = DummyConsumer.count_messages(failing_consumer)
-    assert failing_consumer_count >= length(@messages) * 2
 
     {:ok, topics} = System.list_topics()
     refute expected_dlq_topic in topics

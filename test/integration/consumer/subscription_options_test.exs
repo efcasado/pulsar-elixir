@@ -86,9 +86,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
     end)
-
-    count = @consumer_callback.count_messages(consumer)
-    assert count == expected_count
   end
 
   test "consuming from specific message ID", %{expected_count: expected_count} do
@@ -218,9 +215,10 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(durable_group)
     [durable_consumer] = Topology.workers(durable_group)
 
+    ref = Process.monitor(durable_consumer)
     :ok = Pulsar.Consumer.stop(durable_group)
 
-    Utils.wait_for(fn -> not Process.alive?(durable_consumer) end)
+    assert_receive {:DOWN, ^ref, :process, ^durable_consumer, _reason}
 
     {:ok, subscriptions} = System.topic_subscriptions(@topic)
     assert "durable" in subscriptions
@@ -253,9 +251,10 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     :ok = Pulsar.Consumer.await_ready(non_durable_group)
     [non_durable_consumer] = Topology.workers(non_durable_group)
 
+    ref = Process.monitor(non_durable_consumer)
     :ok = Pulsar.Consumer.stop(non_durable_group)
 
-    Utils.wait_for(fn -> not Process.alive?(non_durable_consumer) end)
+    assert_receive {:DOWN, ^ref, :process, ^non_durable_consumer, _reason}
 
     {:ok, subscriptions} = System.topic_subscriptions(@topic)
     refute "non-durable" in subscriptions
@@ -282,8 +281,9 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert no_force_create_group in Pulsar.Client.consumers(@client)
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
 
+    ref = Process.monitor(no_force_create_group)
     assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(no_force_create_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, _reason}
     refute no_force_create_group in Pulsar.Client.consumers(@client)
   end
 

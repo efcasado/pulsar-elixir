@@ -142,8 +142,9 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert producer_group in Pulsar.Client.producers(@client)
     assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
 
+    ref = Process.monitor(producer_group)
     assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(producer_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^producer_group, _reason}
     refute producer_group in Pulsar.Client.producers(@client)
   end
 

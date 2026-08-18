@@ -61,8 +61,9 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert consumer_group in Pulsar.Client.consumers(@client)
     assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
 
+    ref = Process.monitor(consumer_group)
     assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
-    Utils.wait_for(fn -> not Process.alive?(consumer_group) end)
+    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}
     refute consumer_group in Pulsar.Client.consumers(@client)
   end
 

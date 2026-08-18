@@ -102,8 +102,6 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     Utils.wait_for(fn ->
       @consumer_callback.count_messages(consumer) == expected_count
     end)
-
-    assert @consumer_callback.count_messages(consumer) == expected_count
   end
 
   test "granting permits through the group pid reaches its workers" do
@@ -121,7 +119,6 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     assert Enum.all?(workers, &Process.alive?/1)
 
     Utils.wait_for(fn -> Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0 end)
-    assert Enum.sum(Enum.map(workers, &@consumer_callback.count_messages/1)) > 0
 
     Pulsar.Consumer.stop(consumer_group)
   end
