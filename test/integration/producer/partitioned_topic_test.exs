@@ -1,30 +1,13 @@
 defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :partitioned_producer_test_client
   @topic "persistent://public/default/partitioned-producer-test"
   @discovery_interval_ms 200
 
   setup_all do
-    broker = System.broker()
-
     System.create_topic(@topic, 3)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
 
     :ok
   end

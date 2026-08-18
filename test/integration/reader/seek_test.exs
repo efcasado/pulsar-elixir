@@ -1,66 +1,45 @@
 defmodule Pulsar.Integration.Reader.SeekTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_seek_test_client
   @topic "persistent://public/default/reader-seek-test"
   @num_messages 10
 
   setup_all do
-    broker = System.broker()
+    {:ok, producer} = Pulsar.Producer.start(@topic, client: @client, name: "seek-seed")
+    :ok = Pulsar.Producer.await_ready(producer)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_seek_test_producer
-      )
-
+    # Seeking to a timestamp can only name one message if no two share one. The producer stamps
+    # a message as it sends, to the millisecond, so a message per millisecond is what it takes.
     message_ids =
-      for i <- 1..@num_messages do
-        payload = "Message #{i}"
+      Enum.map(1..@num_messages, fn position ->
+        Process.sleep(2)
+        {:ok, message_id} = Pulsar.Producer.send(producer, "Message #{position}")
 
-        {:ok, message_id} =
-          Utils.wait_for(
-            fn -> Pulsar.Producer.send(:reader_seek_test_producer, payload, client: @client) end,
-            until: &match?({:ok, _message_id}, &1)
-          )
+        message_id
+      end)
 
-        {i, message_id}
-      end
-
-    # Read all messages to get their publish times from Pulsar
-    messages =
+    # The stamp itself only comes back off the topic, on the message that carries it.
+    publish_times =
       @topic
       |> Pulsar.Reader.stream(client: @client)
       |> Enum.take(@num_messages)
+      |> Enum.map(&Pulsar.Message.publish_time/1)
 
-    # Build lookup by payload -> {message_id, publish_time}
-    message_info =
-      messages
-      |> Enum.with_index(1)
-      |> Map.new(fn {msg, i} ->
-        {i, %{message_id: Map.new(message_ids)[i], publish_time: Pulsar.Message.publish_time(msg)}}
+    seeds =
+      [message_ids, publish_times]
+      |> Enum.zip_with(fn [message_id, publish_time] ->
+        %{message_id: message_id, publish_time: publish_time}
       end)
+      |> Enum.with_index(1)
+      |> Map.new(fn {seed, position} -> {position, seed} end)
 
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    assert publish_times == Enum.uniq(publish_times), "messages have to be stamped apart"
 
-    {:ok, message_info: message_info}
+    {:ok, seeds: seeds}
   end
 
-  test "read from specific message_id", %{message_info: message_info} do
-    %{message_id: %{ledgerId: ledger_id, entryId: entry_id}} = message_info[5]
+  test "reads from the message id it is given", %{seeds: seeds} do
+    %{message_id: %{ledgerId: ledger_id, entryId: entry_id}} = seeds[5]
 
     messages =
       @topic
@@ -75,8 +54,8 @@ defmodule Pulsar.Integration.Reader.SeekTest do
     assert payloads == ["Message 5", "Message 6", "Message 7", "Message 8", "Message 9", "Message 10"]
   end
 
-  test "read from timestamp", %{message_info: message_info} do
-    %{publish_time: publish_time} = message_info[5]
+  test "reads from the timestamp it is given", %{seeds: seeds} do
+    %{publish_time: publish_time} = seeds[5]
 
     messages =
       @topic

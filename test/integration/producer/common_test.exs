@@ -1,33 +1,11 @@
 defmodule Pulsar.Integration.Producer.CommonTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :producer_common_test_client
   @topic "persistent://public/default/producer-common-test"
 
   setup_all do
-    broker = System.broker()
-
     :ok = System.create_topic(@topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
   end
-
-  setup [:telemetry_listen]
 
   test "send returns error when producer not found" do
     assert {:error, :not_found} =

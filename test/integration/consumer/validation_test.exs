@@ -1,25 +1,10 @@
 defmodule Pulsar.Integration.Consumer.ValidationTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :validation_test_client
   @topic "persistent://public/default/validation"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
-
-  setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-
-    :ok
-  end
 
   # A consumer per test: both assert on everything the callback collected.
   setup do

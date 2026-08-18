@@ -1,12 +1,6 @@
 defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :partition_topic_test_client
   @topic "persistent://public/default/partition-topic-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @discovery_interval_ms 200
@@ -20,23 +14,10 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    :ok = System.create_topic(@topic, 3)
+    :ok = System.produce_messages(@topic, @messages)
 
-    System.create_topic(@topic, 3)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    System.produce_messages(@topic, @messages)
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
 
   test "partitioned consumers", %{expected_count: expected_count} do

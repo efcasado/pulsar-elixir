@@ -1,14 +1,6 @@
 defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :subscription_options_test_client
   @topic "persistent://public/default/subscription-options-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
@@ -21,38 +13,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    {:ok, producer} = Pulsar.Producer.start(@topic, client: @client, name: "subscription-options-seed")
+    :ok = Pulsar.Producer.await_ready(producer)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :subscription_options_producer
-      )
-
+    # "consuming from timestamp" seeks to one message's publish time, which can only name that
+    # message if no two share a stamp. The producer stamps to the millisecond as it sends, so
+    # these go a millisecond apart rather than together.
     for {key, payload} <- @messages do
-      Utils.wait_for(
-        fn ->
-          Pulsar.Producer.send(:subscription_options_producer, payload, partition_key: key, client: @client)
-        end,
-        until: &match?({:ok, _message_id}, &1)
-      )
+      Process.sleep(2)
+      {:ok, _message_id} = Pulsar.Producer.send(producer, payload, partition_key: key)
     end
 
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
-
-  setup [:telemetry_listen]
 
   test ":name names the group, and each consumer is named after it on the broker" do
     {:ok, group} =

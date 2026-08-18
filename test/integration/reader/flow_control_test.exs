@@ -1,47 +1,14 @@
 defmodule Pulsar.Integration.Reader.FlowControlTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_flow_control_test_client
   @topic "persistent://public/default/reader-flow-control-test"
   @num_messages 20
 
   setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_flow_control_test_producer
-      )
-
-    for i <- 1..@num_messages do
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:reader_flow_control_test_producer, "Message #{i}", client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    Utils.seed_topic(@topic, Enum.map(1..@num_messages, &"Message #{&1}"), client: @client)
 
     :ok
   end
-
-  setup [:telemetry_listen]
 
   @tag telemetry_listen: [[:pulsar, :consumer, :flow_control, :stop]]
   test "small flow_permits triggers refills" do

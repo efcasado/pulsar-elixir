@@ -1,10 +1,6 @@
 defmodule Pulsar.Integration.Consumer.BatchAckTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-
-  @moduletag :integration
-  @client :consumer_batch_ack_test_client
   @topic "persistent://public/default/consumer-batch-ack-test"
   @batch ["msg-1", "msg-2", "msg-3", "msg-4", "msg-5"]
 
@@ -26,13 +22,6 @@ defmodule Pulsar.Integration.Consumer.BatchAckTest do
         {:noreply, state}
       end
     end
-  end
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-    :ok
   end
 
   test "acking one message of a batch does not acknowledge the rest of its entry" do

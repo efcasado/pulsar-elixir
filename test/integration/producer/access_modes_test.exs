@@ -1,39 +1,17 @@
 defmodule Pulsar.Integration.AccessModesTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  import TelemetryTest
-
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :access_modes_test_client
   @shared_topic "persistent://public/default/producer-shared-test"
   @exclusive_topic "persistent://public/default/producer-exclusive-test"
   @wait_exclusive_topic "persistent://public/default/producer-wait-exclusive-test"
   @exclusive_with_fencing_topic "persistent://public/default/producer-exclusive-fencing-test"
 
   setup_all do
-    broker = System.broker()
-
     :ok = System.create_topic(@shared_topic)
     :ok = System.create_topic(@exclusive_topic)
     :ok = System.create_topic(@wait_exclusive_topic)
     :ok = System.create_topic(@exclusive_with_fencing_topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
   end
-
-  setup [:telemetry_listen]
 
   test "multiple producers can publish with :shared access mode" do
     # Start two separate producer groups with :shared mode on same topic

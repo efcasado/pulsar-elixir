@@ -1,19 +1,7 @@
 defmodule Pulsar.Integration.Consumer.SchemaTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :consumer_schema_test_client
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
 
   test "consumer successfully registers schema with broker" do
     topic = "persistent://public/default/consumer-schema-registration-test-#{:erlang.unique_integer([:positive])}"

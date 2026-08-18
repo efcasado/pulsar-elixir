@@ -1,42 +1,11 @@
 defmodule Pulsar.Integration.Reader.CommonTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_common_test_client
   @topic "persistent://public/default/reader-common-test"
   @num_messages 100
 
   setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_common_test_producer
-      )
-
-    for i <- 1..@num_messages do
-      payload = "Message #{i}"
-
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:reader_common_test_producer, payload, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    Utils.seed_topic(@topic, Enum.map(1..@num_messages, &"Message #{&1}"), client: @client)
 
     :ok
   end

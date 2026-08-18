@@ -1,47 +1,16 @@
 defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  setup [:telemetry_listen]
-
-  @moduletag :integration
-  @client :dead_letter_policy_test_client
   @topic "persistent://public/default/dlq-test-topic"
   @messages Enum.map(1..3, &"Message #{&1}")
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, @messages, client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :test_producer
-      )
-
-    Enum.each(@messages, fn message ->
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:test_producer, message, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end)
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
+    :ok
   end
 
   test "an invalid message reaches the DLQ carrying its payload and is acknowledged" do

@@ -1,35 +1,10 @@
 defmodule Pulsar.Integration.Consumer.ChunkingTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :chunking_test_client
   @topic "persistent://public/default/chunking-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
-
-  setup [:telemetry_listen]
-
-  setup_all do
-    broker = System.broker()
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    :ok
-  end
 
   @tag telemetry_listen: [[:pulsar, :producer, :chunk, :start]]
   test "receives and reassembles a simple chunked message" do

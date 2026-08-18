@@ -1,44 +1,13 @@
 defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-
-  @moduletag :integration
-  @client :reader_connection_management_test_client
   @topic "persistent://public/default/reader-connection-management-test"
   @num_messages 20
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, Enum.map(1..@num_messages, &"Message #{&1}"), client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :reader_connection_management_test_producer
-      )
-
-    for i <- 1..@num_messages do
-      payload = "Message #{i}"
-
-      Utils.wait_for(
-        fn -> Pulsar.Producer.send(:reader_connection_management_test_producer, payload, client: @client) end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, broker: broker}
+    :ok
   end
 
   test "stream with external client" do

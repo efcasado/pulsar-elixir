@@ -1,24 +1,9 @@
 defmodule Pulsar.Integration.Producer.BatchTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :producer_batch_test_client
   @topic "persistent://public/default/producer-batch-test"
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  setup [:telemetry_listen]
 
   describe "batch producer" do
     @tag telemetry_listen: [[:pulsar, :producer, :batch, :published]]

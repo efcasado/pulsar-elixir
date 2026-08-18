@@ -1,12 +1,6 @@
 defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :subscription_types_test_client
   @topic "persistent://public/default/subscription-types-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
   @messages [
@@ -19,35 +13,9 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   ]
 
   setup_all do
-    broker = System.broker()
+    Utils.seed_topic(@topic, @messages, client: @client)
 
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    {:ok, _producer_pid} =
-      Pulsar.Producer.start(
-        @topic,
-        client: @client,
-        name: :subscription_types_producer
-      )
-
-    for {key, payload} <- @messages do
-      Utils.wait_for(
-        fn ->
-          Pulsar.Producer.send(:subscription_types_producer, payload, partition_key: key, client: @client)
-        end,
-        until: &match?({:ok, _message_id}, &1)
-      )
-    end
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
-
-    {:ok, expected_count: Enum.count(@messages)}
+    {:ok, expected_count: length(@messages)}
   end
 
   test "shared subscription distributes messages across consumers", %{expected_count: expected_count} do

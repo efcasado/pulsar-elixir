@@ -1,30 +1,13 @@
 defmodule Pulsar.Integration.Client.ReliabilityTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :reliability_test_client
   @topic "persistent://public/default/reliability-test-topic"
   @consumer_callback DummyConsumer
 
   setup_all do
-    broker = System.broker()
-
     :ok = System.create_topic(@topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
   end
 
   test "producer recovers from broker crash" do

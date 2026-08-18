@@ -1,21 +1,10 @@
 defmodule Pulsar.Integration.Consumer.StopTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
-  @moduletag :integration
-  @client :consumer_stop_test_client
   @declared_client :consumer_stop_test_declared_client
   @topic "persistent://public/default/consumer-stop-test"
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _client} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-    :ok
-  end
 
   test "stopping by pid removes the consumer rather than restarting it" do
     topic = @topic <> "-pid"

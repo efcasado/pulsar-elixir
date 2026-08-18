@@ -1,25 +1,11 @@
 defmodule Pulsar.Integration.Producer.MessageOptionsTest do
-  use ExUnit.Case, async: true
+  use Pulsar.Test.Case, async: true
 
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
-
-  @moduletag :integration
-  @client :producer_message_options_test_client
   @topic "persistent://public/default/producer-message-options-test"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
 
   setup_all do
-    broker = System.broker()
-
     :ok = System.create_topic(@topic)
-
-    {:ok, _client_pid} =
-      Pulsar.Client.start_link(
-        name: @client,
-        host: broker.service_url
-      )
 
     {:ok, group_pid} =
       Pulsar.Producer.start(@topic,
@@ -34,10 +20,6 @@ defmodule Pulsar.Integration.Producer.MessageOptionsTest do
 
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
-
-    on_exit(fn ->
-      Pulsar.Client.stop(@client)
-    end)
 
     %{producer: group_pid, consumer: consumer}
   end

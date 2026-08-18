@@ -1,28 +1,13 @@
 defmodule Pulsar.Integration.Producer.DeduplicationTest do
-  use ExUnit.Case, async: true
-
-  import TelemetryTest
+  use Pulsar.Test.Case, async: true
 
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Test.Support.DummyConsumer
-  alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
-  alias Pulsar.Topology
 
-  @moduletag :integration
-  @client :producer_dedup_test_client
   @topic "persistent://public/default/producer-dedup-test"
 
   # The broker's "not persisted" message id, which reaches us as an unsigned 64-bit -1.
   @deduplicated 18_446_744_073_709_551_615
-
-  setup_all do
-    broker = System.broker()
-    {:ok, _} = Pulsar.Client.start_link(name: @client, host: broker.service_url)
-    on_exit(fn -> Pulsar.Client.stop(@client) end)
-  end
-
-  setup [:telemetry_listen]
 
   describe "a topic with deduplication enabled" do
     test "a producer restarting under the same name resumes past the sequence id it reached" do
