@@ -6,7 +6,6 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
   @topic "persistent://public/default/validation"
   @consumer_callback Pulsar.Test.Support.DummyConsumer
 
-  # A consumer per test: both assert on everything the callback collected.
   setup do
     name = "validation-consumer-#{:erlang.unique_integer([:positive])}"
 
@@ -25,24 +24,6 @@ defmodule Pulsar.Integration.Consumer.ValidationTest do
     on_exit(fn -> Pulsar.Consumer.stop(group_pid) end)
 
     %{consumer: consumer_pid}
-  end
-
-  test "an unverifiable message reaches the callback flagged rather than being dropped", ctx do
-    command = %Binary.CommandMessage{
-      consumer_id: 1,
-      message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}
-    }
-
-    send(ctx.consumer, {:broker_message, {:invalid, command, <<255, 255, 255>>, :checksum_mismatch}})
-
-    Utils.wait_for(fn -> @consumer_callback.get_messages(ctx.consumer) != [] end)
-
-    assert [message] = @consumer_callback.get_messages(ctx.consumer)
-    refute Pulsar.Message.valid?(message)
-    assert message.validation_error == :checksum_mismatch
-    assert message.payload == <<255, 255, 255>>
-    assert message.raw.metadata == nil
-    assert message.message_id == command.message_id
   end
 
   test "a callback that does not opt in never sees it" do

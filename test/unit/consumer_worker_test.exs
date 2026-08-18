@@ -125,7 +125,13 @@ defmodule Pulsar.Consumer.WorkerTest do
     assert metadata.topic == "persistent://public/default/orders-partition-2"
 
     assert_received {:invalid, invalid}
+    refute Pulsar.Message.valid?(invalid)
     assert invalid.validation_error == :checksum_mismatch
+
+    # Nothing could be decoded, so it carries the bytes as they arrived and no metadata.
+    assert invalid.payload == <<"invalid">>
+    assert invalid.raw.metadata == nil
+    assert invalid.message_id == command.message_id
   end
 
   describe "a payload that cannot be decompressed" do
@@ -358,5 +364,62 @@ defmodule Pulsar.Consumer.WorkerTest do
     |> Enum.reduce({:noreply, state}, fn {{payload, opts}, chunk_id}, {:noreply, acc} ->
       Worker.handle_info(chunk_delivery(chunk_id, payload, opts), acc)
     end)
+  end
+
+  describe "a chunked message that never completes" do
+    setup do
+      handler = {__MODULE__, :chunk_expired, self()}
+      event = [:pulsar, :consumer, :chunk, :expired]
+      :ok = :telemetry.attach(handler, event, &__MODULE__.forward/4, self())
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # Two of the three chunks arrived, and the third never will.
+      state =
+        struct(reporting_state(),
+          max_pending_chunked_messages: 10,
+          expire_incomplete_chunked_message_after: 100,
+          chunk_cleanup_interval: false
+        )
+
+      {:noreply, state} = Worker.handle_info(chunk_delivery(0, "first ", num_chunks_from_msg: 3), state)
+      {:noreply, state} = Worker.handle_info(chunk_delivery(1, "second", num_chunks_from_msg: 3), state)
+
+      assert map_size(state.chunked_message_contexts) == 1
+
+      {:ok, state: state}
+    end
+
+    test "is dropped once it has been waiting longer than it is given", ctx do
+      aged = age(ctx.state, 200)
+
+      {:noreply, state} = Worker.handle_info(:cleanup_expired_chunks, aged)
+
+      assert state.chunked_message_contexts == %{}
+    end
+
+    test "reports what it was holding when it goes", ctx do
+      {:noreply, _state} = Worker.handle_info(:cleanup_expired_chunks, age(ctx.state, 200))
+
+      assert_received {:telemetry, measurements, metadata}
+      assert measurements.received_chunks == 2
+      assert metadata.uuid == "orders-producer-1"
+    end
+
+    test "is left alone while it still has time", ctx do
+      {:noreply, state} = Worker.handle_info(:cleanup_expired_chunks, age(ctx.state, 10))
+
+      assert map_size(state.chunked_message_contexts) == 1
+      refute_received {:telemetry, _measurements, _metadata}
+    end
+  end
+
+  # Winds every pending context back, so the sweep sees one that has been waiting `ms`.
+  defp age(state, ms) do
+    contexts =
+      Map.new(state.chunked_message_contexts, fn {uuid, ctx} ->
+        {uuid, %{ctx | created_at: ctx.created_at - ms}}
+      end)
+
+    %{state | chunked_message_contexts: contexts}
   end
 end

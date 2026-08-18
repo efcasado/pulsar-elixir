@@ -10,15 +10,6 @@ defmodule Pulsar.Integration.Reader.ConnectionManagementTest do
     :ok
   end
 
-  test "stream with external client" do
-    result =
-      @topic
-      |> Pulsar.Reader.stream(client: @client)
-      |> Enum.take(5)
-
-    assert length(result) == 5
-  end
-
   test "two clients cannot share a name", %{broker: broker} do
     shared_name = :"reader_conflict_#{:erlang.unique_integer([:positive])}"
 

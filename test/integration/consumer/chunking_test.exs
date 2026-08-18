@@ -1,6 +1,7 @@
 defmodule Pulsar.Integration.Consumer.ChunkingTest do
   use Pulsar.Test.Case, async: true
 
+  alias Pulsar.Consumer.ChunkedMessageContext
   alias Pulsar.Protocol.Binary.Pulsar.Proto
 
   @topic "persistent://public/default/chunking-test"
@@ -415,83 +416,8 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     )
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :expired]]
-  test "expired incomplete chunked messages are cleaned up and delivered" do
-    alias Proto, as: Binary
-    alias Pulsar.Consumer.ChunkedMessageContext
-
-    {:ok, consumer_group} =
-      Pulsar.Consumer.start(
-        isolated_topic("expire"),
-        "chunking-expire",
-        @consumer_callback,
-        client: @client,
-        expire_incomplete_chunked_message_after: 100,
-        chunk_cleanup_interval: 50
-      )
-
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
-
-    :sys.replace_state(consumer, fn state ->
-      old_timestamp = :erlang.monotonic_time(:millisecond) - 200
-
-      fake_command = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}
-      }
-
-      fake_metadata = %Binary.MessageMetadata{
-        producer_name: "test-producer",
-        sequence_id: 1,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "test-uuid-expired",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx = %ChunkedMessageContext{
-        uuid: "test-uuid-expired",
-        chunks: %{0 => "chunk0", 1 => "chunk1"},
-        chunk_message_ids: %{
-          0 => fake_command.message_id,
-          1 => %{fake_command.message_id | entryId: 2}
-        },
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 2,
-        first_chunk_message_id: fake_command.message_id,
-        last_chunk_message_id: %{fake_command.message_id | entryId: 2},
-        created_at: old_timestamp,
-        commands: [fake_command, fake_command],
-        metadatas: [fake_metadata, fake_metadata],
-        broker_metadatas: [nil, nil]
-      }
-
-      %{state | chunked_message_contexts: Map.put(state.chunked_message_contexts, "test-uuid-expired", fake_ctx)}
-    end)
-
-    Process.sleep(200)
-
-    assert_receive {:telemetry_event,
-                    %{
-                      event: [:pulsar, :consumer, :chunk, :expired],
-                      measurements: measurements,
-                      metadata: %{uuid: "test-uuid-expired"}
-                    }}
-
-    assert measurements.received_chunks == 2
-
-    updated_state = :sys.get_state(consumer)
-    refute Map.has_key?(updated_state.chunked_message_contexts, "test-uuid-expired")
-  end
-
   @tag telemetry_listen: [[:pulsar, :consumer, :chunk, :discarded]]
   test "evicts oldest incomplete chunked message when queue is full" do
-    alias Proto, as: Binary
-    alias Pulsar.Consumer.ChunkedMessageContext
-
     topic = isolated_topic("evict")
 
     {:ok, producer} =
@@ -515,81 +441,19 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     :ok = Pulsar.Consumer.await_ready(consumer_group)
     [consumer] = Topology.workers(consumer_group)
 
+    # Two chunked messages already waiting, so the real one below arrives to a full queue.
     :sys.replace_state(consumer, fn state ->
       now = :erlang.monotonic_time(:millisecond)
 
-      fake_command1 = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 100, entryId: 1}
+      waiting = %{
+        "fake-uuid-oldest" => %{incomplete("fake-uuid-oldest", 100) | created_at: now - 100},
+        "fake-uuid-newer" => %{incomplete("fake-uuid-newer", 101) | created_at: now}
       }
 
-      fake_metadata1 = %Binary.MessageMetadata{
-        producer_name: "fake-producer-1",
-        sequence_id: 1,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "fake-uuid-oldest",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx1 = %ChunkedMessageContext{
-        uuid: "fake-uuid-oldest",
-        chunks: %{0 => "fake-chunk0"},
-        chunk_message_ids: %{0 => fake_command1.message_id},
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 1,
-        first_chunk_message_id: fake_command1.message_id,
-        last_chunk_message_id: fake_command1.message_id,
-        created_at: now - 100,
-        commands: [fake_command1],
-        metadatas: [fake_metadata1],
-        broker_metadatas: [nil]
-      }
-
-      fake_command2 = %Binary.CommandMessage{
-        consumer_id: state.consumer_id,
-        message_id: %Binary.MessageIdData{ledgerId: 101, entryId: 1}
-      }
-
-      fake_metadata2 = %Binary.MessageMetadata{
-        producer_name: "fake-producer-2",
-        sequence_id: 2,
-        publish_time: :erlang.system_time(:millisecond),
-        uuid: "fake-uuid-newer",
-        chunk_id: 0,
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100
-      }
-
-      fake_ctx2 = %ChunkedMessageContext{
-        uuid: "fake-uuid-newer",
-        chunks: %{0 => "fake-chunk0"},
-        chunk_message_ids: %{0 => fake_command2.message_id},
-        num_chunks_from_msg: 3,
-        total_chunk_msg_size: 100,
-        received_chunks: 1,
-        first_chunk_message_id: fake_command2.message_id,
-        last_chunk_message_id: fake_command2.message_id,
-        created_at: now,
-        commands: [fake_command2],
-        metadatas: [fake_metadata2],
-        broker_metadatas: [nil]
-      }
-
-      %{
-        state
-        | chunked_message_contexts:
-            Map.merge(state.chunked_message_contexts, %{
-              "fake-uuid-oldest" => fake_ctx1,
-              "fake-uuid-newer" => fake_ctx2
-            })
-      }
+      %{state | chunked_message_contexts: Map.merge(state.chunked_message_contexts, waiting)}
     end)
 
-    state = :sys.get_state(consumer)
-    assert map_size(state.chunked_message_contexts) == 2
+    assert map_size(:sys.get_state(consumer).chunked_message_contexts) == 2
 
     large_message = "This is a real message that will be chunked and trigger eviction"
     {:ok, _msg_id} = Pulsar.Producer.send(producer, large_message)
@@ -629,4 +493,22 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
   # otherwise pick up whatever the others are publishing. Naming a topic is enough while the
   # cluster has allowAutoTopicCreation on; without it this needs System.create_topic/1.
   defp isolated_topic(suffix), do: @topic <> "-" <> suffix
+
+  # One chunk of three, so the message it belongs to is still waiting on the other two.
+  defp incomplete(uuid, ledger) do
+    command = %Proto.CommandMessage{message_id: %Proto.MessageIdData{ledgerId: ledger, entryId: 1}}
+
+    metadata = %Proto.MessageMetadata{
+      producer_name: uuid,
+      sequence_id: 1,
+      publish_time: :erlang.system_time(:millisecond),
+      uuid: uuid,
+      chunk_id: 0,
+      num_chunks_from_msg: 3,
+      total_chunk_msg_size: 100
+    }
+
+    {:ok, context} = ChunkedMessageContext.new(command, metadata, "chunk-0", nil)
+    context
+  end
 end
