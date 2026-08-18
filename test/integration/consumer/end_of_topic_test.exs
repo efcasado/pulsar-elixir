@@ -47,6 +47,48 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 5_000
   end
 
+  # Regression for #198.
+  test "leaves a consumer that stopped at the end of the topic stopped" do
+    topic = @topic <> "-stays-stopped"
+    consumer = start_consumer(topic, "stays-stopped-sub", init_args: [stop_at_end_of_topic: true])
+    [worker] = Topology.workers(consumer)
+
+    drain()
+
+    ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic)
+
+    assert_receive {:consumer_end_of_topic, ^worker}, 10_000
+
+    assert_receive {:DOWN, ^ref, :process, ^consumer, :shutdown}, 10_000
+
+    refute_receive {:consumer_end_of_topic, _worker}, 5_000
+    refute consumer in Pulsar.Client.consumers(@client)
+  end
+
+  test "keeps draining the other partitions when one of them stops at its end" do
+    topic = @topic <> "-partitioned-stopping"
+    :ok = System.create_topic(topic, 2)
+
+    consumer =
+      start_consumer(topic, "partitioned-stopping-sub",
+        create_topic?: false,
+        init_args: [stop_at_end_of_topic: true]
+      )
+
+    assert [_first, _second] = workers = Topology.workers(consumer)
+
+    drain()
+
+    refs = Map.new(workers, &{Process.monitor(&1), &1})
+    consumer_ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic, partitioned?: true)
+
+    for {ref, worker} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^worker, :normal}, 10_000)
+
+    assert_receive {:DOWN, ^consumer_ref, :process, ^consumer, :shutdown}, 10_000
+  end
+
   test "tells every consumer on a shared subscription" do
     topic = @topic <> "-shared"
     consumer = start_consumer(topic, "shared-sub", consumer_count: 3, subscription_type: :shared)

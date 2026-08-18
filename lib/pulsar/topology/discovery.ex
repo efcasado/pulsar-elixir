@@ -13,10 +13,6 @@ defmodule Pulsar.Topology.Discovery do
 
   require Logger
 
-  # A terminal worker response should leave enough time for broker-side state to change before
-  # its group is tried again. This local pass is deliberately independent of metadata polling.
-  @reconciliation_interval_ms 60_000
-
   @spec start_link({pid(), map(), keyword()}) :: GenServer.on_start()
   def start_link(args), do: GenServer.start_link(__MODULE__, args)
 
@@ -30,12 +26,10 @@ defmodule Pulsar.Topology.Discovery do
       topic: Keyword.fetch!(opts, :topic),
       client: Keyword.fetch!(opts, :client),
       discovery_interval: Keyword.fetch!(opts, :partition_discovery_interval_ms),
-      reconciliation_interval: Keyword.get(controller_opts, :reconciliation_interval_ms, @reconciliation_interval_ms),
       resolver: Keyword.get(controller_opts, :resolver, &Resolver.partition_count/2),
       status: :initializing,
       desired: nil,
-      discovery_backoff: 0,
-      reconciliation_backoff: 0
+      discovery_backoff: 0
     }
 
     {:ok, state, {:continue, :discover}}
@@ -50,8 +44,6 @@ defmodule Pulsar.Topology.Discovery do
   @impl true
   def handle_info(:discover, state), do: discover(state)
 
-  def handle_info(:reconcile, state), do: reconcile_known(state)
-
   defp discover(state) do
     Logger.debug("Discovering topology metadata for #{state.topic}")
 
@@ -59,7 +51,7 @@ defmodule Pulsar.Topology.Discovery do
       {:ok, desired} ->
         Logger.debug("Topology metadata for #{state.topic} reports #{desired} partitions")
 
-        case reconcile(state, desired, :discovery) do
+        case reconcile(state, desired) do
           {:ok, outcome} -> ready(state, outcome)
           {:error, reason} -> retry_discovery(state, :reconciliation, reason)
         end
@@ -100,40 +92,14 @@ defmodule Pulsar.Topology.Discovery do
     kind, reason -> {:error, {:resolver_failed, kind, reason}}
   end
 
-  defp reconcile_known(%{desired: nil} = state), do: {:noreply, state}
+  defp reconcile(state, desired) do
+    Logger.debug("Reconciling topology for #{state.topic}: desired_partitions=#{desired}")
 
-  defp reconcile_known(state) do
-    case reconcile(state, state.desired, :local) do
-      {:ok, outcome} ->
-        state = %{
-          state
-          | desired: outcome.partition_count,
-            status: status(outcome.partition_count),
-            reconciliation_backoff: 0
-        }
-
-        {:noreply, schedule_reconciliation(state)}
-
-      {:error, reason} ->
-        wait = Backoff.next(state.reconciliation_backoff)
-
-        Logger.warning("Topology reconciliation for #{state.topic} failed: #{inspect(reason)}; retrying in #{wait}ms")
-
-        Process.send_after(self(), :reconcile, wait)
-        {:noreply, %{state | reconciliation_backoff: wait}}
-    end
-  end
-
-  defp reconcile(state, desired, source) do
-    Logger.debug("Reconciling topology for #{state.topic}: source=#{source}, desired_partitions=#{desired}")
-
-    case span(:reconciliation, state, %{source: source, desired_partition_count: desired}, fn ->
+    case span(:reconciliation, state, %{desired_partition_count: desired}, fn ->
            reconcile_topology(state, desired)
          end) do
       {:ok, outcome} = result ->
-        summary =
-          "partitions=#{outcome.partition_count}, added_groups=#{inspect(outcome.added_groups)}, " <>
-            "revived_groups=#{inspect(outcome.revived_groups)}"
+        summary = "partitions=#{outcome.partition_count}, added_groups=#{inspect(outcome.added_groups)}"
 
         cond do
           state.status == :initializing ->
@@ -141,9 +107,6 @@ defmodule Pulsar.Topology.Discovery do
 
           outcome.added_groups != [] ->
             Logger.info("Topology reconciliation for #{state.topic} changed topology: #{summary}")
-
-          outcome.revived_groups != [] ->
-            Logger.debug("Topology reconciliation for #{state.topic} restarted groups: #{summary}")
 
           true ->
             Logger.debug("Topology reconciliation for #{state.topic} completed: #{summary}")
@@ -167,8 +130,6 @@ defmodule Pulsar.Topology.Discovery do
   end
 
   defp ready(state, outcome) do
-    initial? = is_nil(state.desired)
-
     state = %{
       state
       | status: status(outcome.partition_count),
@@ -176,10 +137,7 @@ defmodule Pulsar.Topology.Discovery do
         discovery_backoff: 0
     }
 
-    state = schedule_discovery(state)
-    state = if initial?, do: schedule_reconciliation(state), else: state
-
-    {:noreply, state}
+    {:noreply, schedule_discovery(state)}
   end
 
   defp schedule_discovery(%{desired: 0} = state), do: state
@@ -187,11 +145,6 @@ defmodule Pulsar.Topology.Discovery do
 
   defp schedule_discovery(state) do
     Process.send_after(self(), :discover, state.discovery_interval)
-    state
-  end
-
-  defp schedule_reconciliation(state) do
-    Process.send_after(self(), :reconcile, state.reconciliation_interval)
     state
   end
 

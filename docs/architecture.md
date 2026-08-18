@@ -143,10 +143,17 @@ batching domain per partition. Consumer groups may contain several workers, conf
 itself. This is why names, stop operations, client listings, and publishing target the logical
 resource instead of a particular worker.
 
-The stable root represents that logical resource even when none of its groups currently has
-a live worker. It remains registered and appears in client listings while operations report
-that no workers are available. This lets reconciliation recover the resource without changing
-the pid applications use to address it.
+The stable root represents that logical resource across worker restarts and broker
+reconnections. It remains registered and appears in client listings while operations report
+that no workers are available, so the pid applications use to address the resource does not
+change while its workers churn.
+
+Groups are significant children of the root, which sets `auto_shutdown: :all_significant`. A
+group whose workers have all stopped for good takes no further part, and once the last group
+is gone the root stops too rather than lingering with nothing consuming or producing. The root
+spec is `restart: :transient`, so a resource that stopped is not started over by the client's
+supervisor. `:all_significant` rather than `:any_significant` lets partitions of a terminated
+topic, which reach their end at their own pace, each finish draining.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
 that group's worker. Consumer workers receive broker messages and invoke the configured
@@ -181,11 +188,10 @@ periodically checks for newly added partitions and adds the missing groups witho
 the existing ones. Pulsar topics do not shrink, so a lower transient metadata result does not
 remove groups.
 
-Independently of those broker checks, Discovery periodically reconciles the topology shape it
-already knows. This local pass revives stopped groups for both partitioned and non-partitioned
-topics without making a metadata request. Setting `:partition_discovery_interval_ms` to
-`false` disables only later metadata checks; initial discovery and local group recovery remain
-enabled.
+A group that has stopped is never restarted from a reconciliation pass. Its workers stopped
+for a reason retrying cannot change, so reviving it would only walk it back into the same
+answer. Setting `:partition_discovery_interval_ms` to `false` disables later metadata checks;
+initial discovery still runs.
 
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
@@ -216,10 +222,10 @@ Recovery happens at the narrowest useful boundary:
 - An unexpected worker failure is restarted inside its group.
 - A broker connection loss restarts the workers that depended on it while the client remains
   available.
-- A terminal broker rejection, such as an incompatible schema, ends that worker's immediate
-  retry cycle. A group with no viable workers shuts down, but the stable root and Discovery
-  remain available. A later reconciliation pass can try the stopped group again without
-  immediately repeating the terminal failure.
+- A terminal broker rejection, such as an incompatible schema or an `:exclusive` subscription
+  already held, stops that worker rather than restarting it into the same answer. Its group
+  shuts down once its last worker has gone, and the resource once its last group has. Callers
+  then see `{:error, :not_found}` rather than a registered resource with nothing in it.
 - A consumer branch failure is isolated from the producer branch, and vice versa.
 - A client or branch restart recreates declared resources; runtime resources remain the
   responsibility of their caller.
@@ -237,10 +243,9 @@ the stateless <code>Pulsar.Topology.Resolver</code> performs broker metadata and
 These modules remain behind the Consumer and Producer facades.
 
 After a metadata lookup, Discovery reconciles the root and remembers the resulting partition
-count. A separate local schedule reconciles that known shape without contacting a broker. A
-pass first restarts stopped groups whose child specifications remain under the root, then adds
-missing partition groups from highest index to lowest. Existing groups are not replaced, and
-a lower metadata result never removes partitions.
+count. A pass adds missing partition groups from highest index to lowest. Existing groups are
+not replaced, groups that have stopped are left alone, and a lower metadata result never
+removes partitions.
 
 Starting higher indexes first lets producer routing treat growth as one transition. Routing
 uses the contiguous partition range beginning at zero, so a partial 4-to-6 expansion continues
@@ -257,14 +262,13 @@ Discovery and reconciliation logs report topology changes and failures. Their te
 use `[:pulsar, :topology, :discovery, ...]` and
 `[:pulsar, :topology, :reconciliation, ...]`; resolver spans use
 `[:pulsar, :topology, :resolver, ...]`. Metadata polling follows
-`:partition_discovery_interval_ms`, while local recovery remains enabled when polling is
-disabled.
+`:partition_discovery_interval_ms`.
 
 ## Design Invariants
 
 1. A consumer or producer cannot outlive the client context it depends on.
-2. Each logical consumer or producer has one registered stable root, even while it has no
-   live workers.
+2. Each logical consumer or producer has one registered stable root, which persists while its
+   workers restart and stops once every one of its groups has stopped for good.
 3. Partitions, groups, and worker pids stay behind the public facade.
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.

@@ -38,7 +38,8 @@ defmodule Pulsar.Topology do
     %{
       id: {module, id},
       start: {module, :start_link, [opts]},
-      restart: :permanent,
+      # A root shuts itself down once its last group has gone; :permanent would start it over.
+      restart: :transient,
       type: :supervisor
     }
   end
@@ -413,7 +414,12 @@ defmodule Pulsar.Topology do
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
     children = companions ++ [discovery]
 
-    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
+    # :all_significant and not :any_significant: partitions of a terminated topic reach their end
+    # at their own pace, and the ones still draining have to be allowed to finish.
+    Supervisor.init(
+      children,
+      [strategy: :one_for_one, auto_shutdown: :all_significant] ++ restart_intensity()
+    )
   end
 
   # Popped rather than read: `:companions` configures this root and is not part of what a worker
@@ -444,24 +450,17 @@ defmodule Pulsar.Topology do
 
   @doc false
   @spec reconcile(pid(), non_neg_integer(), map()) ::
-          {:ok,
-           %{
-             partition_count: non_neg_integer(),
-             added_groups: [non_neg_integer()],
-             revived_groups: [non_neg_integer()]
-           }}
+          {:ok, %{partition_count: non_neg_integer(), added_groups: [non_neg_integer()]}}
           | {:error, term()}
   def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
     children = Supervisor.which_children(root)
 
-    with {:ok, revived_groups} <- restart_stopped_groups(root, children),
-         {:ok, partition_count, added_groups} <- reconcile_children(root, children, desired, config) do
-      {:ok,
-       %{
-         partition_count: partition_count,
-         added_groups: added_groups,
-         revived_groups: revived_groups
-       }}
+    case reconcile_children(root, children, desired, config) do
+      {:ok, partition_count, added_groups} ->
+        {:ok, %{partition_count: partition_count, added_groups: added_groups}}
+
+      {:error, _reason} = error ->
+        error
     end
   catch
     :exit, reason -> {:error, reason}
@@ -477,31 +476,6 @@ defmodule Pulsar.Topology do
       end)
 
     reconcile_shape(topology_shape(topic?, partitions), root, desired, config)
-  end
-
-  defp restart_stopped_groups(root, children) do
-    children
-    |> Enum.reduce_while({:ok, []}, fn
-      {{:topic, :non_partitioned} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
-        restart_stopped_group(root, id, 0, revived)
-
-      {{:partition, index} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
-        restart_stopped_group(root, id, index, revived)
-
-      _child, {:ok, revived} ->
-        {:cont, {:ok, revived}}
-    end)
-    |> then(fn
-      {:ok, revived} -> {:ok, Enum.sort(revived)}
-      {:error, _reason} = error -> error
-    end)
-  end
-
-  defp restart_stopped_group(root, id, index, revived) do
-    case restart_group(root, id) do
-      :ok -> {:cont, {:ok, [index | revived]}}
-      {:error, reason} -> {:halt, {:error, {:group_restart_failed, id, reason}}}
-    end
   end
 
   defp topology_shape(true, partitions) do
@@ -561,16 +535,6 @@ defmodule Pulsar.Topology do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
       {:error, {:already_started, _pid}} -> :ok
-      {:error, :already_present} -> restart_group(root, Map.fetch!(child_spec, :id))
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp restart_group(root, id) do
-    case Supervisor.restart_child(root, id) do
-      {:ok, _pid} -> :ok
-      {:ok, _pid, _info} -> :ok
-      {:error, state} when state in [:running, :restarting] -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -606,6 +570,7 @@ defmodule Pulsar.Topology do
       id: id,
       start: {Group, :start_link, [worker, worker_count, opts]},
       restart: :transient,
+      significant: true,
       type: :supervisor
     }
   end

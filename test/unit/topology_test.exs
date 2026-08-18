@@ -261,13 +261,10 @@ defmodule Pulsar.TopologyTest do
              end)
     end
 
-    @tag telemetry_listen: [
-           [:pulsar, :topology, :discovery, :stop],
-           [:pulsar, :topology, :reconciliation, :stop]
-         ]
-    test "stops metadata polling for a non-partitioned topic while local reconciliation continues" do
+    @tag telemetry_listen: [[:pulsar, :topology, :discovery, :stop]]
+    test "stops metadata polling for a non-partitioned topic" do
       test_pid = self()
-      topic = "#{@topic}-local-reconciliation"
+      topic = "#{@topic}-non-partitioned-polling"
 
       resolver = fn resolved_topic, _opts ->
         send(test_pid, {:resolved, resolved_topic})
@@ -277,8 +274,9 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} =
         start_async_topology(
           resolver,
-          [topic: topic, name: "#{topic}-producer", partition_discovery_interval_ms: 10],
-          reconciliation_interval_ms: 250
+          topic: topic,
+          name: "#{topic}-producer",
+          partition_discovery_interval_ms: 10
         )
 
       :ok = Topology.await_ready(root, 1_000)
@@ -292,38 +290,6 @@ defmodule Pulsar.TopologyTest do
                           client: :test,
                           success: true,
                           partition_count: 0
-                        }
-                      }}
-
-      [{0, old_group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(old_group)
-      ref = Process.monitor(old_group)
-
-      :ok = Agent.stop(worker)
-      assert_receive {:DOWN, ^ref, :process, ^old_group, _reason}
-      assert Topology.groups(root) == [{0, :undefined}]
-
-      Utils.wait_for(
-        fn ->
-          case Topology.groups(root) do
-            [{0, new_group}] when is_pid(new_group) -> new_group != old_group
-            _not_running -> false
-          end
-        end,
-        timeout: 1_000,
-        interval: 10
-      )
-
-      assert_receive {:telemetry_event,
-                      %{
-                        event: [:pulsar, :topology, :reconciliation, :stop],
-                        metadata: %{
-                          topic: ^topic,
-                          source: :local,
-                          success: true,
-                          desired_partition_count: 0,
-                          partition_count: 0,
-                          revived_groups: [0]
                         }
                       }}
 
@@ -432,67 +398,40 @@ defmodule Pulsar.TopologyTest do
       end
     end
 
-    test "periodically revives every partition group after they stop normally" do
-      test_pid = self()
-      resolutions = start_supervised!({Agent, fn -> 0 end})
-
-      resolver = fn _topic, _opts ->
-        case Agent.get_and_update(resolutions, &{&1, &1 + 1}) do
-          0 ->
-            {:ok, 2}
-
-          _later ->
-            send(test_pid, {:resolution_started, self()})
-
-            receive do
-              :resolve -> {:ok, 2}
-            end
-        end
-      end
-
-      {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 100)
+    test "leaves a stopped partition group down while its siblings keep running" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, partition_discovery_interval_ms: 10)
 
       :ok = Topology.await_ready(root, 1_000)
-      assert_receive {:resolution_started, discovery}, 1_000
 
-      old_groups = Map.new(Topology.groups(root))
+      groups = Map.new(Topology.groups(root))
+      stopped = Map.fetch!(groups, 0)
+      surviving = Map.fetch!(groups, 1)
 
-      refs =
-        Enum.map(old_groups, fn {_index, group} ->
-          [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-          ref = Process.monitor(group)
-          :ok = Agent.stop(worker)
-          {ref, group}
-        end)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(stopped)
+      ref = Process.monitor(stopped)
+      :ok = Agent.stop(worker)
+      assert_receive {:DOWN, ^ref, :process, ^stopped, _reason}
 
-      for {ref, group} <- refs do
-        assert_receive {:DOWN, ^ref, :process, ^group, _reason}
-      end
+      # Several rounds of metadata polling.
+      Process.sleep(100)
 
       assert Process.alive?(root)
-      assert Enum.all?(Topology.groups(root), &match?({_index, :undefined}, &1))
+      assert Topology.groups(root) == [{0, :undefined}, {1, surviving}]
+    end
 
-      send(discovery, :resolve)
+    test "stops the topology once its last group has stopped" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, partition_discovery_interval_ms: 10)
 
-      Utils.wait_for(
-        fn ->
-          groups = Map.new(Topology.groups(root))
+      :ok = Topology.await_ready(root, 1_000)
 
-          Enum.all?(old_groups, fn {index, old_group} ->
-            case Map.fetch(groups, index) do
-              {:ok, new_group} when is_pid(new_group) -> new_group != old_group
-              _not_running -> false
-            end
-          end)
-        end,
-        timeout: 1_000,
-        interval: 10
-      )
+      root_ref = Process.monitor(root)
 
-      for {index, new_group} <- Topology.groups(root) do
-        assert [{_id, new_worker, :worker, _modules}] = Supervisor.which_children(new_group)
-        assert Agent.get(new_worker, & &1) == Pulsar.Topic.partition(@topic, index)
+      for {_index, group} <- Topology.groups(root) do
+        [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+        :ok = Agent.stop(worker)
       end
+
+      assert_receive {:DOWN, ^root_ref, :process, ^root, :shutdown}, 1_000
     end
   end
 

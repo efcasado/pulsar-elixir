@@ -118,7 +118,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert message.raw.metadata.schema_version
   end
 
-  test "a producer whose schema the topic will not accept never becomes ready" do
+  test "a producer whose schema the topic will not accept stops instead of becoming ready" do
     topic = "persistent://public/default/producer-schema-compat-test"
     :ok = System.create_topic(topic)
 
@@ -131,20 +131,11 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
         name: "compat-test-producer-2"
       )
 
-    :ok = Topology.await_ready(producer_group, 1_000)
-
-    # The topology comes up, but its worker cannot register under a schema the topic refuses,
-    # so it gives up rather than ever becoming ready.
-    assert Pulsar.Producer.await_ready(producer_group, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(producer_group) == []
-
-    assert Process.alive?(producer_group)
-    assert producer_group in Pulsar.Client.producers(@client)
-    assert {:error, :no_producers_available} = Pulsar.Producer.send(producer_group, "message")
-
     ref = Process.monitor(producer_group)
-    assert :ok = Pulsar.Producer.stop(producer_group, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^producer_group, _reason}
+
+    assert_receive {:DOWN, ^ref, :process, ^producer_group, _reason}, 5_000
+
+    assert Pulsar.Producer.await_ready(producer_group, timeout: 1_000) == {:error, :not_found}
     refute producer_group in Pulsar.Client.producers(@client)
   end
 

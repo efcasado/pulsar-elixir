@@ -221,8 +221,8 @@ defmodule Pulsar.Consumer.Worker do
 
       # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic
       # stays malformed, and an :exclusive subscription already taken stays taken. Stopping
-      # with :shutdown leaves the worker down instead of restarting it into the same answer,
-      # and the group follows once its last worker has gone.
+      # with :shutdown leaves the worker down instead of restarting it into the same answer;
+      # the group follows once its last worker has gone, and the topology once its last group.
       {:error, {code, _message} = reason} when code in @terminal_errors ->
         {:stop, {:shutdown, reason}, state}
 
