@@ -338,6 +338,24 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert state.acks.acked == %{}
     end
 
+    test "reports the messages of an entry that could not be diverted" do
+      test_pid = self()
+      handler = "dead-letter-failed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:pulsar, :consumer, :dead_letter, :failed],
+        fn _event, measurements, metadata, _config -> send(test_pid, {:failed, measurements, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      deliver(diverting_state(refuse: ["b"]), ["a", "b", "c"], redelivery_count: 1)
+
+      assert_receive {:failed, %{count: 1}, %{dead_letter_topic: "dlq", reason: :message_too_large}}
+    end
+
     test "acknowledges the entry once every message of it has been diverted" do
       state = diverting_state(refuse: [])
 

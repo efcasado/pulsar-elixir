@@ -548,6 +548,10 @@ defmodule Pulsar.Consumer.Worker do
     DeadLetter.divert(producer, message, origin_topic)
   end
 
+  defp publish_to_dead_letter({:error, :no_dead_letter_producer}, _message, _origin_topic) do
+    exit({:shutdown, :dead_letter_unavailable})
+  end
+  
   defp publish_to_dead_letter({:error, _reason} = error, _message, _origin_topic), do: error
 
   defp dead_letter_metadata(state, redelivery_count) do

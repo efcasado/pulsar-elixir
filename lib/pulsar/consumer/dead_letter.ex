@@ -48,7 +48,7 @@ defmodule Pulsar.Consumer.DeadLetter do
           %{
             id: {:dead_letter, topic},
             start: {Producer, :start_link_unregistered, [producer_opts]},
-            restart: :permanent,
+            restart: :transient,
             type: :supervisor
           }
         ]
