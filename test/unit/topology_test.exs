@@ -88,6 +88,12 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
+  defmodule CrashingWorker do
+    @moduledoc false
+
+    def start_link(_opts), do: {:ok, spawn_link(fn -> exit(:crashed) end)}
+  end
+
   defmodule OptsWorker do
     @moduledoc false
     use Agent
@@ -434,6 +440,73 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
+  describe "restarts and propagation" do
+    test "restarts a worker that crashes, leaving its group and root alone" do
+      {root, _registry} = start_topology(0)
+
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+
+      worker_ref = Process.monitor(worker)
+      group_ref = Process.monitor(group)
+      root_ref = Process.monitor(root)
+
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
+
+      # A crash is what :transient exists to restart, so nothing above the worker reacts to it.
+      refute_receive {:DOWN, ^group_ref, :process, _pid, _reason}, 200
+      refute_receive {:DOWN, ^root_ref, :process, _pid, _reason}, 0
+
+      assert [{_id, restarted, :worker, _modules}] = Supervisor.which_children(group)
+      assert restarted != worker
+      assert Topology.groups(root) == [{0, group}]
+    end
+
+    test "a resource that shuts itself down is not started over by its client" do
+      client = start_dynamic_supervisor()
+      {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(StubWorker))
+
+      :ok = Topology.await_ready(root, 1_000)
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+
+      ref = Process.monitor(root)
+      :ok = Agent.stop(worker)
+
+      assert_receive {:DOWN, ^ref, :process, ^root, :shutdown}, 1_000
+      assert DynamicSupervisor.which_children(client) == []
+    end
+
+    test "a group that exhausts its restart budget takes the resource with it" do
+      client = start_dynamic_supervisor()
+      {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(CrashingWorker))
+
+      ref = Process.monitor(root)
+
+      # Exhaustion exits :shutdown, exactly like a group that stopped on purpose, so the root
+      # follows and the client removes it. The resource is gone, and nothing distinguishes this
+      # from a consumer that finished: worth pinning, since it is the one case the tree cannot
+      # tell apart.
+      assert_receive {:DOWN, ^ref, :process, ^root, :shutdown}, 5_000
+      assert DynamicSupervisor.which_children(client) == []
+    end
+
+    test "stops a producer topology once its last group has stopped" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, [], kind: :producers)
+
+      :ok = Topology.await_ready(root, 1_000)
+      root_ref = Process.monitor(root)
+
+      for {_index, group} <- Topology.groups(root) do
+        [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+        :ok = Agent.stop(worker)
+      end
+
+      assert_receive {:DOWN, ^root_ref, :process, ^root, :shutdown}, 1_000
+    end
+  end
+
   describe "worker options" do
     test "gives a partition worker its own topic alongside the configured one" do
       {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 3} end, [], worker: OptsWorker)
@@ -503,6 +576,21 @@ defmodule Pulsar.TopologyTest do
   defp discovery(root) do
     [pid] = for {{Discovery, _kind, _topic, _scheme}, pid, _type, _modules} <- Supervisor.which_children(root), do: pid
     pid
+  end
+
+  defp topology_spec(worker) do
+    registry = :"registry-#{System.unique_integer([:positive])}"
+    start_supervised!({Registry, keys: :unique, name: registry})
+
+    opts = [topic: @topic, name: @name, client: :test, partition_discovery_interval_ms: false, consumer_count: 1]
+    controller_opts = [resolver: fn _topic, _opts -> {:ok, 0} end]
+
+    %{
+      id: {:root, System.unique_integer([:positive])},
+      start: {Topology, :start_link, [worker, registry, :consumers, opts, controller_opts]},
+      restart: :transient,
+      type: :supervisor
+    }
   end
 
   defp worker_opts(root) do
