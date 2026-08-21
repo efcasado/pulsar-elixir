@@ -82,27 +82,29 @@ defmodule Pulsar.Client do
             worker_restart_intensity: [
               type: :keyword_list,
               keys: [
-                max_restarts: [type: :non_neg_integer, default: 100],
-                max_seconds: [type: :pos_integer, default: 60]
+                max_restarts: [type: :non_neg_integer, default: 3],
+                max_seconds: [type: :pos_integer, default: 5]
               ],
-              default: [max_restarts: 100, max_seconds: 60],
+              default: [max_restarts: 3, max_seconds: 5],
               doc: """
               How often a consumer or producer worker under this client may be restarted before
-              its partition gives up, as `[max_restarts: integer, max_seconds: integer]`.
+              its partition gives up, as `[max_restarts: integer, max_seconds: integer]`. OTP's
+              own intensity by default.
 
-              Sized for correlated failures rather than for one worker: a broker losing its
-              connection exits every worker registered with it at once, and several partitions
-              or resources can go together. `Pulsar.Backoff` already holds a worker for seconds
-              before it gives up, so an unreachable broker cannot spend this budget.
+              A group multiplies `:max_restarts` by its worker count, so a broker dropping every
+              worker registered with it at once counts as one round rather than as many. The two
+              numbers are chosen against `Pulsar.Backoff`, which holds a starting worker for its
+              retry budget: that budget has to stay large relative to `:max_seconds`, or an
+              unreachable broker starts spending this one.
               """
             ],
             resource_restart_intensity: [
               type: :keyword_list,
               keys: [
                 max_restarts: [type: :non_neg_integer, default: 3],
-                max_seconds: [type: :pos_integer, default: 60]
+                max_seconds: [type: :pos_integer, default: 5]
               ],
-              default: [max_restarts: 3, max_seconds: 60],
+              default: [max_restarts: 3, max_seconds: 5],
               doc: """
               How many times a partition may give up before the consumer or producer it belongs
               to does, and how many resources may do that before the client does. The failure
