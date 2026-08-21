@@ -39,11 +39,10 @@ defmodule Pulsar.Topology.Group do
     Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity(client, count))
   end
 
-  # A broker dropping its connection exits every worker registered with it at once, so a group of
-  # `count` sees `count` restarts for one failure. Scaling keeps the budget meaning that many
-  # rounds of correlated failure, rather than dividing it by :consumer_count.
+  # A broker dropping its connection exits every worker at once, so a group of `count` sees
+  # `count` restarts for one failure. See docs/architecture.md for what scaling trades.
   @doc false
-  @spec restart_intensity(atom() | pid(), pos_integer()) :: keyword()
+  @spec restart_intensity(atom(), pos_integer()) :: keyword()
   def restart_intensity(client, count) do
     client
     |> Client.restart_intensity(:worker)

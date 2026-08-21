@@ -92,10 +92,9 @@ defmodule Pulsar.Client do
               own intensity by default.
 
               A group multiplies `:max_restarts` by its worker count, so a broker dropping every
-              worker registered with it at once counts as one round rather than as many. The two
-              numbers are chosen against `Pulsar.Backoff`, which holds a starting worker for its
-              retry budget: that budget has to stay large relative to `:max_seconds`, or an
-              unreachable broker starts spending this one.
+              worker registered with it at once counts as one round rather than as many. See
+              `docs/architecture.md` for what that trades and how the two numbers relate to
+              `Pulsar.Backoff`.
               """
             ],
             resource_restart_intensity: [
@@ -505,6 +504,8 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
+    # Before the tree comes down, not after: a supervised client restarts the moment it stops,
+    # and an erase outliving the stop would take the successor's configuration with it.
     :persistent_term.erase(client_key(client_name))
 
     try do

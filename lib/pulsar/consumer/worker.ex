@@ -199,7 +199,15 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
+  # A callback asking to stop parks: the worker answers whatever it owes first, then arranges
+  # its own removal. Stopping can fail, and a caller waiting on a reply should get the one its
+  # callback built rather than the exit of a worker that could not arrange to stop.
   @impl true
+  def handle_continue(:stop, state) do
+    :ok = Topology.stop(self())
+    {:noreply, state}
+  end
+
   def handle_continue({:startup_delay, base_delay_ms, jitter_ms, init_args}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
     total_sleep_ms = base_delay_ms + jitter
@@ -443,9 +451,8 @@ defmodule Pulsar.Consumer.Worker do
     {:stop, :broker_crashed, state}
   end
 
-  # A broker that reconnects stays alive and exits its consumers to make them subscribe again.
-  # Trapping exits turns that signal into a message, so it has to be answered: the untrapped
-  # worker used to die of it, and one that stays up is subscribed to nothing.
+  # A reconnecting broker stays alive and exits its consumers to make them subscribe again.
+  # Trapped, that signal is a message, and a worker that outlives it subscribes to nothing.
   @impl true
   def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
     Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, consumer will restart")
@@ -463,8 +470,7 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, _reason, new_callback_state} ->
-        Topology.stop(self())
-        {:noreply, %{state | callback_state: new_callback_state}}
+        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 
@@ -477,8 +483,7 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, _reason, new_callback_state} ->
-        Topology.stop(self())
-        {:noreply, %{state | callback_state: new_callback_state}}
+        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 
@@ -715,12 +720,10 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, _reason, reply, new_callback_state} ->
-        Topology.stop(self())
-        {:reply, reply, %{state | callback_state: new_callback_state}}
+        {:reply, reply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
 
       {:stop, _reason, new_callback_state} ->
-        Topology.stop(self())
-        {:noreply, %{state | callback_state: new_callback_state}}
+        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 
@@ -734,8 +737,7 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, _reason, new_callback_state} ->
-        Topology.stop(self())
-        {:noreply, %{state | callback_state: new_callback_state}}
+        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 

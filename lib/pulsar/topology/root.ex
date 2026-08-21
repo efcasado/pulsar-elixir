@@ -1,8 +1,8 @@
 defmodule Pulsar.Topology.Root do
   @moduledoc false
 
-  # The stable root of one logical consumer or producer: the supervisor itself, and the
-  # operations that change the tree below it. Reading that tree is Pulsar.Topology's job.
+  # The stable root of one consumer or producer, and the operations that change the tree below
+  # it. Reading that tree is Pulsar.Topology's job.
 
   @behaviour Supervisor
 
@@ -111,13 +111,9 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
-  # Carried on the child id so routing reads it from the same which_children the groups come
-  # from, keeping a send to one call. The registry value would be the usual place for this, but
-  # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
-  # and a producer started with start_link_unregistered/1 has none.
-  #
-  # nil where a resource does not route on a key, and for a producer whose options have not been
-  # through Producer.Options; Hash.partition/3 resolves it to the default.
+  # On the child id rather than in the registry, so routing reads it from the same
+  # which_children the groups come from and a send costs one call. Producer.send/3 takes a pid
+  # without consulting the registry, and start_link_unregistered/1 has no registry entry at all.
   defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
   end
@@ -218,9 +214,8 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
-  # :topic is the topic a worker subscribes to and :base_topic the one the resource was
-  # configured with; they differ only for a partition. Workers carry both so a callback can
-  # tell which partition it handles without inspecting the tree it lives in.
+  # A worker carries both the topic it subscribes to and the one the resource was configured
+  # with, so a callback can tell which partition it handles without reading the tree.
   defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
     topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 

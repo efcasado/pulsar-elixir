@@ -537,7 +537,7 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
     end
 
-    test "a worker whose controller is gone exits rather than parking forever" do
+    test "a worker whose controller is gone is told, rather than parking forever" do
       {root, _registry} = start_topology(0)
       [{0, group}] = Topology.groups(root)
       [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
@@ -547,7 +547,8 @@ defmodule Pulsar.TopologyTest do
 
       :ok = Supervisor.terminate_child(root, controller_id)
 
-      assert catch_exit(Topology.stop(worker)) == :no_controller
+      # The worker matches on :ok, so this is what restarts it into asking again.
+      assert Topology.stop(worker) == {:error, :no_controller}
     end
 
     test "a broker that is away cannot spend a group's restart budget, whatever its worker count" do
@@ -760,7 +761,7 @@ defmodule Pulsar.TopologyTest do
 
       assert [{0, group}] = Topology.groups(root)
       assert group != root
-      assert Topology.kind(root) == :topology
+      assert Topology.kind(root) == :root
       assert Topology.kind(group) == :group
     end
 

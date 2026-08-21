@@ -46,9 +46,9 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     assert_receive {:consumer_end_of_topic, ^worker}, 10_000
     assert_receive {:DOWN, ^ref, :process, ^worker, :shutdown}, 5_000
 
-    # The parent terminates a stopped worker rather than it exiting, so the worker has to trap
-    # exits for its own terminate/2 - and the callback's - to run at all.
-    assert_receive {:consumer_terminated, ^worker, _reason}, 5_000
+    # :shutdown rather than the :normal it asked to stop with: the reason requests a stop, it
+    # does not become one.
+    assert_receive {:consumer_terminated, ^worker, :shutdown}, 5_000
   end
 
   # Regression for #198.

@@ -80,6 +80,9 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     if state.stop_at_end_of_topic, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
+  # A worker that never finished init/2 has no state to report through.
+  def terminate(_reason, nil), do: :ok
+
   def terminate(reason, state) do
     notify(state.forward_to, {:consumer_terminated, self(), reason})
   end

@@ -1,8 +1,7 @@
 defmodule Pulsar.Topology do
   @moduledoc false
 
-  # Everything asked of a resource from outside it: which level a pid is, what a root owns,
-  # whether it is ready, and stopping a resource or one of its workers.
+  # Everything asked of a resource from outside it. Changing one is Root's and Controller's.
 
   alias Pulsar.Backoff
   alias Pulsar.Client
@@ -43,7 +42,7 @@ defmodule Pulsar.Topology do
   end
 
   defp await_resource(root, timeout, readiness) do
-    if topology_root?(root) do
+    if root?(root) do
       await(fn -> {:ok, root} end, timeout, &(&1 == :not_ready), readiness)
     else
       {:error, :not_found}
@@ -114,7 +113,7 @@ defmodule Pulsar.Topology do
   defp worker_module(:producers), do: ProducerWorker
 
   defp root_readiness(root, timeout) do
-    if topology_root?(root) do
+    if root?(root) do
       case status(root, timeout) do
         :initializing -> {:error, :not_ready}
         {:ready, _shape} -> :ok
@@ -125,7 +124,7 @@ defmodule Pulsar.Topology do
     end
   end
 
-  defp topology_root?(root), do: Process.alive?(root) and kind(root) == :topology
+  defp root?(root), do: Process.alive?(root) and kind(root) == :root
 
   defp deadline(:infinity), do: :infinity
   defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
@@ -178,7 +177,7 @@ defmodule Pulsar.Topology do
   @doc false
   @spec resource?(pid(), :consumers | :producers) :: boolean()
   def resource?(root, expected_kind) when expected_kind in [:consumers, :producers] do
-    kind(root) == :topology and resource_kind(root) == expected_kind
+    kind(root) == :root and resource_kind(root) == expected_kind
   end
 
   defp resource_kind(root) do
@@ -207,7 +206,7 @@ defmodule Pulsar.Topology do
       # A nested topology root owns its own workers, which are not this resource's. A consumer's
       # dead letter producer is one, and its producer workers must not read as consumer workers.
       {_id, pid, :supervisor, _modules} when is_pid(pid) ->
-        if kind(pid) == :topology, do: [], else: workers(pid)
+        if kind(pid) == :root, do: [], else: workers(pid)
 
       _child ->
         []
@@ -230,7 +229,7 @@ defmodule Pulsar.Topology do
   def groups(root) do
     case kind(root) do
       :group -> [{0, root}]
-      :topology -> topology_groups(root)
+      :root -> topology_groups(root)
       :worker -> []
     end
   end
@@ -277,15 +276,15 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
-  Which level of a topology `pid` is: the stable topology root, one of its groups, or a worker.
+  Which level of a topology `pid` is: its stable root, one of its groups, or a worker.
 
   Uses `:proc_lib.initial_call/1` rather than traversal, so supervisors are never sent calls
   intended for workers.
   """
-  @spec kind(pid()) :: :topology | :group | :worker
+  @spec kind(pid()) :: :root | :group | :worker
   def kind(pid) do
     case :proc_lib.initial_call(pid) do
-      {:supervisor, Root, _args} -> :topology
+      {:supervisor, Root, _args} -> :root
       {:supervisor, Group, _args} -> :group
       _worker -> :worker
     end
@@ -309,28 +308,27 @@ defmodule Pulsar.Topology do
   a child that terminates through its own supervisor dies mid-call, taking the rest of the
   cascade with it - so that half is handed to the controller and runs there. Wait for a `:DOWN`
   rather than checking liveness straight after.
+
+  `{:error, :no_controller}` means nothing will carry the stop out, which for a resource on its
+  way down is the ordinary answer. A worker asking about itself parks until something does, so
+  it should match on `:ok` and let a failure restart it.
   """
-  @spec stop(pid()) :: :ok
+  @spec stop(pid()) :: :ok | {:error, :no_controller}
   def stop(pid) when is_pid(pid) do
     case kind(pid) do
-      :topology -> stop_root(pid)
+      :root -> stop_root(pid)
       :worker -> stop_worker(pid)
     end
   end
 
   defp stop_worker(worker) do
     with group when is_pid(group) <- owning_supervisor(worker),
-         root when is_pid(root) <- owning_supervisor(group) do
-      # A worker that asked to stop parks until the controller carries it out, so answering :ok
-      # without reaching one would leave it alive with nothing coming for it. Exiting instead
-      # restarts it, it asks again, and it escalates if it never gets through.
-      case controller(root) do
-        {:ok, controller} -> Controller.stop_worker(controller, worker)
-        {:error, :not_found} -> exit(:no_controller)
-      end
+         root when is_pid(root) <- owning_supervisor(group),
+         {:ok, controller} <- controller(root) do
+      Controller.stop_worker(controller, worker)
     else
-      # Not in a topology, so there is nothing to take it out of and nothing waiting on this.
-      _detached -> :ok
+      nil -> :ok
+      {:error, :not_found} -> {:error, :no_controller}
     end
   end
 

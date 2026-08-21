@@ -1,8 +1,7 @@
 defmodule Pulsar.Topology.Controller do
   @moduledoc false
 
-  # The one process that changes a resource's tree: it builds it from broker metadata, polls for
-  # partition growth when enabled, and carries out stopping, so the two cannot interleave.
+  # The one process that changes a resource's tree, so no two changes to it can interleave.
   # Resolution and retry happen here so the stable Pulsar.Topology root can start even while no
   # broker is available.
 

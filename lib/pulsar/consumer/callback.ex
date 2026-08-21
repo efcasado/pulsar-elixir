@@ -72,9 +72,8 @@ defmodule Pulsar.Consumer.Callback do
       defmodule MyApp.MessageCounter do
         use Pulsar.Consumer.Callback
 
-        def init(opts, _context) do
-          max_messages = Keyword.get(opts, :max_messages, 1000)
-          {:ok, %{count: 0, max_messages: max_messages, messages: []}}
+        def init(_opts, _context) do
+          {:ok, %{count: 0, messages: []}}
         end
 
         def handle_message(%Pulsar.Message{payload: payload}, callback_state) do

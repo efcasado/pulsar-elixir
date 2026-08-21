@@ -40,6 +40,11 @@ defmodule Pulsar.Consumer.WorkerTest do
     def handle_message(_message, state), do: {:ok, state}
 
     def reached_end_of_topic(state), do: {:stop, :normal, state}
+
+    def handle_call(:stop_and_reply, _from, state), do: {:stop, :normal, :answered, state}
+    def handle_call(:stop_quietly, _from, state), do: {:stop, :normal, state}
+    def handle_cast(:stop, state), do: {:stop, :normal, state}
+    def handle_info(:stop, state), do: {:stop, :normal, state}
   end
 
   @topic "persistent://public/default/orders"
@@ -433,8 +438,26 @@ defmodule Pulsar.Consumer.WorkerTest do
       state = %{worker_state() | callback_module: StoppingCallback}
 
       # Parks to be stopped rather than exiting; end_of_topic_test.exs asserts it is then removed.
-      assert {:noreply, ^state} =
+      assert {:noreply, ^state, {:continue, :stop}} =
                Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
+    end
+
+    test "answers a call that stops it before arranging to stop" do
+      state = %{worker_state() | callback_module: StoppingCallback}
+
+      # The reply comes first: stopping can fail, and the caller is owed the answer either way.
+      assert {:reply, :answered, ^state, {:continue, :stop}} =
+               Worker.handle_call(:stop_and_reply, {self(), make_ref()}, state)
+    end
+
+    test "parks the same way whichever callback asked to stop" do
+      state = %{worker_state() | callback_module: StoppingCallback}
+
+      assert {:noreply, ^state, {:continue, :stop}} =
+               Worker.handle_call(:stop_quietly, {self(), make_ref()}, state)
+
+      assert {:noreply, ^state, {:continue, :stop}} = Worker.handle_cast(:stop, state)
+      assert {:noreply, ^state, {:continue, :stop}} = Worker.handle_info(:stop, state)
     end
   end
 

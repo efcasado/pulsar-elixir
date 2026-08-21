@@ -313,7 +313,7 @@ defmodule Pulsar.Producer do
       :group ->
         {:error, :not_found}
 
-      :topology ->
+      :root ->
         {groups, hashing_scheme} = Topology.routing(producer)
         route(groups, hashing_scheme, opts)
     end
