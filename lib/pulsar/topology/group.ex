@@ -36,6 +36,17 @@ defmodule Pulsar.Topology.Group do
 
     # A worker that is finished is stopped rather than exiting, so every exit reaching here is a
     # failure.
-    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker))
+    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity(client, count))
+  end
+
+  # A broker dropping its connection exits every worker registered with it at once, so a group of
+  # `count` sees `count` restarts for one failure. Scaling keeps the budget meaning that many
+  # rounds of correlated failure, rather than dividing it by :consumer_count.
+  @doc false
+  @spec restart_intensity(atom() | pid(), pos_integer()) :: keyword()
+  def restart_intensity(client, count) do
+    client
+    |> Client.restart_intensity(:worker)
+    |> Keyword.update!(:max_restarts, &(&1 * count))
   end
 end

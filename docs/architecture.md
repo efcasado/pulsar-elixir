@@ -302,15 +302,22 @@ worker for its retry budget before giving up, so a start against an unreachable 
 rather than microseconds and an outage produces far fewer restarts than the window allows. A group
 that exits has hit something retrying cannot fix.
 
-The two budgets are deliberately far apart. `:worker_restart_intensity` is sized for correlated
-failure — a broker dropping every worker registered with it at once. `:resource_restart_intensity` is
-small, because it counts events that already mean something is broken. Sharing one number between the
-levels would tie escalation to how quickly a failure returns: with the larger budget at both levels,
-100 group failures at a 10ms round trip is 112 seconds against a 60 second window, so the level above
-never exhausts and the resource loops instead of coming down. Both are configured on `Pulsar.Client`.
+Both budgets are OTP's own by default, and both are configured on `Pulsar.Client`. A group
+multiplies `:max_restarts` by its worker count, so a broker dropping ten workers at once counts as
+one round rather than ten and the budget keeps meaning what it says. The two numbers go together
+rather than being chosen separately: a worker held by <code>Pulsar.Backoff</code> restarts about
+once per window, so the window has to stay small relative to that retry budget. At 3 in 5 seconds
+that is one restart against three, which holds; at 3 in 60 seconds it would be twenty against
+three, which does not.
 
 Stopping contributes to none of this. A worker, group or resource that was stopped is terminated
 by its parent rather than exiting, so it costs no restart and escalates nothing.
+
+One consequence is worth planning for. Escalation reaches the client, and the client owns every
+consumer and producer declared on it, so a resource that cannot run takes its siblings with it —
+the point being that the application finds out rather than quietly losing one of them. Where two
+things genuinely contend, as two deployments holding one `:exclusive` subscription do, give them
+separate clients so that only the one that cannot run comes down.
 
 ## Implementation Notes for Contributors
 

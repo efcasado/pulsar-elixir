@@ -81,7 +81,10 @@ defmodule Pulsar.Client do
             ],
             worker_restart_intensity: [
               type: :keyword_list,
-              keys: [max_restarts: [type: :non_neg_integer], max_seconds: [type: :pos_integer]],
+              keys: [
+                max_restarts: [type: :non_neg_integer, default: 100],
+                max_seconds: [type: :pos_integer, default: 60]
+              ],
               default: [max_restarts: 100, max_seconds: 60],
               doc: """
               How often a consumer or producer worker under this client may be restarted before
@@ -95,7 +98,10 @@ defmodule Pulsar.Client do
             ],
             resource_restart_intensity: [
               type: :keyword_list,
-              keys: [max_restarts: [type: :non_neg_integer], max_seconds: [type: :pos_integer]],
+              keys: [
+                max_restarts: [type: :non_neg_integer, default: 3],
+                max_seconds: [type: :pos_integer, default: 60]
+              ],
               default: [max_restarts: 3, max_seconds: 60],
               doc: """
               How many times a partition may give up before the consumer or producer it belongs

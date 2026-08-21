@@ -118,7 +118,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert message.raw.metadata.schema_version
   end
 
-  test "a producer whose schema the topic will not accept stops instead of becoming ready" do
+  test "a producer whose schema the topic will not accept gives up instead of becoming ready" do
     topic = "persistent://public/default/producer-schema-compat-test"
     :ok = System.create_topic(topic)
 

@@ -228,7 +228,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     refute "non-durable" in subscriptions
   end
 
-  test "force_create_topic: false stops the consumer instead of leaving it running" do
+  test "force_create_topic: false gives the consumer up instead of leaving it running" do
     non_existent_topic = "persistent://public/default/subscription-options-non-existent"
 
     {:ok, no_force_create_group} =

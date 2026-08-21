@@ -48,6 +48,7 @@ defmodule Pulsar.Topology.Controller do
 
   @impl true
   def handle_cast({:stop_worker, worker}, state) do
+    Logger.info("Stopping worker for #{state.topic}")
     Root.stop_worker(state.topology, worker)
     {:noreply, state}
   end

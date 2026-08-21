@@ -23,17 +23,6 @@ defmodule Pulsar.Consumer.Worker do
   @zstd_min_buffer_size 64 * 1024
   @zstd_max_buffer_size 1024 * 1024
 
-  @terminal_errors [
-    :AuthenticationError,
-    :AuthorizationError,
-    :ConsumerBusy,
-    :IncompatibleSchema,
-    :InvalidTopicName,
-    :NotAllowedError,
-    :TopicNotFound,
-    :UnsupportedVersionError
-  ]
-
   defstruct [
     :client,
     :topic,
@@ -220,14 +209,8 @@ defmodule Pulsar.Consumer.Worker do
       {:ok, broker_pid} ->
         {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
 
-      # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic stays
-      # malformed, and an :exclusive subscription already taken stays taken.
-      {:error, {code, _message} = reason} when code in @terminal_errors ->
-        Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
-        Topology.stop(self())
-        {:noreply, state}
-
       {:error, reason} ->
+        Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
         {:stop, reason, state}
     end
   end

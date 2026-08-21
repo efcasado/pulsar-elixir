@@ -36,7 +36,9 @@ defmodule Pulsar.Integration.AccessModesTest do
   end
 
   @tag telemetry_listen: [@opened]
-  test ":exclusive fences a second producer until the first releases the topic" do
+  test ":exclusive fences a second producer until the first releases the topic", %{broker: broker} do
+    contender = start_isolated_client(:access_modes_contender, broker)
+
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
 
@@ -49,7 +51,7 @@ defmodule Pulsar.Integration.AccessModesTest do
              Pulsar.Producer.start(@exclusive_topic,
                access_mode: :exclusive,
                name: "exclusive-2",
-               client: @client
+               client: contender
              )
 
     ref = Process.monitor(group_pid_2)
@@ -60,10 +62,14 @@ defmodule Pulsar.Integration.AccessModesTest do
                       metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
                     }}
 
-    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, :shutdown}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, :shutdown}, 10_000
 
     assert Pulsar.Producer.await_ready(group_pid_2, timeout: 1_000) == {:error, :not_found}
-    refute group_pid_2 in Pulsar.Client.producers(@client)
+    refute group_pid_2 in Pulsar.Client.producers(contender)
+
+    # Its client keeps starting it over while its own budget lasts, so it is still contending for
+    # the topic. Take that client down before releasing it, or which producer wins is a race.
+    stop_supervised!(:access_modes_contender)
 
     ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
@@ -200,5 +206,19 @@ defmodule Pulsar.Integration.AccessModesTest do
                    15_000
 
     Pulsar.Producer.stop(group_pid_2)
+  end
+
+  # A producer that is refused escalates, and escalation reaches the client, so it is given one of
+  # its own rather than taking the shared client's other producers down with it. Temporary,
+  # because that is exactly what is expected to happen to it.
+  defp start_isolated_client(name, broker) do
+    start_supervised!(
+      Supervisor.child_spec({Pulsar.Client, name: name, host: broker.service_url},
+        id: name,
+        restart: :temporary
+      )
+    )
+
+    name
   end
 end
