@@ -149,15 +149,15 @@ that no workers are available, so the pid applications use to address the resour
 change while its workers churn.
 
 Every level of the tree is `restart: :permanent`, so an exit means one thing only: something
-went wrong, and it is passed upward. A worker that is finished, or that hit something retrying
-cannot fix, therefore does not exit. It asks to be stopped, and <code>Pulsar.Topology.Controller</code>
-terminates it through its parent, which no restart type undoes. Its slot stays `:undefined`,
-which is also what tells the controller the partition is accounted for and must not be built again.
+went wrong, and it is passed upward.
 
-Stopping a worker cascades. A group whose workers have all gone is stopped from the root, and a root
-whose groups have all gone is removed from its client, taking the controller and any companions
-with it. One partition of a terminated topic finishing leaves its siblings draining at their
-own pace; the last one to finish takes the whole resource away and leaves nothing behind.
+Stopping is the other half of that, and it happens at one level only. `Pulsar.Consumer.stop/2`
+and `Pulsar.Producer.stop/2` take the resource's root out of whatever supervises it, which no
+restart type undoes, and OTP terminates the groups and workers below it. A worker is one of the
+ways a resource is running rather than something anyone asked for, so nothing stops one on its
+own, and a partition of a terminated topic keeps its place until the resource is stopped. A
+callback that wants that decided elsewhere forwards the notification to a process that can
+make it.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
 that group's worker. Consumer workers receive broker messages and invoke the configured
@@ -340,13 +340,11 @@ seconds, and rebuilds the client indefinitely instead. Widen the window past one
 <code>Pulsar.Topology.Root</code> is the stable root of a logical resource, and
 <code>Pulsar.Topology.Group</code> owns the workers for one topic or partition. The stateful
 <code>Pulsar.Topology.Controller</code> process owns discovery status, retry backoff, and polling,
-and is the only process that changes the shape of a resource's tree — both reconciliation and
-stopping are carried out there, so the two cannot interleave. <code>Pulsar.Topology.Root</code>
-supplies those operations and the controller performs them. <code>Pulsar.Topology</code> is
-everything asked of a resource from outside it: which level a pid is, what a root owns, whether
-it is ready, and stopping either of them. It is what the Consumer,
-Producer and Reader facades depend on, and Root reaches back into it for the supervision-tree
-mechanics they share. The stateless
+and builds the tree from what it discovers; <code>Pulsar.Topology.Root</code> supplies the
+operations it performs. <code>Pulsar.Topology</code> is everything asked of a resource from
+outside it: which level a pid is, what a root owns, whether it is ready, and stopping it. It is
+what the Consumer, Producer and Reader facades depend on, and Root reaches back into it for the
+supervision-tree mechanics they share. The stateless
 <code>Pulsar.Topology.Resolver</code> performs broker metadata and owner lookups.
 These modules remain behind the Consumer and Producer facades.
 

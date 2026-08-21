@@ -26,10 +26,6 @@ defmodule Pulsar.Backoff do
   A broker that is disconnected, not yet registered, or still reporting `ServiceNotReady`
   can recover without the caller changing anything. Other errors are returned immediately.
 
-  Retrying here is also what paces a worker that cannot start. Returning at once would let
-  its group restart it in a tight loop and exhaust the restart budget, which reads as a
-  clean `:shutdown` and takes the whole resource down; a bounded retry spends the budget
-  slowly enough for the broker to come back.
   """
   @spec run((-> result)) :: result when result: term()
   def run(fun) when is_function(fun, 0), do: run(fun, &retryable?/1, @retry_budget)
@@ -103,6 +99,11 @@ defmodule Pulsar.Backoff do
   keep trying until. Answers `{:retry, wait, next}` to try again in `wait` ms, carrying `next`
   into the following call, or `:give_up` once the reason is not retryable or the deadline has
   passed. Same policy and budget as `run/1`, without blocking the caller.
+
+  This is what paces a worker that cannot start. Giving up at once would let its group restart
+  it in a tight loop and exhaust the restart budget, which reads as a clean `:shutdown` and
+  takes the whole resource down; spacing the attempts spends that budget slowly enough for a
+  broker to come back.
   """
   @spec retry_in(term(), non_neg_integer(), integer() | :infinity) ::
           {:retry, pos_integer(), pos_integer()} | :give_up

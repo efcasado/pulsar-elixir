@@ -48,23 +48,6 @@ defmodule Pulsar.Consumer.WorkerTest do
 
   def forward(_event, measurements, metadata, pid), do: send(pid, {:telemetry, measurements, metadata})
 
-  defp worker_opts(overrides) do
-    Keyword.merge(
-      [
-        topic: Pulsar.Topic.partition(@topic, 2),
-        base_topic: @topic,
-        partition: 2,
-        subscription_name: "order-service",
-        subscription_type: :shared,
-        name: "orders-order-service-partition-2-1",
-        callback_module: Callback,
-        startup_delay_ms: 0,
-        startup_jitter_ms: 0
-      ],
-      overrides
-    )
-  end
-
   defp worker_state do
     struct(Worker,
       topic: Pulsar.Topic.partition(@topic, 2),
@@ -109,7 +92,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
   describe "callback initialization" do
     test "hands the callback its resolved topic and subscription" do
-      assert {:ok, state, {:continue, :subscribe}} = Worker.init(worker_opts(init_args: :args))
+      assert {:noreply, state} = Worker.handle_continue({:init_callback, :args}, worker_state())
 
       assert {:args, context} = state.callback_state
 
@@ -123,21 +106,17 @@ defmodule Pulsar.Consumer.WorkerTest do
              }
     end
 
-    # The callback is initialized before the broker is reached, so its context is configuration
-    # and nothing downstream has to carry init_args to it. Readiness is a later question.
-    test "does not mark the consumer ready, which the initial flow does" do
-      assert {:ok, state, _continue} = Worker.init(worker_opts(init_args: :args))
+    test "marks the consumer ready only once the callback has initialized" do
+      refute worker_state().ready
 
-      refute state.ready
+      assert {:noreply, state} = Worker.handle_continue({:init_callback, :args}, worker_state())
+      assert state.ready
     end
 
-    test "refuses to start when the callback refuses to initialize" do
-      assert {:stop, :init_refused} = Worker.init(worker_opts(init_args: :refuse))
-    end
-
-    test "waits before subscribing when a startup delay is configured" do
-      assert {:ok, _state, {:continue, {:startup_delay, 30, 0}}} =
-               Worker.init(worker_opts(init_args: :args, startup_delay_ms: 30))
+    # After the worker is running, so a callback that refuses spends a restart rather than
+    # failing Supervisor.start_child and leaving the controller retrying discovery forever.
+    test "stops the worker when the callback refuses to initialize" do
+      assert {:stop, :init_refused, _state} = Worker.handle_continue({:init_callback, :refuse}, worker_state())
     end
   end
 
@@ -457,8 +436,8 @@ defmodule Pulsar.Consumer.WorkerTest do
       state = worker_state()
 
       # Returning leaves it reading its mailbox, which is what lets it be shut down at all.
-      assert {:noreply, ^state} = Worker.handle_continue({:startup_delay, 30, 0}, state)
-      assert_receive :subscribe_now, 500
+      assert {:noreply, ^state} = Worker.handle_continue({:startup_delay, 30, 0, []}, state)
+      assert_receive {:subscribe_now, []}, 500
     end
 
     test "tells the callback, and carries on" do

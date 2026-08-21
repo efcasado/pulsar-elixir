@@ -42,10 +42,7 @@ defmodule Pulsar.Topology.Root do
 
   defp start_options(nil, _name), do: []
   defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
-  # A read that failed answers [], which is not evidence that everything stopped: a live root
-  # still lists the slots it stopped, so only a non-empty answer can be believed.
-  # :restarting is a child on its way back, so it still counts as present; only :undefined is a
-  # slot that was stopped and is staying that way.
+
   @impl true
   def init({config, controller_opts}) do
     {config, companions} = attach_companions(config, self())

@@ -218,8 +218,7 @@ defmodule Pulsar.Consumer.Callback do
       end
 
   and have that process call `Pulsar.Consumer.stop/2` once it has heard from every worker it
-  expects. `Pulsar.Reader` does exactly this, ending its stream and then stopping the consumer
-  it opened.
+  expects - one per partition, so a partitioned topic reports as many times as it has them.
 
   ## Manual Acknowledgment
 

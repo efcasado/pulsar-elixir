@@ -306,8 +306,7 @@ defmodule Pulsar.Topology do
     end
   end
 
-  @doc false
-  def child_id(supervisor, pid) do
+  defp child_id(supervisor, pid) do
     supervisor
     |> supervisor_children()
     |> Enum.find_value(:error, fn
@@ -316,8 +315,7 @@ defmodule Pulsar.Topology do
     end)
   end
 
-  @doc false
-  def terminate_by_id(supervisor, id) do
+  defp terminate_by_id(supervisor, id) do
     Supervisor.terminate_child(supervisor, id)
   catch
     :exit, _reason -> {:error, :not_found}
