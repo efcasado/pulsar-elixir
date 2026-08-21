@@ -48,9 +48,8 @@ defmodule Pulsar.Integration.Reader.CommonTest do
     assert Pulsar.Client.consumers(@client) == []
   end
 
-  # Readers are independent of one another, so each needs a subscription of its own. Note that
-  # this cannot reproduce the cross-node case: two nodes drawing names from a per-VM counter
-  # would collide, and only one of them would be seated on an :exclusive subscription.
+  # Each reader needs a subscription of its own. This cannot reproduce the cross-node collision
+  # a per-VM counter causes, only the guarantee that readers do not interfere.
   test "two readers on one topic each read all of it" do
     # A longer idle timeout than the tests above: two readers sharing the topic take turns, so
     # 100ms of quiet is not evidence that the topic is drained.

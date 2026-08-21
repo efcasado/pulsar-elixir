@@ -251,7 +251,7 @@ defmodule Pulsar.Consumer do
       :group ->
         {:error, :not_found}
 
-      :topology ->
+      :root ->
         case topology_workers(consumer) do
           :initializing -> {:error, :not_ready}
           {:ready, workers, unavailable?} -> grant_all(workers, permits, unavailable?)
@@ -312,7 +312,7 @@ defmodule Pulsar.Consumer do
       :group ->
         {:error, :not_found}
 
-      :topology ->
+      :root ->
         Topology.topic(consumer)
     end
   catch

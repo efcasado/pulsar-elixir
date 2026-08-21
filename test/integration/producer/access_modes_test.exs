@@ -121,7 +121,7 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from first producer", client: @client)
 
-    assert {:error, :producer_waiting} =
+    assert {:error, :not_ready} =
              Pulsar.Producer.send(group_pid_2, "Message from second producer while waiting", client: @client)
 
     ref = Process.monitor(producer_1)

@@ -105,14 +105,6 @@ defmodule Pulsar.Producer.Worker do
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc """
-  Gracefully stops a producer process.
-  """
-  @spec stop(GenServer.server(), term(), timeout()) :: :ok
-  def stop(producer, reason \\ :normal, timeout \\ :infinity) do
-    GenServer.stop(producer, reason, timeout)
-  end
-
   @doc false
   @spec ready?(pid(), timeout()) :: boolean()
   def ready?(producer, timeout), do: GenServer.call(producer, :ready?, timeout)
@@ -161,31 +153,21 @@ defmodule Pulsar.Producer.Worker do
     end
   end
 
+  # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
+  # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout.
   @impl true
   def handle_continue({:startup_delay, base_delay_ms, jitter_ms}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
-    total_sleep_ms = base_delay_ms + jitter
+    total_delay_ms = base_delay_ms + jitter
 
-    Logger.debug("Producer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Logger.debug("Producer waiting #{total_delay_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Process.send_after(self(), :register_now, total_delay_ms)
 
-    Process.sleep(total_sleep_ms)
-    {:noreply, state, {:continue, :register_producer}}
+    {:noreply, state}
   end
 
   def handle_continue(:register_producer, state) do
-    case Backoff.run(fn -> register(state) end) do
-      {:ok, new_state} ->
-        {:noreply, new_state, {:continue, :monitor_broker}}
-
-      {:error, {:ProducerFenced, _msg} = reason} ->
-        EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
-        Logger.error("Producer #{state.producer_name} for #{state.topic} was fenced")
-        {:stop, reason, state}
-
-      {:error, reason} ->
-        Logger.error("Producer for #{state.topic} cannot register: #{inspect(reason)}")
-        {:stop, reason, state}
-    end
+    attempt_register(state, 0, Backoff.deadline())
   end
 
   def handle_continue(:monitor_broker, state) do
@@ -200,6 +182,29 @@ defmodule Pulsar.Producer.Worker do
       end
 
     {:noreply, %{state | batch_flush_timer: timer_ref}}
+  end
+
+  defp attempt_register(state, backoff, deadline) do
+    case register(state) do
+      {:ok, new_state} ->
+        {:noreply, new_state, {:continue, :monitor_broker}}
+
+      {:error, {:ProducerFenced, _msg} = reason} ->
+        EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
+        Logger.error("Producer #{state.producer_name} for #{state.topic} was fenced")
+        {:stop, reason, state}
+
+      {:error, reason} ->
+        case Backoff.retry_in(reason, backoff, deadline) do
+          {:retry, wait, next} ->
+            Process.send_after(self(), {:retry_register, next, deadline}, wait)
+            {:noreply, state}
+
+          :give_up ->
+            Logger.error("Producer for #{state.topic} cannot register: #{inspect(reason)}")
+            {:stop, reason, state}
+        end
+    end
   end
 
   defp register(state) do
@@ -224,7 +229,7 @@ defmodule Pulsar.Producer.Worker do
   defp do_send(_payload, _opts, from, %__MODULE__{ready: false} = state) do
     Logger.warning("Producer #{state.producer_name} is waiting, cannot send message")
 
-    refuse(state, from, :producer_waiting)
+    refuse(state, from, :not_ready)
   end
 
   defp do_send(payload, opts, from, state) do
@@ -371,6 +376,14 @@ defmodule Pulsar.Producer.Worker do
   end
 
   @impl true
+  def handle_info(:register_now, state) do
+    {:noreply, state, {:continue, :register_producer}}
+  end
+
+  def handle_info({:retry_register, backoff, deadline}, state) do
+    attempt_register(state, backoff, deadline)
+  end
+
   def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
     Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, producer will restart")
 

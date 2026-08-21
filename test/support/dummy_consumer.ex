@@ -16,7 +16,8 @@ defmodule Pulsar.Test.Support.DummyConsumer do
 
   The only thing it decides for itself is what to answer with: `fail_all: true` rejects every
   message, so redelivery and dead lettering have something to act on, and
-  `stop_at_end_of_topic: true` shuts the worker down once it reaches the end of one.
+  `stop_at_end_of_topic: true` stops the whole consumer once a worker reaches the end of one,
+  through `Pulsar.Consumer.stop/2`, the way a coordinator would.
 
   A consumer started in `setup_all` cannot forward to the test that asserts on it, since that
   callback runs in its own process. Either start it in the test, or point it at the right one
@@ -77,7 +78,12 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   def reached_end_of_topic(state) do
     notify(state.forward_to, {:consumer_end_of_topic, self()})
 
-    if state.stop_at_end_of_topic, do: {:stop, :normal, state}, else: {:noreply, state}
+    if state.stop_at_end_of_topic do
+      root = self() |> Pulsar.Topology.owning_supervisor() |> Pulsar.Topology.owning_supervisor()
+      Task.start(fn -> Pulsar.Consumer.stop(root) end)
+    end
+
+    :ok
   end
 
   def terminate(reason, state) do

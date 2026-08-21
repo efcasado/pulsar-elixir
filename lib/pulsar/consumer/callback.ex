@@ -72,9 +72,8 @@ defmodule Pulsar.Consumer.Callback do
       defmodule MyApp.MessageCounter do
         use Pulsar.Consumer.Callback
 
-        def init(opts, _context) do
-          max_messages = Keyword.get(opts, :max_messages, 1000)
-          {:ok, %{count: 0, max_messages: max_messages, messages: []}}
+        def init(_opts, _context) do
+          {:ok, %{count: 0, messages: []}}
         end
 
         def handle_message(%Pulsar.Message{payload: payload}, callback_state) do
@@ -210,17 +209,16 @@ defmodule Pulsar.Consumer.Callback do
   reported rather than counting notifications, and keep whatever the callback does here
   idempotent.
 
-  This says the topic is finished, not the subscription. Answer `{:stop, reason, state}` to
-  shut this worker down once it has nothing left to read:
+  This says the topic is finished, not the subscription. The return is ignored, as
+  `c:terminate/2`'s is: a callback cannot stop its own consumer, because a worker is one of
+  several ways a consumer is running and not the consumer itself. Tell something that can:
 
       def reached_end_of_topic(state) do
-        {:stop, :normal, state}
+        send(state.owner, {:drained, self()})
       end
 
-  Stopping is permanent. The worker is stopped rather than restarted: its group is stopped once
-  its last worker has gone, and the consumer once its last group has, so a non-partitioned
-  consumer that stops here goes away entirely and leaves nothing registered. Stopping only some
-  of a `:consumer_count` leaves the group running with fewer workers.
+  and have that process call `Pulsar.Consumer.stop/2` once it has heard from every worker it
+  expects - one per partition, so a partitioned topic reports as many times as it has them.
 
   ## Manual Acknowledgment
 
@@ -298,28 +296,15 @@ defmodule Pulsar.Consumer.Callback do
               | {:reply, term(), state, timeout() | :hibernate | {:continue, term()}}
               | {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), term(), state}
-              | {:stop, term(), state}
   @callback handle_cast(term(), state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
   @callback handle_info(term(), state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback became_active(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback became_passive(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback reached_end_of_topic(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
+  @callback became_active(state) :: term()
+  @callback became_passive(state) :: term()
+  @callback reached_end_of_topic(state) :: term()
   @callback handle_invalid_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}

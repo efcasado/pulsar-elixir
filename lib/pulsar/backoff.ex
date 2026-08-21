@@ -9,6 +9,10 @@ defmodule Pulsar.Backoff do
 
   @retryable_errors [:disconnected, :no_broker_available, :ServiceNotReady]
 
+  # Pulsar.Topology.Resolver reports a broker's answer wrapped, and the reason that decides
+  # retryability is the one inside.
+  @resolver_wrappers [:lookup_failed, :partition_metadata_check_failed]
+
   @spec next(non_neg_integer()) :: pos_integer()
   def next(0), do: :rand.uniform(100)
 
@@ -22,10 +26,6 @@ defmodule Pulsar.Backoff do
   A broker that is disconnected, not yet registered, or still reporting `ServiceNotReady`
   can recover without the caller changing anything. Other errors are returned immediately.
 
-  Retrying here is also what paces a worker that cannot start. Returning at once would let
-  its group restart it in a tight loop and exhaust the restart budget, which reads as a
-  clean `:shutdown` and takes the whole resource down; a bounded retry spends the budget
-  slowly enough for the broker to come back.
   """
   @spec run((-> result)) :: result when result: term()
   def run(fun) when is_function(fun, 0), do: run(fun, &retryable?/1, @retry_budget)
@@ -92,6 +92,41 @@ defmodule Pulsar.Backoff do
     end
   end
 
+  @doc """
+  How long to wait before retrying `reason`, for a caller that schedules rather than sleeps.
+
+  `previous` is the last wait this caller used and `deadline` the monotonic millisecond it may
+  keep trying until. Answers `{:retry, wait, next}` to try again in `wait` ms, carrying `next`
+  into the following call, or `:give_up` once the reason is not retryable or the deadline has
+  passed. Same policy and budget as `run/1`, without blocking the caller.
+
+  This is what paces a worker that cannot start. Giving up at once would let its group restart
+  it in a tight loop and exhaust the restart budget, which reads as a clean `:shutdown` and
+  takes the whole resource down; spacing the attempts spends that budget slowly enough for a
+  broker to come back.
+  """
+  @spec retry_in(term(), non_neg_integer(), integer() | :infinity) ::
+          {:retry, pos_integer(), pos_integer()} | :give_up
+  def retry_in(reason, previous, deadline) do
+    if retryable?(reason) do
+      wait = next(previous)
+
+      case retry_wait(deadline, wait) do
+        :exhausted -> :give_up
+        retry_wait -> {:retry, retry_wait, wait}
+      end
+    else
+      :give_up
+    end
+  end
+
+  @doc """
+  The monotonic millisecond a retry started now may keep trying until.
+  """
+  @spec deadline() :: integer()
+  def deadline, do: System.monotonic_time(:millisecond) + @retry_budget
+
+  defp retryable?({wrapper, reason}) when wrapper in @resolver_wrappers, do: retryable?(reason)
   defp retryable?({code, _message}), do: code in @retryable_errors
   defp retryable?(reason), do: reason in @retryable_errors
 end
