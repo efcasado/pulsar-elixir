@@ -1,14 +1,13 @@
 defmodule Pulsar.Topology.Root do
   @moduledoc false
 
-  # The stable root of one logical consumer or producer: the supervisor itself, and the
-  # operations that change the tree below it. Reading that tree is Pulsar.Topology's job.
+  # The stable root of one consumer or producer, and the operations that change the tree below
+  # it. Reading that tree is Pulsar.Topology's job.
 
   @behaviour Supervisor
 
   alias Pulsar.Client
   alias Pulsar.Topic
-  alias Pulsar.Topology
   alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Group
 
@@ -30,8 +29,7 @@ defmodule Pulsar.Topology.Root do
     start_link(worker, registry, kind, opts, [])
   end
 
-  # The fifth argument is an internal seam for exercising asynchronous discovery without a
-  # broker. Consumer and Producer deliberately keep it out of the API they document.
+  # The fifth argument is an internal seam for exercising discovery without a broker.
   @doc false
   @spec start_link(module(), atom() | nil, :consumers | :producers, keyword(), keyword()) ::
           Supervisor.on_start()
@@ -44,38 +42,6 @@ defmodule Pulsar.Topology.Root do
 
   defp start_options(nil, _name), do: []
   defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
-  @doc false
-  @spec stop_worker(pid(), pid()) :: :ok
-  def stop_worker(root, worker) do
-    with group when is_pid(group) <- Topology.owning_supervisor(worker),
-         true <- terminated?(group, worker) and empty?(group) do
-      stop_group(root, group)
-    else
-      _nothing_to_cascade -> :ok
-    end
-  end
-
-  # Removing the root takes Controller, and so this call, with it. The removal still completes.
-  defp stop_group(root, group) do
-    if terminated?(root, group) and no_groups_left?(root), do: Topology.stop(root), else: :ok
-  end
-
-  defp no_groups_left?(root), do: Enum.all?(Topology.groups(root), &match?({_index, :undefined}, &1))
-
-  defp terminated?(supervisor, child) do
-    case Topology.child_id(supervisor, child) do
-      {:ok, id} -> Topology.terminate_by_id(supervisor, id) == :ok
-      :error -> false
-    end
-  end
-
-  # :restarting is a child on its way back, so it still counts as present; only :undefined is a
-  # slot that was stopped and is staying that way.
-  defp empty?(supervisor) do
-    supervisor
-    |> Topology.supervisor_children()
-    |> Enum.all?(fn {_id, pid, _type, _modules} -> pid == :undefined end)
-  end
 
   @impl true
   def init({config, controller_opts}) do
@@ -91,15 +57,14 @@ defmodule Pulsar.Topology.Root do
       |> Controller.child_spec()
       |> Map.put(:id, {Controller, config.kind, topic, hashing_scheme_for_config(config)})
 
-    # Companions start before the controller so a worker never observes the tree without them.
-    # They resolve their own brokers asynchronously, so none of them delays this root coming up.
+    # Before the controller, so a worker never observes the tree without them. They resolve
+    # their own brokers, so none delays this root coming up.
     children = companions ++ [controller]
 
     Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
   end
 
-  # Popped rather than read: `:companions` configures this root and is not part of what a worker
-  # is started with.
+  # `:companions` configures this root, and is not part of what a worker is started with.
   defp attach_companions(config, root) do
     case Keyword.pop(config.opts, :companions) do
       {nil, opts} ->
@@ -111,13 +76,9 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
-  # Carried on the child id so routing reads it from the same which_children the groups come
-  # from, keeping a send to one call. The registry value would be the usual place for this, but
-  # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
-  # and a producer started with start_link_unregistered/1 has none.
-  #
-  # nil where a resource does not route on a key, and for a producer whose options have not been
-  # through Producer.Options; Hash.partition/3 resolves it to the default.
+  # On the child id rather than in the registry, so routing reads it from the same
+  # which_children the groups come from and a send costs one call. Producer.send/3 takes a pid
+  # without consulting the registry, and start_link_unregistered/1 has no registry entry at all.
   defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
   end
@@ -218,9 +179,7 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
-  # :topic is the topic a worker subscribes to and :base_topic the one the resource was
-  # configured with; they differ only for a partition. Workers carry both so a callback can
-  # tell which partition it handles without inspecting the tree it lives in.
+  # Both topics, so a callback can tell which partition it handles without reading the tree.
   defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
     topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 

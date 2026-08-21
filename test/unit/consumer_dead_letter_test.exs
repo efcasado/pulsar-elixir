@@ -136,7 +136,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       dlq = dead_letter_producer(root())
 
       assert is_pid(dlq)
-      assert Topology.kind(dlq) == :topology
+      assert Topology.kind(dlq) == :root
       assert Topology.resource?(dlq, :producers)
     end
 

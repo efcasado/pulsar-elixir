@@ -33,12 +33,13 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
   end
 
-  defmodule StoppingCallback do
+  defmodule EndOfTopicCallback do
     @moduledoc false
     use Pulsar.Consumer.Callback
 
     def handle_message(_message, state), do: {:ok, state}
 
+    # Answers what a callback used to stop itself with, which the worker now ignores.
     def reached_end_of_topic(state), do: {:stop, :normal, state}
   end
 
@@ -112,8 +113,10 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert state.ready
     end
 
-    test "stops without a state when the callback refuses to initialize" do
-      assert {:stop, :init_refused, nil} = Worker.handle_continue({:init_callback, :refuse}, worker_state())
+    # After the worker is running, so a callback that refuses spends a restart rather than
+    # failing Supervisor.start_child and leaving the controller retrying discovery forever.
+    test "stops the worker when the callback refuses to initialize" do
+      assert {:stop, :init_refused, _state} = Worker.handle_continue({:init_callback, :refuse}, worker_state())
     end
   end
 
@@ -429,10 +432,19 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert {:noreply, ^state} = Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
 
-    test "lets the callback stop the worker" do
-      state = %{worker_state() | callback_module: StoppingCallback}
+    test "waits out its startup delay by timer rather than sleeping through it" do
+      state = worker_state()
 
-      # Parks to be stopped rather than exiting; end_of_topic_test.exs asserts it is then removed.
+      # Returning leaves it reading its mailbox, which is what lets it be shut down at all.
+      assert {:noreply, ^state} = Worker.handle_continue({:startup_delay, 30, 0, []}, state)
+      assert_receive {:subscribe_now, []}, 500
+    end
+
+    test "tells the callback, and carries on" do
+      state = %{worker_state() | callback_module: EndOfTopicCallback, callback_state: :started}
+
+      # A notification, so what it answers is ignored: a worker is one of the ways a consumer
+      # is running, and stopping one is Pulsar.Consumer.stop/2's job.
       assert {:noreply, ^state} =
                Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end

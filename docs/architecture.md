@@ -149,15 +149,15 @@ that no workers are available, so the pid applications use to address the resour
 change while its workers churn.
 
 Every level of the tree is `restart: :permanent`, so an exit means one thing only: something
-went wrong, and it is passed upward. A worker that is finished, or that hit something retrying
-cannot fix, therefore does not exit. It asks to be stopped, and <code>Pulsar.Topology.Controller</code>
-terminates it through its parent, which no restart type undoes. Its slot stays `:undefined`,
-which is also what tells the controller the partition is accounted for and must not be built again.
+went wrong, and it is passed upward.
 
-Stopping a worker cascades. A group whose workers have all gone is stopped from the root, and a root
-whose groups have all gone is removed from its client, taking the controller and any companions
-with it. One partition of a terminated topic finishing leaves its siblings draining at their
-own pace; the last one to finish takes the whole resource away and leaves nothing behind.
+Stopping is the other half of that, and it happens at one level only. `Pulsar.Consumer.stop/2`
+and `Pulsar.Producer.stop/2` take the resource's root out of whatever supervises it, which no
+restart type undoes, and OTP terminates the groups and workers below it. A worker is one of the
+ways a resource is running rather than something anyone asked for, so nothing stops one on its
+own, and a partition of a terminated topic keeps its place until the resource is stopped. A
+callback that wants that decided elsewhere forwards the notification to a process that can
+make it.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
 that group's worker. Consumer workers receive broker messages and invoke the configured
@@ -261,10 +261,9 @@ Recovery happens at the narrowest useful boundary:
 - An unexpected worker failure is restarted inside its group.
 - A broker connection loss restarts the workers that depended on it while the client remains
   available.
-- A terminal broker rejection, such as an incompatible schema or an `:exclusive` subscription
-  already held, stops that worker rather than restarting it into the same answer. Its group is
-  stopped once its last worker has gone, and the resource once its last group has. Callers
-  then see `{:error, :not_found}` rather than a registered resource with nothing in it.
+- A broker rejection a restart cannot fix, such as an incompatible schema or an `:exclusive`
+  subscription already held, exits the worker like any other failure and is allowed to climb.
+  A worker that is *finished* rather than failed is stopped instead, which costs no restart.
 - A resource that cannot run at all is not left quietly missing; the failure reaches whatever
   supervises the client. See [Error Propagation](#error-propagation).
 - A consumer branch failure is isolated from the producer branch, and vice versa.
@@ -304,7 +303,9 @@ that exits has hit something retrying cannot fix.
 
 Both budgets are OTP's own by default, and both are configured on `Pulsar.Client`. A group
 multiplies `:max_restarts` by its worker count, so a broker dropping ten workers at once counts as
-one round rather than ten and the budget keeps meaning what it says. The two numbers go together
+one round rather than ten and the budget keeps meaning what it says. The budget is shared, so the
+trade is at the other end: one worker of ten looping on its own gets ten times the attempts before
+its group gives up. Correlated failure is the common one, which is why it is the one kept honest. The two numbers go together
 rather than being chosen separately: a worker held by <code>Pulsar.Backoff</code> restarts about
 once per window, so the window has to stay small relative to that retry budget. At 3 in 5 seconds
 that is one restart against three, which holds; at 3 in 60 seconds it would be twenty against
@@ -313,24 +314,37 @@ three, which does not.
 Stopping contributes to none of this. A worker, group or resource that was stopped is terminated
 by its parent rather than exiting, so it costs no restart and escalates nothing.
 
-One consequence is worth planning for. Escalation reaches the client, and the client owns every
-consumer and producer declared on it, so a resource that cannot run takes its siblings with it —
-the point being that the application finds out rather than quietly losing one of them. Where two
-things genuinely contend, as two deployments holding one `:exclusive` subscription do, give them
-separate clients so that only the one that cannot run comes down.
+What carries a failure up is that every level is a `:permanent` child. A supervisor that spends
+its budget exits `:shutdown`, which normally reads as an orderly stop; it travels because
+`:permanent` restarts a child whatever its reason, so the level above puts it back, watches it
+fail again, and spends its own budget in turn. Changing any level to `:transient` stops the
+climb there, silently — `:shutdown` is a success to `:transient`, so the child is simply not
+restarted.
+
+Escalation reaches the client, and the client owns every consumer and producer on it, so a
+resource that cannot run takes its siblings with it. Where two things genuinely contend, as two
+deployments holding one `:exclusive` subscription do, give them separate clients so that only
+the one that cannot run comes down.
+
+Whether it travels past the client is the host's to decide, and worth deciding deliberately. A
+resource started at runtime is not put back once the branch is rebuilt, so nothing is left
+failing and the climb ends there; the caller holds the pid and is the one who can notice. A
+declared one is recreated by Bootstrap on every client restart, so it fails again — but a whole
+cascade takes about five seconds, most of it a client reconnecting and bootstrapping. A host
+supervisor on OTP's own three-in-five never fills its budget against a failure every five
+seconds, and rebuilds the client indefinitely instead. Widen the window past one cascade —
+`max_seconds: 60` — and the same failure terminates the host.
 
 ## Implementation Notes for Contributors
 
 <code>Pulsar.Topology.Root</code> is the stable root of a logical resource, and
 <code>Pulsar.Topology.Group</code> owns the workers for one topic or partition. The stateful
 <code>Pulsar.Topology.Controller</code> process owns discovery status, retry backoff, and polling,
-and is the only process that changes the shape of a resource's tree — both reconciliation and
-stopping are carried out there, so the two cannot interleave. <code>Pulsar.Topology.Root</code>
-supplies those operations and the controller performs them. <code>Pulsar.Topology</code> is
-everything asked of a resource from outside it: which level a pid is, what a root owns, whether
-it is ready, and stopping either of them. It is what the Consumer,
-Producer and Reader facades depend on, and Root reaches back into it for the supervision-tree
-mechanics they share. The stateless
+and builds the tree from what it discovers; <code>Pulsar.Topology.Root</code> supplies the
+operations it performs. <code>Pulsar.Topology</code> is everything asked of a resource from
+outside it: which level a pid is, what a root owns, whether it is ready, and stopping it. It is
+what the Consumer, Producer and Reader facades depend on, and Root reaches back into it for the
+supervision-tree mechanics they share. The stateless
 <code>Pulsar.Topology.Resolver</code> performs broker metadata and owner lookups.
 These modules remain behind the Consumer and Producer facades.
 
