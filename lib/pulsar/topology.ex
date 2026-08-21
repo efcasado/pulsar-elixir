@@ -290,44 +290,19 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
-  Stops a resource, or one worker of one.
+  Stops a resource, by taking it out of whatever supervises it.
 
-  Whichever it is, the subject is terminated by its parent rather than exiting, which no restart
-  type undoes, so an exit is left to mean one thing only: something went wrong. The slot stays
-  `:undefined`, which is what tells the controller it is accounted for and must not be built
-  again.
-
-  Stopping a worker cascades. `Supervisor.terminate_child/2` returns only once the child is
-  down, so the tree can be read straight afterwards to decide whether to carry on up: a group
-  whose workers have all gone is stopped from the root, and a root whose groups have all gone is
-  stopped from its client.
-
-  `:ok` does not mean the same thing throughout. A root is gone by the time this returns. A
-  group or a worker has only been *asked* for, because the caller is often the worker itself and
-  a child that terminates through its own supervisor dies mid-call, taking the rest of the
-  cascade with it - so that half is handed to the controller and runs there. Wait for a `:DOWN`
-  rather than checking liveness straight after.
-
-  `{:error, :no_controller}` means nothing will carry the stop out, which for a resource on its
-  way down is the ordinary answer. A worker asking about itself parks until something does, so
-  it should match on `:ok` and let a failure restart it.
+  Removal rather than an exit, which no restart type undoes, so an exit is left to mean one
+  thing only: something went wrong. The resource is gone by the time this returns, and its
+  groups and workers with it.
   """
-  @spec stop(pid()) :: :ok | {:error, :no_controller}
-  def stop(pid) when is_pid(pid) do
-    case kind(pid) do
-      :root -> stop_root(pid)
-      :worker -> stop_worker(pid)
-    end
-  end
+  @spec stop(pid()) :: :ok
+  def stop(root) when is_pid(root) do
+    supervisor = owning_supervisor(root)
 
-  defp stop_worker(worker) do
-    with group when is_pid(group) <- owning_supervisor(worker),
-         root when is_pid(root) <- owning_supervisor(group),
-         {:ok, controller} <- controller(root) do
-      Controller.stop_worker(controller, worker)
-    else
-      nil -> :ok
-      {:error, :not_found} -> {:error, :no_controller}
+    case terminate_by_pid(supervisor, root) do
+      :ok -> :ok
+      {:error, :not_found} -> stop_by_id(supervisor, root)
     end
   end
 
@@ -346,17 +321,6 @@ defmodule Pulsar.Topology do
     Supervisor.terminate_child(supervisor, id)
   catch
     :exit, _reason -> {:error, :not_found}
-  end
-
-  # The owner is read from the root's ancestors rather than passed in. A resource started with
-  # start_link/1 from an ordinary process has no supervising owner, and is stopped directly.
-  defp stop_root(root) do
-    supervisor = owning_supervisor(root)
-
-    case terminate_by_pid(supervisor, root) do
-      :ok -> :ok
-      {:error, :not_found} -> stop_by_id(supervisor, root)
-    end
   end
 
   # A plain supervisor finds its children by id, not by pid, and merely stopping a :permanent

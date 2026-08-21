@@ -8,7 +8,6 @@ defmodule Pulsar.Topology.Root do
 
   alias Pulsar.Client
   alias Pulsar.Topic
-  alias Pulsar.Topology
   alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Group
 
@@ -43,39 +42,10 @@ defmodule Pulsar.Topology.Root do
 
   defp start_options(nil, _name), do: []
   defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
-  @doc false
-  @spec stop_worker(pid(), pid()) :: :ok
-  def stop_worker(root, worker) do
-    with group when is_pid(group) <- Topology.owning_supervisor(worker),
-         true <- terminated?(group, worker) and empty?(group) do
-      stop_group(root, group)
-    else
-      _nothing_to_cascade -> :ok
-    end
-  end
-
-  # Removing the root takes Controller, and so this call, with it. The removal still completes.
-  defp stop_group(root, group) do
-    if terminated?(root, group) and no_groups_left?(root), do: Topology.stop(root), else: :ok
-  end
-
-  defp no_groups_left?(root), do: Enum.all?(Topology.groups(root), &match?({_index, :undefined}, &1))
-
-  defp terminated?(supervisor, child) do
-    case Topology.child_id(supervisor, child) do
-      {:ok, id} -> Topology.terminate_by_id(supervisor, id) == :ok
-      :error -> false
-    end
-  end
-
+  # A read that failed answers [], which is not evidence that everything stopped: a live root
+  # still lists the slots it stopped, so only a non-empty answer can be believed.
   # :restarting is a child on its way back, so it still counts as present; only :undefined is a
   # slot that was stopped and is staying that way.
-  defp empty?(supervisor) do
-    supervisor
-    |> Topology.supervisor_children()
-    |> Enum.all?(fn {_id, pid, _type, _modules} -> pid == :undefined end)
-  end
-
   @impl true
   def init({config, controller_opts}) do
     {config, companions} = attach_companions(config, self())

@@ -38,19 +38,8 @@ defmodule Pulsar.Topology.Controller do
   @impl true
   def handle_continue(:discover, state), do: discover(state)
 
-  @doc false
-  @spec stop_worker(pid(), pid()) :: :ok
-  def stop_worker(controller, worker), do: GenServer.cast(controller, {:stop_worker, worker})
-
   @impl true
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
-
-  @impl true
-  def handle_cast({:stop_worker, worker}, state) do
-    Logger.info("Stopping worker for #{state.topic}")
-    Root.stop_worker(state.topology, worker)
-    {:noreply, state}
-  end
 
   @impl true
   def handle_info(:discover, state), do: discover(state)

@@ -13,7 +13,6 @@ defmodule Pulsar.Consumer.Worker do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
-  alias Pulsar.Topology
   alias Pulsar.Topology.Resolver
 
   require Logger
@@ -197,17 +196,10 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  # Answers whatever it owes before removing itself, so a stop that fails cannot cost a caller
-  # the reply its callback built.
-  @impl true
-  def handle_continue(:stop, state) do
-    :ok = Topology.stop(self())
-    {:noreply, state}
-  end
-
   # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
   # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout -
   # skipping the terminate/2 that trapping exists to guarantee.
+  @impl true
   def handle_continue({:startup_delay, base_delay_ms, jitter_ms}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
     total_delay_ms = base_delay_ms + jitter
@@ -461,23 +453,15 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
-
-      {:stop, _reason, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 
+  # The return is ignored, as terminate/2's is: these tell a callback something happened, and a
+  # consumer is stopped through Pulsar.Consumer.stop/2 rather than from inside one.
   defp dispatch_event(state, callback_fun) do
-    case apply(state.callback_module, callback_fun, [state.callback_state]) do
-      {:noreply, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}}
+    apply(state.callback_module, callback_fun, [state.callback_state])
 
-      {:noreply, new_callback_state, timeout_or_hibernate} ->
-        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
-
-      {:stop, _reason, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
-    end
+    {:noreply, state}
   end
 
   # Answered before counting, so a consumer with no dead letter policy never walks a delivery.
@@ -711,12 +695,6 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
-
-      {:stop, _reason, reply, new_callback_state} ->
-        {:reply, reply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
-
-      {:stop, _reason, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 
@@ -728,9 +706,6 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
-
-      {:stop, _reason, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
 

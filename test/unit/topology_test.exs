@@ -414,16 +414,17 @@ defmodule Pulsar.TopologyTest do
       end
     end
 
-    test "leaves a stopped partition group down while its siblings keep running" do
+    # Regression for #198: a partition whose spec is present but not running is accounted for,
+    # and reconciliation has to leave it alone rather than start it over on the next poll.
+    test "leaves a partition that is down where it is, while its siblings keep running" do
       {root, _registry} = start_topology(2)
 
       groups = Map.new(Topology.groups(root))
       stopped = Map.fetch!(groups, 0)
       surviving = Map.fetch!(groups, 1)
 
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(stopped)
       ref = Process.monitor(stopped)
-      :ok = Topology.stop(worker)
+      :ok = Supervisor.terminate_child(root, {:partition, 0})
       assert_receive {:DOWN, ^ref, :process, ^stopped, _reason}
 
       discovery = discovery(root)
@@ -434,19 +435,21 @@ defmodule Pulsar.TopologyTest do
       assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
     end
 
-    test "stops the topology once its last group has stopped" do
+    test "stopping a topology takes its groups and workers with it" do
       {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, partition_discovery_interval_ms: 10)
 
       :ok = Topology.await_ready(root, 1_000)
 
-      root_ref = Process.monitor(root)
+      below =
+        for {_index, group} <- Topology.groups(root),
+            {_id, worker, :worker, _modules} <- Supervisor.which_children(group),
+            do: worker
 
-      for {_index, group} <- Topology.groups(root) do
-        [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-        :ok = Topology.stop(worker)
-      end
+      refs = Map.new([root | below], &{Process.monitor(&1), &1})
 
-      assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
+      assert Topology.stop(root) == :ok
+
+      for {ref, pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^pid, _reason}, 1_000)
     end
   end
 
@@ -489,23 +492,22 @@ defmodule Pulsar.TopologyTest do
       assert Enum.count(Supervisor.which_children(group), &match?({_id, :undefined, _type, _modules}, &1)) == 1
     end
 
-    test "stops the group once its last worker has gone, leaving its siblings alone" do
+    test "a group that goes down leaves its siblings and its root alone" do
       {root, _registry} = start_topology(2)
 
       groups = Map.new(Topology.groups(root))
       stopping = Map.fetch!(groups, 0)
       surviving = Map.fetch!(groups, 1)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(stopping)
 
       ref = Process.monitor(stopping)
-      assert Topology.stop(worker) == :ok
+      :ok = Supervisor.terminate_child(root, {:partition, 0})
       assert_receive {:DOWN, ^ref, :process, ^stopping, _reason}, 1_000
 
       assert Process.alive?(root)
       assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
     end
 
-    test "leaves nothing behind once the last group has gone" do
+    test "leaves nothing behind once the resource has been stopped" do
       client = start_dynamic_supervisor()
       {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(StubWorker))
 
@@ -514,41 +516,24 @@ defmodule Pulsar.TopologyTest do
       [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
       discovery = discovery(root)
 
-      refs = Map.new([root, group, discovery], &{Process.monitor(&1), &1})
+      refs = Map.new([root, group, worker, discovery], &{Process.monitor(&1), &1})
 
-      assert Topology.stop(worker) == :ok
+      assert Topology.stop(root) == :ok
 
       for {ref, pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^pid, _reason}, 1_000)
 
       assert DynamicSupervisor.which_children(client) == []
     end
 
-    test "stops a producer topology once its last group has stopped" do
+    test "stops a producer topology the same way" do
       {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, [], kind: :producers)
 
       :ok = Topology.await_ready(root, 1_000)
       root_ref = Process.monitor(root)
 
-      for {_index, group} <- Topology.groups(root) do
-        [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-        :ok = Topology.stop(worker)
-      end
+      assert Topology.stop(root) == :ok
 
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
-    end
-
-    test "a worker whose controller is gone is told, rather than parking forever" do
-      {root, _registry} = start_topology(0)
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-
-      {controller_id, _pid, _type, _modules} =
-        Enum.find(Supervisor.which_children(root), &match?({{Controller, _, _, _}, _, _, _}, &1))
-
-      :ok = Supervisor.terminate_child(root, controller_id)
-
-      # The worker matches on :ok, so this is what restarts it into asking again.
-      assert Topology.stop(worker) == {:error, :no_controller}
     end
 
     test "a broker that is away cannot spend a group's restart budget, whatever its worker count" do
