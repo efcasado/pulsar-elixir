@@ -80,6 +80,10 @@ defmodule Pulsar.Test.Support.DummyConsumer do
     if state.stop_at_end_of_topic, do: {:stop, :normal, state}, else: {:noreply, state}
   end
 
+  def terminate(reason, state) do
+    notify(state.forward_to, {:consumer_terminated, self(), reason})
+  end
+
   def handle_call({:forward_to, pid}, _from, state) do
     {:reply, :ok, %{state | forward_to: pid}}
   end

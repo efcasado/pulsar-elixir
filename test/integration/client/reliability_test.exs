@@ -61,6 +61,27 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     end)
   end
 
+  # A broker that reconnects does not die: it stays up and exits its workers to make them
+  # subscribe again. Both trap exits, so that signal arrives as a message they have to answer -
+  # a worker that outlives it holds a subscription the broker has forgotten.
+  for {facade, callback} <- [{Pulsar.Consumer, DummyConsumer}, {Pulsar.Producer, nil}] do
+    test "#{inspect(facade)} restarts a worker its broker exits to reconnect" do
+      {:ok, group} = start_resource(unquote(facade), unquote(callback), "reconnect-exit")
+
+      assert_worker_restarts(unquote(facade), group, fn worker ->
+        send(worker, {:EXIT, broker(worker), :broker_disconnected})
+      end)
+    end
+  end
+
+  defp start_resource(Pulsar.Consumer, callback, subscription) do
+    Pulsar.Consumer.start(@topic, subscription, callback, subscription_options())
+  end
+
+  defp start_resource(Pulsar.Producer, _callback, name) do
+    Pulsar.Producer.start(@topic, Keyword.put(producer_options(), :name, name))
+  end
+
   # A ready worker has already resolved its broker, which is what the restart below needs.
   defp assert_worker_restarts(facade, group, restart) do
     :ok = facade.await_ready(group)

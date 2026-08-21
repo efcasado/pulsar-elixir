@@ -282,7 +282,6 @@ defmodule Pulsar.Consumer.Callback do
               {:ok, state}
               | {:error, reason, state}
               | {:noreply, state}
-              | {:stop, state}
 
   @optional_callbacks init: 2,
                       terminate: 2,

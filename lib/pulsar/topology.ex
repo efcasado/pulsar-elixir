@@ -95,14 +95,11 @@ defmodule Pulsar.Topology do
   defp group_ready?({_index, group}, worker_module, deadline) when is_pid(group) do
     children = supervisor_children(group)
 
-    children != [] and
-      Enum.all?(children, fn
-        {_id, worker, :worker, [^worker_module]} when is_pid(worker) ->
-          worker_ready?(worker_module, worker, deadline)
+    # A worker that stopped leaves its slot behind, and a group running short of workers is a
+    # normal steady state: readiness asks about the ones that are there.
+    live = for {_id, worker, :worker, [^worker_module]} <- children, is_pid(worker), do: worker
 
-        _not_ready ->
-          false
-      end)
+    live != [] and Enum.all?(live, &worker_ready?(worker_module, &1, deadline))
   end
 
   defp group_ready?({_index, _not_running}, _worker_module, _deadline), do: false
