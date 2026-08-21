@@ -179,15 +179,21 @@ defmodule Pulsar.Consumer.Worker do
 
     Logger.debug("Starting consumer for topic #{state.topic}")
 
-    init_args = Keyword.fetch!(opts, :init_args)
-
     startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
     startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
-    if startup_delay_ms + startup_jitter_ms > 0 do
-      {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}
-    else
-      {:ok, state, {:continue, {:subscribe, init_args}}}
+    case state.callback_module.init(Keyword.fetch!(opts, :init_args), context(state)) do
+      {:ok, callback_state} ->
+        state = %{state | callback_state: callback_state}
+
+        if startup_delay_ms + startup_jitter_ms > 0 do
+          {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms}}}
+        else
+          {:ok, state, {:continue, :subscribe}}
+        end
+
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
@@ -202,20 +208,20 @@ defmodule Pulsar.Consumer.Worker do
   # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
   # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout -
   # skipping the terminate/2 that trapping exists to guarantee.
-  def handle_continue({:startup_delay, base_delay_ms, jitter_ms, init_args}, state) do
+  def handle_continue({:startup_delay, base_delay_ms, jitter_ms}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
     total_delay_ms = base_delay_ms + jitter
     Logger.debug("Consumer waiting #{total_delay_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
-    Process.send_after(self(), {:subscribe_now, init_args}, total_delay_ms)
+    Process.send_after(self(), :subscribe_now, total_delay_ms)
 
     {:noreply, state}
   end
 
-  def handle_continue({:subscribe, init_args}, state) do
-    attempt_subscribe(state, init_args, 0, Backoff.deadline())
+  def handle_continue(:subscribe, state) do
+    attempt_subscribe(state, 0, Backoff.deadline())
   end
 
-  def handle_continue({:seek_subscription, init_args}, state) do
+  def handle_continue(:seek_subscription, state) do
     case maybe_seek_subscription(
            state.broker_pid,
            state.consumer_id,
@@ -223,20 +229,20 @@ defmodule Pulsar.Consumer.Worker do
            state.start_timestamp
          ) do
       {:ok, :skipped} ->
-        {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
+        {:noreply, state, {:continue, :send_initial_flow}}
 
       {:ok, _response} ->
-        {:noreply, state, {:continue, {:resubscribe, init_args}}}
+        {:noreply, state, {:continue, :resubscribe}}
 
       {:error, {:UnknownError, "Reset subscription to publish time error: Failed to fence subscription"}} ->
-        {:noreply, state, {:continue, {:resubscribe, init_args}}}
+        {:noreply, state, {:continue, :resubscribe}}
 
       {:error, reason} ->
         {:stop, reason, state}
     end
   end
 
-  def handle_continue({:resubscribe, init_args}, state) do
+  def handle_continue(:resubscribe, state) do
     receive do
       # When sending a Seek, we expect the broker to send a CloseConsumer
       {:broker_message, %Binary.CommandCloseConsumer{}} ->
@@ -254,7 +260,7 @@ defmodule Pulsar.Consumer.Worker do
                schema: state.schema
              ) do
           {:ok, _response} ->
-            {:noreply, state, {:continue, {:send_initial_flow, init_args}}}
+            {:noreply, state, {:continue, :send_initial_flow}}
 
           {:error, reason} ->
             {:stop, reason, state}
@@ -266,7 +272,7 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  def handle_continue({:send_initial_flow, init_args}, state) do
+  def handle_continue(:send_initial_flow, state) do
     result =
       if state.flow_initial > 0 do
         send_flow_command(state, state.flow_initial)
@@ -284,21 +290,12 @@ defmodule Pulsar.Consumer.Worker do
          %{
            state
            | broker_monitor: broker_monitor,
-             flow_outstanding_permits: state.flow_initial
-         }, {:continue, {:init_callback, init_args}}}
+             flow_outstanding_permits: state.flow_initial,
+             ready: true
+         }}
 
       {:error, reason} ->
         {:stop, reason, state}
-    end
-  end
-
-  def handle_continue({:init_callback, init_args}, state) do
-    case state.callback_module.init(init_args, context(state)) do
-      {:ok, callback_state} ->
-        {:noreply, %{state | callback_state: callback_state, ready: true}}
-
-      {:error, reason} ->
-        {:stop, reason, nil}
     end
   end
 
@@ -440,12 +437,12 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
-  def handle_info({:subscribe_now, init_args}, state) do
-    {:noreply, state, {:continue, {:subscribe, init_args}}}
+  def handle_info(:subscribe_now, state) do
+    {:noreply, state, {:continue, :subscribe}}
   end
 
-  def handle_info({:retry_subscribe, init_args, backoff, deadline}, state) do
-    attempt_subscribe(state, init_args, backoff, deadline)
+  def handle_info({:retry_subscribe, backoff, deadline}, state) do
+    attempt_subscribe(state, backoff, deadline)
   end
 
   # A reconnecting broker stays alive and exits its consumers to make them subscribe again.
@@ -455,10 +452,6 @@ defmodule Pulsar.Consumer.Worker do
 
     {:stop, :broker_exited, state}
   end
-
-  # Before init_callback there is no callback state to hand anything to, and both the startup
-  # delay and the gaps between subscribe retries leave the worker reading its mailbox.
-  def handle_info(_message, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
 
   @impl true
   def handle_info(message, state) do
@@ -473,8 +466,6 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
-
-  defp dispatch_event(%__MODULE__{callback_state: nil} = state, _callback_fun), do: {:noreply, state}
 
   defp dispatch_event(state, callback_fun) do
     case apply(state.callback_module, callback_fun, [state.callback_state]) do
@@ -651,10 +642,6 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
-  def terminate(_reason, nil) do
-    :ok
-  end
-
   def terminate(reason, state) do
     try do
       state.callback_module.terminate(reason, state.callback_state)
@@ -711,10 +698,6 @@ defmodule Pulsar.Consumer.Worker do
     {:reply, :ok, track_nacked(state, message_ids)}
   end
 
-  def handle_call(_request, _from, %__MODULE__{callback_state: nil} = state) do
-    {:reply, {:error, :not_ready}, state}
-  end
-
   def handle_call(request, from, state) do
     case state.callback_module.handle_call(request, from, state.callback_state) do
       {:reply, reply, new_callback_state} ->
@@ -738,8 +721,6 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
-  def handle_cast(_request, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
-
   def handle_cast(request, state) do
     case state.callback_module.handle_cast(request, state.callback_state) do
       {:noreply, new_callback_state} ->
@@ -755,15 +736,15 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Private Functions
 
-  defp attempt_subscribe(state, init_args, backoff, deadline) do
+  defp attempt_subscribe(state, backoff, deadline) do
     case subscribe(state) do
       {:ok, broker_pid} ->
-        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
+        {:noreply, %{state | broker_pid: broker_pid}, {:continue, :seek_subscription}}
 
       {:error, reason} ->
         case Backoff.retry_in(reason, backoff, deadline) do
           {:retry, wait, next} ->
-            Process.send_after(self(), {:retry_subscribe, init_args, next, deadline}, wait)
+            Process.send_after(self(), {:retry_subscribe, next, deadline}, wait)
             {:noreply, state}
 
           :give_up ->

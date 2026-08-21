@@ -9,6 +9,10 @@ defmodule Pulsar.Backoff do
 
   @retryable_errors [:disconnected, :no_broker_available, :ServiceNotReady]
 
+  # Pulsar.Topology.Resolver reports a broker's answer wrapped, and the reason that decides
+  # retryability is the one inside.
+  @resolver_wrappers [:lookup_failed, :partition_metadata_check_failed]
+
   @spec next(non_neg_integer()) :: pos_integer()
   def next(0), do: :rand.uniform(100)
 
@@ -121,10 +125,7 @@ defmodule Pulsar.Backoff do
   @spec deadline() :: integer()
   def deadline, do: System.monotonic_time(:millisecond) + @retry_budget
 
-  # A broker's own error is {code, message}, and the code decides. Resolver wraps a failed
-  # lookup as {:lookup_failed, reason}, where the reason that decides is the one inside - asked
-  # second, so a broker error whose message is not a binary is still read by its code.
-  defp retryable?({code, _message}) when code in @retryable_errors, do: true
-  defp retryable?({_wrapper, reason}) when not is_binary(reason), do: retryable?(reason)
+  defp retryable?({wrapper, reason}) when wrapper in @resolver_wrappers, do: retryable?(reason)
+  defp retryable?({code, _message}), do: code in @retryable_errors
   defp retryable?(reason), do: reason in @retryable_errors
 end
