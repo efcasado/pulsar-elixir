@@ -169,6 +169,10 @@ defmodule Pulsar.Consumer.Worker do
 
   @impl true
   def init(opts) do
+    # A worker is taken out of the tree by its parent rather than by exiting, and an untrapped
+    # child is killed outright by that - skipping terminate/2, and with it the callback's.
+    Process.flag(:trap_exit, true)
+
     # Option names and struct field names are the same, so struct/2 carries them across
     # and ignores the group-level options that are not part of a consumer's state. That
     # includes :dead_letter_root, resolved once for the whole consumer by Pulsar.Topology.
@@ -437,6 +441,16 @@ defmodule Pulsar.Consumer.Worker do
     Logger.info("Broker #{inspect(broker_pid)} crashed: #{inspect(reason)}, consumer will restart")
 
     {:stop, :broker_crashed, state}
+  end
+
+  # A broker that reconnects stays alive and exits its consumers to make them subscribe again.
+  # Trapping exits turns that signal into a message, so it has to be answered: the untrapped
+  # worker used to die of it, and one that stays up is subscribed to nothing.
+  @impl true
+  def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
+    Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, consumer will restart")
+
+    {:stop, :broker_exited, state}
   end
 
   @impl true
