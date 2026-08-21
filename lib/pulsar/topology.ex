@@ -13,8 +13,6 @@ defmodule Pulsar.Topology do
   alias Pulsar.Topology.Group
   alias Pulsar.Topology.Root
 
-  require Logger
-
   @await_options_schema [
     client: [type: {:or, [:atom, :pid]}, default: :default],
     timeout: [type: :timeout, default: 5_000]
@@ -325,18 +323,20 @@ defmodule Pulsar.Topology do
 
   defp stop_worker(worker) do
     with group when is_pid(group) <- owning_supervisor(worker),
-         root when is_pid(root) <- owning_supervisor(group),
-         {:ok, controller} <- controller(root) do
-      Logger.info("Stopping worker for #{topic(root)}")
-      Controller.stop_worker(controller, worker)
+         root when is_pid(root) <- owning_supervisor(group) do
+      # A worker that asked to stop parks until the controller carries it out, so answering :ok
+      # without reaching one would leave it alive with nothing coming for it. Exiting instead
+      # restarts it, it asks again, and it escalates if it never gets through.
+      case controller(root) do
+        {:ok, controller} -> Controller.stop_worker(controller, worker)
+        {:error, :not_found} -> exit(:no_controller)
+      end
     else
-      _unavailable -> :ok
+      # Not in a topology, so there is nothing to take it out of and nothing waiting on this.
+      _detached -> :ok
     end
   end
 
-  # Only a supervisor is asked to terminate a child. Started with `start_link/1` from an
-  # ordinary process, the first ancestor is whoever called it — and asking a GenServer to
-  # `terminate_child` crashes it on an unmatched call while this reports success.
   @doc false
   def child_id(supervisor, pid) do
     supervisor

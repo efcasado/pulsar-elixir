@@ -84,12 +84,7 @@ defmodule Pulsar.Consumer.Callback do
               messages: [payload | callback_state.messages]
           }
 
-          # Stop processing if we've reached the limit
-          if new_state.count >= new_state.max_messages do
-            {:stop, new_state}
-          else
-            {:ok, new_state}
-          end
+          {:ok, new_state}
         end
 
 
@@ -135,7 +130,10 @@ defmodule Pulsar.Consumer.Callback do
   - `{:ok, new_state}` - Message processed successfully, acknowledge message automatically
   - `{:error, reason, new_state}` - Processing failed, track for redelivery
   - `{:noreply, new_state}` - Message processed, but don't automatically ACK/NACK. Use `Pulsar.Consumer.ack/2` or `Pulsar.Consumer.nack/2` for manual acknowledgment
-  - `{:stop, new_state}` - Message processed successfully, acknowledge, then stop consumer
+
+  Handling a message and shutting a consumer down are separate concerns: use
+  `Pulsar.Consumer.stop/2` from elsewhere, or `reached_end_of_topic/1` to finish when a topic has
+  nothing more to give.
 
   ### `terminate/2` (Optional)
 

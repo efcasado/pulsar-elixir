@@ -8,6 +8,7 @@ defmodule Pulsar.TopologyTest do
   alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
   alias Pulsar.Topology.Controller
+  alias Pulsar.Topology.Group
   alias Pulsar.Topology.Root
 
   setup [:telemetry_listen]
@@ -536,14 +537,30 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
     end
 
-    test "a broker that is away cannot spend a group's restart budget" do
-      budget = Client.restart_intensity(:no_such_client, :worker)
-      window_ms = Keyword.fetch!(budget, :max_seconds) * 1_000
+    test "a worker whose controller is gone exits rather than parking forever" do
+      {root, _registry} = start_topology(0)
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+
+      {controller_id, _pid, _type, _modules} =
+        Enum.find(Supervisor.which_children(root), &match?({{Controller, _, _, _}, _, _, _}, &1))
+
+      :ok = Supervisor.terminate_child(root, controller_id)
+
+      assert catch_exit(Topology.stop(worker)) == :no_controller
+    end
+
+    test "a broker that is away cannot spend a group's restart budget, whatever its worker count" do
+      window_ms = Keyword.fetch!(Client.restart_intensity(:no_such_client, :worker), :max_seconds) * 1_000
 
       {paced_ms, {:error, :no_broker_available}} =
         :timer.tc(fn -> Backoff.run(fn -> {:error, :no_broker_available} end) end, :millisecond)
 
-      assert paced_ms * Keyword.fetch!(budget, :max_restarts) > window_ms
+      for count <- [1, 10] do
+        budget = Group.restart_intensity(:no_such_client, count)
+
+        assert count * div(window_ms, paced_ms) < Keyword.fetch!(budget, :max_restarts)
+      end
     end
 
     test "a resource that cannot stay up escalates to its client instead of disappearing" do

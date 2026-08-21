@@ -155,7 +155,7 @@ routed across its partitions honouring the key carried over from the origin.
 A dead letter topic that cannot be published to — it does not exist and auto-creation is off, the broker is
 unreachable, the payload exceeds its maximum message size — takes the consumer worker down:
 
-- Nothing is acknowledged, so the entry is still owed and the subscription keeps it
+- The refused message is not acknowledged, so the subscription still owes it
 - The worker crashes, and its group restarts it and retries the whole delivery
 - A dead letter topic that stays unavailable exhausts the restart budget, and the failure reaches whatever
   supervises the client
@@ -163,7 +163,14 @@ unreachable, the payload exceeds its maximum message size — takes the consumer
 This is deliberate. Dropping the message or acknowledging it without it arriving anywhere both lose data, and
 parking it quietly means a subscription that never drains and a problem nobody sees. Failing outright gets
 past the transient case — a dead letter producer that is still starting up — on the retry, and surfaces the
-persistent one instead of hiding it. `:resource_restart_intensity` on `Pulsar.Client` decides how quickly.
+persistent one instead of hiding it. `:worker_restart_intensity` is the first gate and
+`:resource_restart_intensity` the second, both on `Pulsar.Client`.
+
+What is redelivered depends on how the messages arrived. A batched entry is acknowledged only once all of
+it lands, so the messages that *did* reach the dead letter topic are published again on every retry. Messages
+that arrived on their own are acknowledged as each one is diverted, so only the refused one and those after
+it come back. Either way dead lettering is at-least-once and a consumer of the dead letter topic has to
+tolerate duplicates; the restart budgets bound how many.
 
 ## Example: Complete Dead Letter Flow
 

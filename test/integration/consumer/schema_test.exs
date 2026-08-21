@@ -32,7 +32,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
-  test "a consumer whose schema the topic will not accept stops instead of becoming ready" do
+  test "a consumer whose schema the topic will not accept gives up instead of becoming ready" do
     topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
 
     start_producer(topic, schema: [type: :String])

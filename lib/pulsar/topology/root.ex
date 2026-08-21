@@ -209,6 +209,9 @@ defmodule Pulsar.Topology.Root do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
       {:error, {:already_started, _pid}} -> :ok
+      # A spec that is present but not running is a partition that was stopped on purpose. It is
+      # accounted for, exactly as an :undefined child is, so reconciliation leaves it alone.
+      {:error, :already_present} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end

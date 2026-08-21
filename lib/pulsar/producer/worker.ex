@@ -11,20 +11,9 @@ defmodule Pulsar.Producer.Worker do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
-  alias Pulsar.Topology
   alias Pulsar.Topology.Resolver
 
   require Logger
-
-  @terminal_errors [
-    :AuthenticationError,
-    :AuthorizationError,
-    :IncompatibleSchema,
-    :InvalidTopicName,
-    :NotAllowedError,
-    :TopicTerminatedError,
-    :UnsupportedVersionError
-  ]
 
   # Checksum and size prefixes around the metadata, the CommandSend framing, and slack for the
   # chunk counters once their real values are known.
@@ -188,19 +177,13 @@ defmodule Pulsar.Producer.Worker do
       {:ok, new_state} ->
         {:noreply, new_state, {:continue, :monitor_broker}}
 
-      {:error, {:ProducerFenced, _msg}} ->
+      {:error, {:ProducerFenced, _msg} = reason} ->
         EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
         Logger.error("Producer #{state.producer_name} for #{state.topic} was fenced")
-        Topology.stop(self())
-        {:noreply, state}
-
-      # Errors a second attempt cannot change; see Pulsar.Consumer.Worker.
-      {:error, {code, _msg} = reason} when code in @terminal_errors ->
-        Logger.error("Producer for #{state.topic} cannot register: #{inspect(reason)}")
-        Topology.stop(self())
-        {:noreply, state}
+        {:stop, reason, state}
 
       {:error, reason} ->
+        Logger.error("Producer for #{state.topic} cannot register: #{inspect(reason)}")
         {:stop, reason, state}
     end
   end
