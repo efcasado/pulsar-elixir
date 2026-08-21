@@ -60,7 +60,7 @@ defmodule Pulsar.Topology.Root do
     if terminated?(root, group) and no_groups_left?(root), do: Topology.stop(root), else: :ok
   end
 
-  defp no_groups_left?(root), do: Enum.all?(Topology.groups(root), fn {_index, pid} -> not is_pid(pid) end)
+  defp no_groups_left?(root), do: Enum.all?(Topology.groups(root), &match?({_index, :undefined}, &1))
 
   defp terminated?(supervisor, child) do
     case Topology.child_id(supervisor, child) do
@@ -69,10 +69,12 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
+  # :restarting is a child on its way back, so it still counts as present; only :undefined is a
+  # slot that was stopped and is staying that way.
   defp empty?(supervisor) do
     supervisor
     |> Topology.supervisor_children()
-    |> Enum.all?(fn {_id, pid, _type, _modules} -> not is_pid(pid) end)
+    |> Enum.all?(fn {_id, pid, _type, _modules} -> pid == :undefined end)
   end
 
   @impl true
