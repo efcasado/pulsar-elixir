@@ -28,6 +28,7 @@ defmodule Pulsar.Producer do
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topology
+  alias Pulsar.Topology.Root
 
   @typedoc """
   What a chunked send is answered with, since its message spans several broker messages.
@@ -46,7 +47,7 @@ defmodule Pulsar.Producer do
   @type send_result :: MessageIdData.t() | chunked_message_id() | :deduplicated
 
   @doc false
-  def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
+  def child_spec(opts), do: Root.child_spec(__MODULE__, id(opts), opts)
 
   @doc """
   Starts a producer, linked to the calling process.
@@ -71,7 +72,7 @@ defmodule Pulsar.Producer do
     topic = Keyword.fetch!(opts, :topic)
     opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
 
-    Topology.start_link(Worker, registry, :producers, opts)
+    Root.start_link(Worker, registry, :producers, opts)
   end
 
   @doc """
@@ -259,14 +260,16 @@ defmodule Pulsar.Producer do
   A root started as a static child is `:permanent`, but stopping it goes through its supervisor
   rather than exiting it, so it stays stopped; its child spec remains in that tree as
   `:undefined` until the supervisor restarts.
+
+  `:client` selects which client to resolve a name through, and is not needed for a pid: the
+  supervisor that owns a root is read from the root itself.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
-  def stop(producer, opts) when is_pid(producer) do
+  def stop(producer, _opts) when is_pid(producer) do
     if Topology.resource?(producer, :producers) do
-      client = Keyword.get(opts, :client, :default)
-      Topology.remove(producer, Client.resource_supervisor(:producers, client))
+      Topology.stop(producer)
     else
       {:error, :not_found}
     end

@@ -190,12 +190,14 @@ defmodule Pulsar.Producer.Worker do
 
       {:error, {:ProducerFenced, _msg}} ->
         EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
-        Topology.retire(self(), :producer_fenced)
+        Logger.error("Producer #{state.producer_name} for #{state.topic} was fenced")
+        Topology.stop(self())
         {:noreply, state}
 
       # Errors a second attempt cannot change; see Pulsar.Consumer.Worker.
       {:error, {code, _msg} = reason} when code in @terminal_errors ->
-        Topology.retire(self(), reason)
+        Logger.error("Producer for #{state.topic} cannot register: #{inspect(reason)}")
+        Topology.stop(self())
         {:noreply, state}
 
       {:error, reason} ->

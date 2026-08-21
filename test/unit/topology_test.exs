@@ -3,9 +3,12 @@ defmodule Pulsar.TopologyTest do
 
   import TelemetryTest
 
+  alias Pulsar.Backoff
+  alias Pulsar.Client
   alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
-  alias Pulsar.Topology.Discovery
+  alias Pulsar.Topology.Controller
+  alias Pulsar.Topology.Root
 
   setup [:telemetry_listen]
 
@@ -21,12 +24,22 @@ defmodule Pulsar.TopologyTest do
 
     @impl true
     def handle_call(:spawn_child, _from, state) do
-      {:ok, child} = Agent.start_link(fn -> :resource end)
-      {:reply, child, state}
+      opts = [
+        topic: "persistent://public/default/t",
+        name: "owner-root-#{System.unique_integer([:positive])}",
+        client: :test,
+        consumer_count: 1,
+        partition_discovery_interval_ms: false
+      ]
+
+      {:ok, root} =
+        Root.start_link(StubWorker, nil, :consumers, opts, resolver: fn _topic, _opts -> Process.sleep(:infinity) end)
+
+      {:reply, root, state}
     end
   end
 
-  describe "remove/1 when the first ancestor is not a supervisor" do
+  describe "stop/1 when the first ancestor is not a supervisor" do
     # Started with start_link/1 from an ordinary process, $ancestors heads with the caller.
     # Asking it to terminate_child crashes it on an unmatched call.
     test "stops the resource without disturbing its caller" do
@@ -34,7 +47,7 @@ defmodule Pulsar.TopologyTest do
       resource = Owner.spawn_child(owner)
       ref = Process.monitor(owner)
 
-      assert Topology.remove(resource) == :ok
+      assert Topology.stop(resource) == :ok
       refute Process.alive?(resource)
 
       refute_receive {:DOWN, ^ref, :process, _pid, _reason}, 200
@@ -42,18 +55,13 @@ defmodule Pulsar.TopologyTest do
     end
   end
 
-  describe "remove/2 with an expected owner" do
-    test "removes the resource directly and falls back when the expected owner is wrong" do
+  describe "stop/1" do
+    test "removes the resource from the supervisor that owns it" do
       owner = start_dynamic_supervisor()
-      other = start_dynamic_supervisor()
+      {:ok, resource} = DynamicSupervisor.start_child(owner, topology_spec(StubWorker))
 
-      {:ok, directly_removed} = DynamicSupervisor.start_child(owner, {Agent, fn -> :resource end})
-      assert Topology.remove(directly_removed, owner) == :ok
-      refute Process.alive?(directly_removed)
-
-      {:ok, removed_via_fallback} = DynamicSupervisor.start_child(owner, {Agent, fn -> :resource end})
-      assert Topology.remove(removed_via_fallback, other) == :ok
-      refute Process.alive?(removed_via_fallback)
+      assert Topology.stop(resource) == :ok
+      refute Process.alive?(resource)
       assert DynamicSupervisor.which_children(owner) == []
     end
   end
@@ -156,8 +164,7 @@ defmodule Pulsar.TopologyTest do
       start_supervised!(%{
         id: {:root, System.unique_integer([:positive])},
         start:
-          {Topology, :start_link,
-           [worker, registry, kind, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
+          {Root, :start_link, [worker, registry, kind, topology_opts, Keyword.put(controller_opts, :resolver, resolver)]},
         type: :supervisor
       })
 
@@ -353,7 +360,7 @@ defmodule Pulsar.TopologyTest do
       config = %{worker: PartitionFourFails, kind: :consumers, worker_count: 1, opts: opts}
 
       assert {:error, {:partition_start_failed, 4, _reason}} =
-               Topology.reconcile(root, 6, config)
+               Root.reconcile(root, 6, config)
 
       assert root
              |> Topology.groups()
@@ -415,7 +422,7 @@ defmodule Pulsar.TopologyTest do
 
       [{_id, worker, :worker, _modules}] = Supervisor.which_children(stopped)
       ref = Process.monitor(stopped)
-      :ok = Topology.retire(worker)
+      :ok = Topology.stop(worker)
       assert_receive {:DOWN, ^ref, :process, ^stopped, _reason}
 
       discovery = discovery(root)
@@ -435,67 +442,14 @@ defmodule Pulsar.TopologyTest do
 
       for {_index, group} <- Topology.groups(root) do
         [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-        :ok = Topology.retire(worker)
+        :ok = Topology.stop(worker)
       end
 
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
     end
   end
 
-  describe "retire/1" do
-    test "retires a worker and leaves its group running while a sibling remains" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, consumer_count: 2)
-      :ok = Topology.await_ready(root, 1_000)
-
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules} | _rest] = Supervisor.which_children(group)
-
-      ref = Process.monitor(worker)
-      assert Topology.retire(worker) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 1_000
-
-      assert Process.alive?(group)
-      assert Process.alive?(root)
-
-      assert Enum.count(Supervisor.which_children(group), &match?({_id, :undefined, _type, _modules}, &1)) == 1
-    end
-
-    test "retires the group once its last worker has gone, leaving its siblings alone" do
-      {root, _registry} = start_topology(2)
-
-      groups = Map.new(Topology.groups(root))
-      retiring = Map.fetch!(groups, 0)
-      surviving = Map.fetch!(groups, 1)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(retiring)
-
-      ref = Process.monitor(retiring)
-      assert Topology.retire(worker) == :ok
-      assert_receive {:DOWN, ^ref, :process, ^retiring, _reason}, 1_000
-
-      assert Process.alive?(root)
-      assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
-    end
-
-    test "leaves nothing behind once the last group has been retired" do
-      client = start_dynamic_supervisor()
-      {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(StubWorker))
-
-      :ok = Topology.await_ready(root, 1_000)
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-      discovery = discovery(root)
-
-      refs = Map.new([root, group, discovery], &{Process.monitor(&1), &1})
-
-      assert Topology.retire(worker) == :ok
-
-      for {ref, pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^pid, _reason}, 1_000)
-
-      assert DynamicSupervisor.which_children(client) == []
-    end
-  end
-
-  describe "restarts and propagation" do
+  describe "propagation" do
     test "restarts a worker that crashes, leaving its group and root alone" do
       {root, _registry} = start_topology(0)
 
@@ -517,15 +471,55 @@ defmodule Pulsar.TopologyTest do
       assert Topology.groups(root) == [{0, group}]
     end
 
-    test "a resource that cannot stay up escalates to its client instead of disappearing" do
-      Process.flag(:trap_exit, true)
-      {:ok, client} = DynamicSupervisor.start_link(strategy: :one_for_one, max_restarts: 1, max_seconds: 5)
-      ref = Process.monitor(client)
+    test "stops a worker and leaves its group running while a sibling remains" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, consumer_count: 2)
+      :ok = Topology.await_ready(root, 1_000)
 
-      {:ok, _root} = DynamicSupervisor.start_child(client, topology_spec(CrashingWorker))
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules} | _rest] = Supervisor.which_children(group)
 
-      # Escalation must not depend on how fast the failure comes back, hence the round trip above.
-      assert_receive {:DOWN, ^ref, :process, ^client, :shutdown}, 30_000
+      ref = Process.monitor(worker)
+      assert Topology.stop(worker) == :ok
+      assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 1_000
+
+      assert Process.alive?(group)
+      assert Process.alive?(root)
+
+      assert Enum.count(Supervisor.which_children(group), &match?({_id, :undefined, _type, _modules}, &1)) == 1
+    end
+
+    test "stops the group once its last worker has gone, leaving its siblings alone" do
+      {root, _registry} = start_topology(2)
+
+      groups = Map.new(Topology.groups(root))
+      stopping = Map.fetch!(groups, 0)
+      surviving = Map.fetch!(groups, 1)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(stopping)
+
+      ref = Process.monitor(stopping)
+      assert Topology.stop(worker) == :ok
+      assert_receive {:DOWN, ^ref, :process, ^stopping, _reason}, 1_000
+
+      assert Process.alive?(root)
+      assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
+    end
+
+    test "leaves nothing behind once the last group has gone" do
+      client = start_dynamic_supervisor()
+      {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(StubWorker))
+
+      :ok = Topology.await_ready(root, 1_000)
+      [{0, group}] = Topology.groups(root)
+      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      discovery = discovery(root)
+
+      refs = Map.new([root, group, discovery], &{Process.monitor(&1), &1})
+
+      assert Topology.stop(worker) == :ok
+
+      for {ref, pid} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^pid, _reason}, 1_000)
+
+      assert DynamicSupervisor.which_children(client) == []
     end
 
     test "stops a producer topology once its last group has stopped" do
@@ -536,10 +530,31 @@ defmodule Pulsar.TopologyTest do
 
       for {_index, group} <- Topology.groups(root) do
         [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
-        :ok = Topology.retire(worker)
+        :ok = Topology.stop(worker)
       end
 
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
+    end
+
+    test "a broker that is away cannot spend a group's restart budget" do
+      budget = Client.restart_intensity(:no_such_client, :worker)
+      window_ms = Keyword.fetch!(budget, :max_seconds) * 1_000
+
+      {paced_ms, {:error, :no_broker_available}} =
+        :timer.tc(fn -> Backoff.run(fn -> {:error, :no_broker_available} end) end, :millisecond)
+
+      assert paced_ms * Keyword.fetch!(budget, :max_restarts) > window_ms
+    end
+
+    test "a resource that cannot stay up escalates to its client instead of disappearing" do
+      Process.flag(:trap_exit, true)
+      {:ok, client} = DynamicSupervisor.start_link(strategy: :one_for_one, max_restarts: 1, max_seconds: 5)
+      ref = Process.monitor(client)
+
+      {:ok, _root} = DynamicSupervisor.start_child(client, topology_spec(CrashingWorker))
+
+      # Escalation must not depend on how fast the failure comes back, hence the round trip above.
+      assert_receive {:DOWN, ^ref, :process, ^client, :shutdown}, 30_000
     end
   end
 
@@ -610,7 +625,7 @@ defmodule Pulsar.TopologyTest do
   end
 
   defp discovery(root) do
-    [pid] = for {{Discovery, _kind, _topic, _scheme}, pid, _type, _modules} <- Supervisor.which_children(root), do: pid
+    [pid] = for {{Controller, _kind, _topic, _scheme}, pid, _type, _modules} <- Supervisor.which_children(root), do: pid
     pid
   end
 
@@ -623,7 +638,7 @@ defmodule Pulsar.TopologyTest do
 
     %{
       id: {:root, System.unique_integer([:positive])},
-      start: {Topology, :start_link, [worker, registry, :consumers, opts, controller_opts]},
+      start: {Root, :start_link, [worker, registry, :consumers, opts, controller_opts]},
       restart: :permanent,
       type: :supervisor
     }
@@ -665,7 +680,7 @@ defmodule Pulsar.TopologyTest do
     end
 
     test "leaves out a child that is not one of the topology's workers" do
-      root = start_supervisor([worker_spec("w-1"), worker_spec(Discovery, Discovery)])
+      root = start_supervisor([worker_spec("w-1"), worker_spec(Controller, Controller)])
 
       assert length(Topology.workers(root)) == 1
     end

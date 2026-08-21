@@ -7,6 +7,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Proto
   alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
+  alias Pulsar.Topology.Root
 
   @topic "persistent://public/default/orders"
   @subscription "billing"
@@ -153,13 +154,13 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert Topology.resource?(restarted, :producers)
     end
 
-    test "a retired dead letter producer is not started over" do
+    test "a dead letter producer that was stopped is not started over" do
       root = root()
       dlq = dead_letter_producer(root)
       ref = Process.monitor(dlq)
 
       # A static child, so it is reached by id; stopping a :permanent child would start it over.
-      :ok = Topology.remove(dlq)
+      :ok = Topology.stop(dlq)
       assert_receive {:DOWN, ^ref, :process, ^dlq, _reason}
 
       assert dead_letter_producer(root) == nil
@@ -196,7 +197,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       end
     end
 
-    # Discovery never resolves, so no consumer worker is started and none of this needs a broker.
+    # The controller never resolves, so no consumer worker is started and none of this needs a broker.
     defp root(overrides \\ []) do
       registry = :"consumer-topology-#{System.unique_integer([:positive])}"
       start_supervised!({Registry, keys: :unique, name: registry})
@@ -206,7 +207,7 @@ defmodule Pulsar.Consumer.DeadLetterTest do
         type: :supervisor,
         restart: :temporary,
         start:
-          {Topology, :start_link,
+          {Root, :start_link,
            [
              ConsumerWorker,
              registry,

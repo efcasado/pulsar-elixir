@@ -34,7 +34,7 @@ defmodule Pulsar.Topology.Group do
         }
       end
 
-    # A worker that is finished is retired rather than exiting, so every exit reaching here is a
+    # A worker that is finished is stopped rather than exiting, so every exit reaching here is a
     # failure.
     Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker))
   end

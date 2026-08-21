@@ -1,15 +1,16 @@
-defmodule Pulsar.Topology.Discovery do
+defmodule Pulsar.Topology.Controller do
   @moduledoc false
 
-  # Initializes a topology from broker metadata and polls for partition growth when enabled.
-  # Resolution and retry happen in this process so the stable Pulsar.Topology root can start
-  # even while no broker is available.
+  # The one process that changes a resource's tree: it builds it from broker metadata, polls for
+  # partition growth when enabled, and carries out stopping, so the two cannot interleave.
+  # Resolution and retry happen here so the stable Pulsar.Topology root can start even while no
+  # broker is available.
 
   use GenServer
 
   alias Pulsar.Backoff
-  alias Pulsar.Topology
   alias Pulsar.Topology.Resolver
+  alias Pulsar.Topology.Root
 
   require Logger
 
@@ -39,15 +40,15 @@ defmodule Pulsar.Topology.Discovery do
   def handle_continue(:discover, state), do: discover(state)
 
   @doc false
-  @spec retire(pid(), pid()) :: :ok
-  def retire(controller, worker), do: GenServer.cast(controller, {:retire, worker})
+  @spec stop_worker(pid(), pid()) :: :ok
+  def stop_worker(controller, worker), do: GenServer.cast(controller, {:stop_worker, worker})
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
 
   @impl true
-  def handle_cast({:retire, worker}, state) do
-    Topology.perform_retirement(state.topology, worker)
+  def handle_cast({:stop_worker, worker}, state) do
+    Root.stop_worker(state.topology, worker)
     {:noreply, state}
   end
 
@@ -130,7 +131,7 @@ defmodule Pulsar.Topology.Discovery do
   end
 
   defp reconcile_topology(state, desired) do
-    case Topology.reconcile(state.topology, desired, state.config) do
+    case Root.reconcile(state.topology, desired, state.config) do
       {:ok, outcome} ->
         {:ok, Map.put(outcome, :desired_partition_count, desired)}
 
