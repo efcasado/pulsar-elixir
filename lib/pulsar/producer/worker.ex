@@ -11,6 +11,7 @@ defmodule Pulsar.Producer.Worker do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
+  alias Pulsar.Topology
   alias Pulsar.Topology.Resolver
 
   require Logger
@@ -189,11 +190,13 @@ defmodule Pulsar.Producer.Worker do
 
       {:error, {:ProducerFenced, _msg}} ->
         EpochStore.delete(state.client, state.topic, state.producer_name, state.access_mode)
-        {:stop, {:shutdown, :producer_fenced}, state}
+        Topology.retire(self(), :producer_fenced)
+        {:noreply, state}
 
       # Errors a second attempt cannot change; see Pulsar.Consumer.Worker.
       {:error, {code, _msg} = reason} when code in @terminal_errors ->
-        {:stop, {:shutdown, reason}, state}
+        Topology.retire(self(), reason)
+        {:noreply, state}
 
       {:error, reason} ->
         {:stop, reason, state}

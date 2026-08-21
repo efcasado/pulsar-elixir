@@ -323,23 +323,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   describe "diverting a batch to the dead letter topic" do
-    test "does not acknowledge the entry when one message of it fails to divert" do
+    test "acknowledges nothing when the dead letter topic refuses a message of the entry" do
       state = diverting_state(refuse: ["b"])
 
-      state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
+      assert_raise MatchError, fn -> deliver(state, ["a", "b", "c"], redelivery_count: 1) end
 
-      # "a" and "c" reached the dead letter topic, but "b" did not, so the entry is still owed.
-      assert diverted_payloads() == ["a", "c"]
-      assert [] == acks()
-
-      # It is asked for again, so its tally goes: the entry comes back whole and has to answer
-      # for "a" and "c" a second time before it can be acknowledged.
-      assert {[%{batch_index: -1}], _acks} = Ack.take_nacked(state.acks)
-      assert state.acks.acked == %{}
+      assert acks() == []
     end
 
     test "acknowledges the entry once every message of it has been diverted" do
-      state = diverting_state(refuse: [])
+      state = diverting_state()
 
       state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
 
@@ -361,22 +354,12 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
 
     test "counts a delivery diverted in full, which reaches no callback at all" do
-      state = %{diverting_state(refuse: []) | flow_outstanding_permits: 100}
+      state = %{diverting_state() | flow_outstanding_permits: 100}
 
       deliver(state, ["a", "b", "c"], redelivery_count: 1)
 
       assert delivered_payloads() == []
       assert diverted_payloads() == ["a", "b", "c"]
-      assert permits_reported() == [%{consumed: 3, outstanding: 97}]
-    end
-
-    test "counts a delivery in full even when part of it fails to divert and is nacked" do
-      state = %{diverting_state(refuse: ["b"]) | flow_outstanding_permits: 100}
-
-      deliver(state, ["a", "b", "c"], redelivery_count: 1)
-
-      assert delivered_payloads() == []
-      assert diverted_payloads() == ["a", "c"]
       assert permits_reported() == [%{consumed: 3, outstanding: 97}]
     end
 
@@ -440,10 +423,10 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   # A consumer whose dead letter producer is the stub above, past its redelivery limit.
   # DeadLetter.producer/1 looks for a `{:dead_letter, topic}` child reported as a supervisor.
-  defp diverting_state(opts) do
+  defp diverting_state(opts \\ []) do
     child = %{
       id: {:dead_letter, "dlq"},
-      start: {DeadLetterProducer, :start_link, [{Keyword.fetch!(opts, :refuse), self()}]},
+      start: {DeadLetterProducer, :start_link, [{Keyword.get(opts, :refuse, []), self()}]},
       type: :supervisor
     }
 

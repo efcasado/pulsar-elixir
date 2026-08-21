@@ -32,7 +32,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
-  test "a consumer whose schema the topic will not accept never becomes ready" do
+  test "a consumer whose schema the topic will not accept stops instead of becoming ready" do
     topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
 
     start_producer(topic, schema: [type: :String])
@@ -46,20 +46,11 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         schema: [type: :Int32]
       )
 
-    :ok = Topology.await_ready(consumer_group, 1_000)
-
-    # The topology comes up, but its worker cannot subscribe under a schema the topic refuses,
-    # so it gives up rather than ever becoming ready.
-    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(consumer_group) == []
-
-    assert Process.alive?(consumer_group)
-    assert consumer_group in Pulsar.Client.consumers(@client)
-    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(consumer_group, 1)
-
     ref = Process.monitor(consumer_group)
-    assert :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^consumer_group, _reason}
+
+    assert_receive {:DOWN, ^ref, :process, ^consumer_group, :shutdown}, 5_000
+
+    assert Pulsar.Consumer.await_ready(consumer_group, timeout: 1_000) == {:error, :not_found}
     refute consumer_group in Pulsar.Client.consumers(@client)
   end
 

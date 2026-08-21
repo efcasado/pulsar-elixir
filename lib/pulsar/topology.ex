@@ -6,6 +6,7 @@ defmodule Pulsar.Topology do
   @behaviour Supervisor
 
   alias Pulsar.Backoff
+  alias Pulsar.Client
   alias Pulsar.Consumer.Worker, as: ConsumerWorker
   alias Pulsar.Hash
   alias Pulsar.Producer.Worker, as: ProducerWorker
@@ -15,23 +16,10 @@ defmodule Pulsar.Topology do
 
   require Logger
 
-  # A broker losing its connection exits every worker registered with it at once, so a group of
-  # N workers sees N restarts in the same instant. Correlated failures can likewise reach several
-  # partition groups or topology roots. OTP's default of 3 in 5 seconds would treat that fan-out
-  # as a crash loop, degrading groups until reconciliation, replacing stable root pids, or
-  # rebuilding a resource branch. This budget absorbs several full reconnects; bounded worker
-  # retries handle fast loops, and the supervisors above the resource branches retain OTP's
-  # default as the final escalation boundary.
-  @max_restarts 100
-  @max_seconds 60
   @await_options_schema [
     client: [type: {:or, [:atom, :pid]}, default: :default],
     timeout: [type: :timeout, default: 5_000]
   ]
-
-  @doc false
-  @spec restart_intensity() :: keyword()
-  def restart_intensity, do: [max_restarts: @max_restarts, max_seconds: @max_seconds]
 
   @doc false
   def child_spec(module, id, opts) do
@@ -84,7 +72,7 @@ defmodule Pulsar.Topology do
         await_resource(root, timeout, readiness)
 
       name when is_binary(name) or is_atom(name) ->
-        resolve = fn -> Pulsar.Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
+        resolve = fn -> Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
         await(resolve, timeout, &(&1 in [:not_found, :not_ready]), readiness)
     end
   end
@@ -337,6 +325,78 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
+  Retires `worker`, and whatever above it is left with nothing to do.
+
+  Retiring is how a worker that is finished, or that hit something retrying cannot fix, leaves
+  the tree. It is terminated by its parent rather than exiting, and no restart type undoes that,
+  so an exit is left to mean one thing only: something went wrong. The slot stays `:undefined`,
+  which is what tells discovery the partition is accounted for and must not be built again.
+
+  `Supervisor.terminate_child/2` returns only once the child is down, so the tree can be read
+  straight afterwards to decide whether to carry on up: a group whose workers have all gone is
+  retired from the root, and a root whose groups have all gone is removed from its client.
+  """
+  @spec retire(pid(), term()) :: :ok
+  def retire(worker, reason \\ :retired) when is_pid(worker) do
+    # Discovery does it: a child asking its own supervisor to terminate it is shut down mid-call,
+    # taking the rest of the cascade with it.
+    with group when is_pid(group) <- owning_supervisor(worker),
+         root when is_pid(root) <- owning_supervisor(group),
+         {:ok, controller} <- controller(root) do
+      Logger.info("Retiring worker for #{topic(root)}: #{inspect(reason)}")
+      Discovery.retire(controller, worker)
+    else
+      _unavailable -> :ok
+    end
+  end
+
+  @doc false
+  @spec perform_retirement(pid(), pid()) :: :ok
+  def perform_retirement(root, worker) do
+    with group when is_pid(group) <- owning_supervisor(worker),
+         true <- terminated?(group, worker) and empty?(group) do
+      retire_group(root, group)
+    else
+      _nothing_to_cascade -> :ok
+    end
+  end
+
+  # Removing the root takes Discovery, and so this call, with it. The removal still completes.
+  defp retire_group(root, group) do
+    if terminated?(root, group) and no_groups_left?(root), do: remove(root), else: :ok
+  end
+
+  defp no_groups_left?(root), do: Enum.all?(groups(root), fn {_index, pid} -> not is_pid(pid) end)
+
+  defp terminated?(supervisor, child) do
+    case child_id(supervisor, child) do
+      {:ok, id} -> terminate_by_id(supervisor, id) == :ok
+      :error -> false
+    end
+  end
+
+  defp child_id(supervisor, pid) do
+    supervisor
+    |> supervisor_children()
+    |> Enum.find_value(:error, fn
+      {id, ^pid, _type, _modules} -> {:ok, id}
+      _child -> false
+    end)
+  end
+
+  defp empty?(supervisor) do
+    supervisor
+    |> supervisor_children()
+    |> Enum.all?(fn {_id, pid, _type, _modules} -> not is_pid(pid) end)
+  end
+
+  defp terminate_by_id(supervisor, id) do
+    Supervisor.terminate_child(supervisor, id)
+  catch
+    :exit, _reason -> {:error, :not_found}
+  end
+
+  @doc """
   Removes `root` from the supervisor that owns it.
 
   Used without a known owner for resources started directly with `start_link/1` and as the
@@ -344,16 +404,31 @@ defmodule Pulsar.Topology do
   """
   @spec remove(pid()) :: :ok
   def remove(root) do
-    case terminate_child(owning_supervisor(root), root) do
+    supervisor = owning_supervisor(root)
+
+    case terminate_by_pid(supervisor, root) do
       :ok -> :ok
-      {:error, :not_found} -> stop_directly(root)
+      {:error, :not_found} -> remove_by_id(supervisor, root)
+    end
+  end
+
+  # A plain supervisor finds its children by id, not by pid, and merely stopping a :permanent
+  # child would have it started over.
+  defp remove_by_id(nil, root), do: stop_directly(root)
+
+  defp remove_by_id(supervisor, root) do
+    with {:ok, id} <- child_id(supervisor, root),
+         :ok <- terminate_by_id(supervisor, id) do
+      :ok
+    else
+      _absent -> stop_directly(root)
     end
   end
 
   @doc false
   @spec remove(pid(), GenServer.server()) :: :ok
   def remove(root, supervisor) do
-    case terminate_child(supervisor, root) do
+    case terminate_by_pid(supervisor, root) do
       :ok -> :ok
       {:error, :not_found} -> remove(root)
     end
@@ -380,9 +455,9 @@ defmodule Pulsar.Topology do
     match?({:supervisor, _module, _args}, :proc_lib.initial_call(pid))
   end
 
-  defp terminate_child(nil, _pid), do: {:error, :not_found}
+  defp terminate_by_pid(nil, _pid), do: {:error, :not_found}
 
-  defp terminate_child(supervisor, pid) do
+  defp terminate_by_pid(supervisor, pid) do
     DynamicSupervisor.terminate_child(supervisor, pid)
   catch
     :exit, _reason -> {:error, :not_found}
@@ -401,6 +476,7 @@ defmodule Pulsar.Topology do
     {config, companions} = attach_companions(config, self())
     %{worker: worker, opts: opts} = config
     topic = Keyword.fetch!(opts, :topic)
+    client = Keyword.fetch!(opts, :client)
 
     Logger.debug("Starting #{inspect(worker)} topology for topic #{topic}")
 
@@ -413,7 +489,7 @@ defmodule Pulsar.Topology do
     # resolve their own brokers asynchronously, so none of them delays this root coming up.
     children = companions ++ [discovery]
 
-    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity())
+    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
   end
 
   # Popped rather than read: `:companions` configures this root and is not part of what a worker
@@ -444,24 +520,17 @@ defmodule Pulsar.Topology do
 
   @doc false
   @spec reconcile(pid(), non_neg_integer(), map()) ::
-          {:ok,
-           %{
-             partition_count: non_neg_integer(),
-             added_groups: [non_neg_integer()],
-             revived_groups: [non_neg_integer()]
-           }}
+          {:ok, %{partition_count: non_neg_integer(), added_groups: [non_neg_integer()]}}
           | {:error, term()}
   def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
     children = Supervisor.which_children(root)
 
-    with {:ok, revived_groups} <- restart_stopped_groups(root, children),
-         {:ok, partition_count, added_groups} <- reconcile_children(root, children, desired, config) do
-      {:ok,
-       %{
-         partition_count: partition_count,
-         added_groups: added_groups,
-         revived_groups: revived_groups
-       }}
+    case reconcile_children(root, children, desired, config) do
+      {:ok, partition_count, added_groups} ->
+        {:ok, %{partition_count: partition_count, added_groups: added_groups}}
+
+      {:error, _reason} = error ->
+        error
     end
   catch
     :exit, reason -> {:error, reason}
@@ -477,31 +546,6 @@ defmodule Pulsar.Topology do
       end)
 
     reconcile_shape(topology_shape(topic?, partitions), root, desired, config)
-  end
-
-  defp restart_stopped_groups(root, children) do
-    children
-    |> Enum.reduce_while({:ok, []}, fn
-      {{:topic, :non_partitioned} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
-        restart_stopped_group(root, id, 0, revived)
-
-      {{:partition, index} = id, :undefined, :supervisor, _modules}, {:ok, revived} ->
-        restart_stopped_group(root, id, index, revived)
-
-      _child, {:ok, revived} ->
-        {:cont, {:ok, revived}}
-    end)
-    |> then(fn
-      {:ok, revived} -> {:ok, Enum.sort(revived)}
-      {:error, _reason} = error -> error
-    end)
-  end
-
-  defp restart_stopped_group(root, id, index, revived) do
-    case restart_group(root, id) do
-      :ok -> {:cont, {:ok, [index | revived]}}
-      {:error, reason} -> {:halt, {:error, {:group_restart_failed, id, reason}}}
-    end
   end
 
   defp topology_shape(true, partitions) do
@@ -561,16 +605,6 @@ defmodule Pulsar.Topology do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
       {:error, {:already_started, _pid}} -> :ok
-      {:error, :already_present} -> restart_group(root, Map.fetch!(child_spec, :id))
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp restart_group(root, id) do
-    case Supervisor.restart_child(root, id) do
-      {:ok, _pid} -> :ok
-      {:ok, _pid, _info} -> :ok
-      {:error, state} when state in [:running, :restarting] -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
@@ -605,7 +639,7 @@ defmodule Pulsar.Topology do
     %{
       id: id,
       start: {Group, :start_link, [worker, worker_count, opts]},
-      restart: :transient,
+      restart: :permanent,
       type: :supervisor
     }
   end

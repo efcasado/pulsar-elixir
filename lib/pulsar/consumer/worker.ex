@@ -13,6 +13,7 @@ defmodule Pulsar.Consumer.Worker do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Schema
+  alias Pulsar.Topology
   alias Pulsar.Topology.Resolver
 
   require Logger
@@ -219,12 +220,11 @@ defmodule Pulsar.Consumer.Worker do
       {:ok, broker_pid} ->
         {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
 
-      # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic
-      # stays malformed, and an :exclusive subscription already taken stays taken. Stopping
-      # with :shutdown leaves the worker down instead of restarting it into the same answer,
-      # and the group follows once its last worker has gone.
+      # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic stays
+      # malformed, and an :exclusive subscription already taken stays taken.
       {:error, {code, _message} = reason} when code in @terminal_errors ->
-        {:stop, {:shutdown, reason}, state}
+        Topology.retire(self(), reason)
+        {:noreply, state}
 
       {:error, reason} ->
         {:stop, reason, state}
@@ -465,7 +465,8 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, reason, new_callback_state} ->
-        {:stop, reason, %{state | callback_state: new_callback_state}}
+        Topology.retire(self(), reason)
+        {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
 
@@ -478,7 +479,8 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, reason, new_callback_state} ->
-        {:stop, reason, %{state | callback_state: new_callback_state}}
+        Topology.retire(self(), reason)
+        {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
 
@@ -507,48 +509,23 @@ defmodule Pulsar.Consumer.Worker do
         "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
-    # Resolved once for the delivery: this is a call into the topology root, which is also the
-    # supervisor discovery adds partitions to.
-    producer = DeadLetter.producer(state.dead_letter_root)
+    # Resolved once for the delivery: this is a call into the topology root.
+    {:ok, producer} = DeadLetter.producer(state.dead_letter_root)
 
-    {state, diverted, nacked_ids, reason} =
-      Enum.reduce(messages, {state, 0, [], nil}, fn %Pulsar.Message{} = message,
-                                                    {acc_state, diverted, nacked_acc, reason} ->
-        message_ids_list = List.wrap(message.message_id)
-
-        case publish_to_dead_letter(producer, message, acc_state.topic) do
-          :ok ->
-            acked_state = ack_message_ids(acc_state, message_ids_list, validation_error(message))
-            {acked_state, diverted + 1, nacked_acc, reason}
-
-          {:error, dlq_reason} ->
-            Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            {acc_state, diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
-        end
+    state =
+      Enum.reduce(messages, state, fn %Pulsar.Message{} = message, acc_state ->
+        :ok = DeadLetter.divert(producer, message, acc_state.topic)
+        ack_message_ids(acc_state, List.wrap(message.message_id), validation_error(message))
       end)
 
-    metadata = dead_letter_metadata(state, redelivery_count)
+    :telemetry.execute(
+      [:pulsar, :consumer, :dead_letter, :diverted],
+      %{count: length(messages)},
+      dead_letter_metadata(state, redelivery_count)
+    )
 
-    if diverted > 0 do
-      :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
-    end
-
-    if nacked_ids != [] do
-      :telemetry.execute(
-        [:pulsar, :consumer, :dead_letter, :failed],
-        %{count: length(nacked_ids)},
-        Map.put(metadata, :reason, reason)
-      )
-    end
-
-    track_nacked(state, nacked_ids)
+    state
   end
-
-  defp publish_to_dead_letter({:ok, producer}, message, origin_topic) do
-    DeadLetter.divert(producer, message, origin_topic)
-  end
-
-  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin_topic), do: error
 
   defp dead_letter_metadata(state, redelivery_count) do
     state
@@ -740,10 +717,12 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, reason, reply, new_callback_state} ->
-        {:stop, reason, reply, %{state | callback_state: new_callback_state}}
+        Topology.retire(self(), reason)
+        {:reply, reply, %{state | callback_state: new_callback_state}}
 
       {:stop, reason, new_callback_state} ->
-        {:stop, reason, %{state | callback_state: new_callback_state}}
+        Topology.retire(self(), reason)
+        {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
 
@@ -757,7 +736,8 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
       {:stop, reason, new_callback_state} ->
-        {:stop, reason, %{state | callback_state: new_callback_state}}
+        Topology.retire(self(), reason)
+        {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
 

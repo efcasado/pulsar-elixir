@@ -1,6 +1,7 @@
 defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   use Pulsar.Test.Case, async: true
 
+  alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.DummyConsumer
 
@@ -277,50 +278,51 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
                    5_000
   end
 
-  @tag telemetry_listen: [[:pulsar, :consumer, :dead_letter, :failed]]
-  test "reports a dead letter topic it cannot publish to" do
-    topic = "#{@topic}-telemetry-failed"
-    subscription = "telemetry-failed"
-    dead_letter_topic = "#{topic}-#{subscription}-DLQ"
+  test "crashes without acknowledging the message when the dead letter producer has gone" do
+    topic = "persistent://public/default/dlq-producer-gone-topic"
+    subscription = "dlq-producer-gone"
+    payload = "outlives-the-consumer"
 
-    {:ok, group} =
+    {:ok, consumer_group} =
       Pulsar.Consumer.start(topic, subscription, DummyConsumer,
-        init_args: [fail_all: true, forward_to: self()],
         client: @client,
-        initial_position: :earliest,
         redelivery_interval: 100,
-        dead_letter_policy: [max_redelivery: 1]
+        dead_letter_policy: [max_redelivery: 1],
+        init_args: [fail_all: true, forward_to: self()]
       )
 
-    :ok = Pulsar.Consumer.await_ready(group)
-    [consumer] = Topology.workers(group)
+    :ok = Pulsar.Consumer.await_ready(consumer_group)
+    [consumer] = Topology.workers(consumer_group)
 
-    # A root with no dead letter child, so the producer cannot be resolved and diverting fails
-    # the way it does against a dead letter topic that is unavailable. Pointing the worker at
-    # nil instead would stop it diverting at all, which is a different path.
-    {:ok, empty_root} = Supervisor.start_link([], strategy: :one_for_one)
-    :sys.replace_state(consumer, &%{&1 | dead_letter_root: empty_root})
+    {:ok, dead_letter_root} = DeadLetter.producer(consumer_group)
+    dead_letter_ref = Process.monitor(dead_letter_root)
 
-    command = %Proto.CommandMessage{
-      consumer_id: 1,
-      message_id: %Proto.MessageIdData{ledgerId: 1, entryId: 1},
-      redelivery_count: 5
-    }
+    # Removed rather than stopped: the companion is :permanent, so an exit would be started over.
+    :ok = Topology.remove(dead_letter_root)
+    assert_receive {:DOWN, ^dead_letter_ref, :process, ^dead_letter_root, _reason}
 
-    send(consumer, {:broker_message, {:invalid, command, "corrupt", :checksum_mismatch}})
+    assert DeadLetter.producer(consumer_group) == {:error, :no_dead_letter_producer}
 
-    assert_receive {:telemetry_event,
-                    %{
-                      event: [:pulsar, :consumer, :dead_letter, :failed],
-                      measurements: %{count: 1},
-                      # Named even though the producer could not be resolved, which is when
-                      # an alert on this event most needs to say which topic is affected.
-                      metadata: %{
-                        topic: ^topic,
-                        dead_letter_topic: ^dead_letter_topic,
-                        reason: :no_dead_letter_producer
-                      }
-                    }},
-                   5_000
+    consumer_ref = Process.monitor(consumer)
+
+    Utils.seed_topic(topic, [payload], client: @client)
+
+    assert_receive {:DOWN, ^consumer_ref, :process, ^consumer,
+                    {{:badmatch, {:error, :no_dead_letter_producer}}, _stacktrace}},
+                   15_000
+
+    # It is crashing on a loop by design now, so take it down before reading the subscription.
+    :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
+
+    {:ok, replacement} =
+      Pulsar.Consumer.start(topic, subscription, DummyConsumer,
+        client: @client,
+        init_args: [forward_to: self()]
+      )
+
+    :ok = Pulsar.Consumer.await_ready(replacement)
+    [worker] = Topology.workers(replacement)
+
+    assert_receive {:consumer, ^worker, %Pulsar.Message{payload: ^payload}}, 15_000
   end
 end

@@ -52,16 +52,7 @@ defmodule Pulsar.Integration.AccessModesTest do
                client: @client
              )
 
-    :ok = Topology.await_ready(group_pid_2, 1_000)
-
-    # Fenced by the producer already holding the topic, so it gives up rather than ever
-    # becoming ready.
-    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(group_pid_2) == []
-
-    assert Process.alive?(group_pid_2)
-    assert group_pid_2 in Pulsar.Client.producers(@client)
-    assert {:error, :no_producers_available} = Pulsar.Producer.send(group_pid_2, "Rejected message")
+    ref = Process.monitor(group_pid_2)
 
     assert_receive {:telemetry_event,
                     %{
@@ -69,9 +60,9 @@ defmodule Pulsar.Integration.AccessModesTest do
                       metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
                     }}
 
-    ref = Process.monitor(group_pid_2)
-    assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, _reason}
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, :shutdown}, 5_000
+
+    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 1_000) == {:error, :not_found}
     refute group_pid_2 in Pulsar.Client.producers(@client)
 
     ref = Process.monitor(producer_1)

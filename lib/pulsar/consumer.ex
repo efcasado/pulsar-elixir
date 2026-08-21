@@ -146,9 +146,10 @@ defmodule Pulsar.Consumer do
   A pid must be the stable root returned by `start/1` or `start_link/1`. Worker pids used for
   acknowledgement are not consumer roots and return `{:error, :not_found}` here.
 
-  A root started as a static child will be restarted by its supervisor; remove that child
-  from the supervision tree instead. A consumer declared on a client is not a static child:
-  stopping it removes it until the client restarts.
+  A root started as a static child is `:permanent`, but stopping it goes through its supervisor
+  rather than exiting it, so it stays stopped; its child spec remains in that tree as
+  `:undefined` until the supervisor restarts. A consumer declared on a client is not a static
+  child: stopping it removes it until the client restarts.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
