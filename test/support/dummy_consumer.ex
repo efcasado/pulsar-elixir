@@ -66,13 +66,13 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   def became_active(state) do
     notify(state.forward_to, {:consumer_active, self(), true})
 
-    {:noreply, state}
+    {:ok, state}
   end
 
   def became_passive(state) do
     notify(state.forward_to, {:consumer_active, self(), false})
 
-    {:noreply, state}
+    {:ok, state}
   end
 
   def reached_end_of_topic(state) do
@@ -83,7 +83,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
       Task.start(fn -> Pulsar.Consumer.stop(root) end)
     end
 
-    :ok
+    {:ok, state}
   end
 
   def terminate(reason, state) do

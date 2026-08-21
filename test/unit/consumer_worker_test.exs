@@ -39,8 +39,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
     def handle_message(_message, state), do: {:ok, state}
 
-    # Answers what a callback used to stop itself with, which the worker now ignores.
-    def reached_end_of_topic(state), do: {:stop, :normal, state}
+    def reached_end_of_topic(:started), do: {:ok, :drained}
   end
 
   @topic "persistent://public/default/orders"
@@ -440,13 +439,15 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_receive {:subscribe_now, []}, 500
     end
 
-    test "tells the callback, and carries on" do
+    test "tells the callback, carries its state on, and keeps running" do
       state = %{worker_state() | callback_module: EndOfTopicCallback, callback_state: :started}
 
-      # A notification, so what it answers is ignored: a worker is one of the ways a consumer
-      # is running, and stopping one is Pulsar.Consumer.stop/2's job.
-      assert {:noreply, ^state} =
+      # A notification: the callback answers with the state to carry on with, and cannot stop
+      # its own consumer - that is Pulsar.Consumer.stop/2's job.
+      assert {:noreply, carried} =
                Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
+
+      assert carried.callback_state == :drained
     end
   end
 

@@ -468,10 +468,12 @@ defmodule Pulsar.Consumer.Worker do
   # consumer is stopped through Pulsar.Consumer.stop/2 rather than from inside one.
   defp dispatch_event(%__MODULE__{callback_state: nil} = state, _callback_fun), do: {:noreply, state}
 
+  # These tell a callback something happened; stopping is Pulsar.Consumer.stop/2's job, so the
+  # only thing to answer with is the state to carry on with.
   defp dispatch_event(state, callback_fun) do
-    apply(state.callback_module, callback_fun, [state.callback_state])
+    {:ok, callback_state} = apply(state.callback_module, callback_fun, [state.callback_state])
 
-    {:noreply, state}
+    {:noreply, %{state | callback_state: callback_state}}
   end
 
   # Answered before counting, so a consumer with no dead letter policy never walks a delivery.

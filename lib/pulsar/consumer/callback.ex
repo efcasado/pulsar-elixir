@@ -209,12 +209,13 @@ defmodule Pulsar.Consumer.Callback do
   reported rather than counting notifications, and keep whatever the callback does here
   idempotent.
 
-  This says the topic is finished, not the subscription. The return is ignored, as
-  `c:terminate/2`'s is: a callback cannot stop its own consumer, because a worker is one of
-  several ways a consumer is running and not the consumer itself. Tell something that can:
+  This says the topic is finished, not the subscription. Answer `{:ok, state}`: a callback
+  cannot stop its own consumer, because a worker is one of several ways a consumer is running
+  and not the consumer itself. Tell something that can:
 
       def reached_end_of_topic(state) do
         send(state.owner, {:drained, self()})
+        {:ok, state}
       end
 
   and have that process call `Pulsar.Consumer.stop/2` once it has heard from every worker it
@@ -302,9 +303,9 @@ defmodule Pulsar.Consumer.Callback do
   @callback handle_info(term(), state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-  @callback became_active(state) :: term()
-  @callback became_passive(state) :: term()
-  @callback reached_end_of_topic(state) :: term()
+  @callback became_active(state) :: {:ok, state}
+  @callback became_passive(state) :: {:ok, state}
+  @callback reached_end_of_topic(state) :: {:ok, state}
   @callback handle_invalid_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}
@@ -333,15 +334,15 @@ defmodule Pulsar.Consumer.Callback do
       end
 
       def became_active(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def became_passive(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def reached_end_of_topic(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def handle_invalid_message(message, state) do
