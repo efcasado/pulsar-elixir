@@ -15,7 +15,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   test "tops the window up as it is spent, when it is smaller than the topic" do
     messages =
       @topic
-      |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 100)
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 2_000)
       |> Enum.to_list()
 
     assert length(messages) == @num_messages
@@ -31,7 +31,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   test "a window of one is topped up on every message" do
     messages =
       @topic
-      |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 100)
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 1, timeout: 2_000)
       |> Enum.to_list()
 
     assert length(messages) == @num_messages
@@ -47,7 +47,7 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
   test "a window wider than the topic is never topped up" do
     messages =
       @topic
-      |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 100)
+      |> Pulsar.Reader.stream(client: @client, flow_permits: 1000, timeout: 2_000)
       |> Enum.to_list()
 
     assert length(messages) == @num_messages

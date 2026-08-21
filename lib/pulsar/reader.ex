@@ -184,7 +184,9 @@ defmodule Pulsar.Reader do
     startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
     startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
 
-    subscription_name = "reader-#{System.unique_integer([:positive, :monotonic])}"
+    # Unique across the cluster, not just the VM: two nodes reading one topic would both
+    # start counting from the same low integers, and an :exclusive subscription only seats one.
+    subscription_name = "reader-#{Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)}"
     reader_ref = make_ref()
 
     consumer_opts = [
