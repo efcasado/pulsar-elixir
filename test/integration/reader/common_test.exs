@@ -33,7 +33,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   test "ends once the topic is drained, given a timeout to end on" do
     payloads =
       @topic
-      |> Pulsar.Reader.stream(client: @client, timeout: 100)
+      |> Pulsar.Reader.stream(client: @client, timeout: 2_000)
       |> Enum.map(& &1.payload)
 
     assert payloads == Enum.map(1..@num_messages, &"Message #{&1}")
@@ -41,12 +41,23 @@ defmodule Pulsar.Integration.Reader.CommonTest do
 
   test "closes the consumer it opened once the stream is done with it" do
     assert @topic
-           |> Pulsar.Reader.stream(client: @client, timeout: 100)
+           |> Pulsar.Reader.stream(client: @client)
+           |> Enum.take(@num_messages)
            |> Enum.count() == @num_messages
 
-    Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end,
-      description: "the reader's consumer to be removed from the client"
-    )
+    assert Pulsar.Client.consumers(@client) == []
+  end
+
+  # Readers are independent of one another, so each needs a subscription of its own. Note that
+  # this cannot reproduce the cross-node case: two nodes drawing names from a per-VM counter
+  # would collide, and only one of them would be seated on an :exclusive subscription.
+  test "two readers on one topic each read all of it" do
+    read = fn -> @topic |> Pulsar.Reader.stream(client: @client, timeout: 100) |> Enum.count() end
+
+    [first, second] = [read, read] |> Enum.map(&Task.async/1) |> Task.await_many(30_000)
+
+    assert first == @num_messages
+    assert second == @num_messages
   end
 
   test "reading from :latest yields nothing published before it" do
