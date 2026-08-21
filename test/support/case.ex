@@ -32,16 +32,7 @@ defmodule Pulsar.Test.Case do
 
   setup_all context do
     broker = System.broker()
-    # Escalation is by exhaustion, and the defaults spend a few hundred round trips getting there.
-    # A handful per second exhausts on the instant retries a misconfiguration produces, and leaves
-    # the seconds-apart restarts of a reconnect well inside the window.
-    {:ok, _client} =
-      Pulsar.Client.start_link(
-        name: context.module,
-        host: broker.service_url,
-        worker_restart_intensity: [max_restarts: 3, max_seconds: 1],
-        resource_restart_intensity: [max_restarts: 3, max_seconds: 1]
-      )
+    {:ok, _client} = Pulsar.Client.start_link(name: context.module, host: broker.service_url)
 
     on_exit(fn -> Pulsar.Client.stop(context.module) end)
 
