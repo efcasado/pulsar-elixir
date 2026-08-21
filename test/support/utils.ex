@@ -1,6 +1,19 @@
 defmodule Pulsar.Test.Support.Utils do
   @moduledoc false
   import ExUnit.Assertions, only: [flunk: 1]
+  import ExUnit.Callbacks, only: [start_supervised!: 1]
+
+  @doc """
+  Starts a client of its own for a resource that is expected to be refused.
+
+  A resource that cannot start escalates, and escalation reaches the client, so a doomed one
+  put on the module's shared client takes the other tests' resources down with it.
+  """
+  def start_isolated_client(name, broker) do
+    start_supervised!(Supervisor.child_spec({Pulsar.Client, name: name, host: broker.service_url}, id: name))
+
+    name
+  end
 
   @default_timeout 10_000
   @default_interval_ms 100
@@ -21,6 +34,9 @@ defmodule Pulsar.Test.Support.Utils do
   that seeks by timestamp needs them stamped apart, and publishes its own rather than using
   this.
 
+  The producer is stopped once the messages are in: it has no work left, and a test that goes on
+  to terminate the topic would otherwise leave it being restarted into a topic that is gone.
+
   ## Options
     - `:client` - the client to publish through (required)
     - `:producer` - the producer's name, by default one derived from the topic
@@ -34,16 +50,21 @@ defmodule Pulsar.Test.Support.Utils do
     {:ok, producer} = Pulsar.Producer.start(topic, [client: client, name: name] ++ producer_opts)
     :ok = Pulsar.Producer.await_ready(producer)
 
-    messages
-    |> Enum.map(fn message ->
-      {payload, send_opts} = publish(message)
-      {:ok, ref} = Pulsar.Producer.send_async(producer, payload, send_opts)
-      ref
-    end)
-    |> Enum.map(fn ref ->
-      {:ok, message_id} = Pulsar.Producer.await(ref)
-      message_id
-    end)
+    message_ids =
+      messages
+      |> Enum.map(fn message ->
+        {payload, send_opts} = publish(message)
+        {:ok, ref} = Pulsar.Producer.send_async(producer, payload, send_opts)
+        ref
+      end)
+      |> Enum.map(fn ref ->
+        {:ok, message_id} = Pulsar.Producer.await(ref)
+        message_id
+      end)
+
+    :ok = Pulsar.Producer.stop(producer)
+
+    message_ids
   end
 
   defp publish({key, payload}), do: {payload, [partition_key: key]}
