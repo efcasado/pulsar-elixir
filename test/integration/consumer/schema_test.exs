@@ -32,8 +32,9 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert_receive {:consumer, ^consumer_pid, %{payload: "test message"}}
   end
 
-  test "a consumer whose schema the topic will not accept gives up instead of becoming ready" do
+  test "a consumer whose schema the topic will not accept gives up instead of becoming ready", %{broker: broker} do
     topic = "persistent://public/default/consumer-schema-compat-test-#{:erlang.unique_integer([:positive])}"
+    incompatible_client = Utils.start_isolated_client(:consumer_incompatible_schema, broker)
 
     start_producer(topic, schema: [type: :String])
 
@@ -42,7 +43,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
         topic,
         "incompatible-sub",
         DummyConsumer,
-        client: @client,
+        client: incompatible_client,
         schema: [type: :Int32]
       )
 
@@ -51,7 +52,7 @@ defmodule Pulsar.Integration.Consumer.SchemaTest do
     assert_receive {:DOWN, ^ref, :process, ^consumer_group, :shutdown}, 5_000
 
     assert Pulsar.Consumer.await_ready(consumer_group, timeout: 1_000) == {:error, :not_found}
-    refute consumer_group in Pulsar.Client.consumers(@client)
+    refute consumer_group in Pulsar.Client.consumers(incompatible_client)
   end
 
   defp start_producer(topic, opts) do

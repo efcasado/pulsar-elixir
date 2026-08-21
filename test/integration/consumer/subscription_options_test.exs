@@ -228,15 +228,16 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     refute "non-durable" in subscriptions
   end
 
-  test "force_create_topic: false gives the consumer up instead of leaving it running" do
+  test "force_create_topic: false gives the consumer up instead of leaving it running", %{broker: broker} do
     non_existent_topic = "persistent://public/default/subscription-options-non-existent"
+    no_force_create_client = Utils.start_isolated_client(:no_force_create, broker)
 
     {:ok, no_force_create_group} =
       Pulsar.Consumer.start(
         non_existent_topic,
         "no-force-create",
         @consumer_callback,
-        subscription_options(:earliest, force_create_topic: false)
+        Keyword.put(subscription_options(:earliest, force_create_topic: false), :client, no_force_create_client)
       )
 
     ref = Process.monitor(no_force_create_group)
@@ -244,7 +245,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, :shutdown}, 5_000
 
     assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 1_000) == {:error, :not_found}
-    refute no_force_create_group in Pulsar.Client.consumers(@client)
+    refute no_force_create_group in Pulsar.Client.consumers(no_force_create_client)
   end
 
   test "read_compacted reads the last message per key, not every message", %{expected_count: expected_count} do

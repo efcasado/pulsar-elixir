@@ -126,8 +126,9 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     end
   end
 
-  test "a second consumer of an exclusive subscription stops rather than waiting for it" do
+  test "a second consumer of an exclusive subscription stops rather than waiting for it", %{broker: broker} do
     subscription = "exclusive-contended"
+    contender_client = Utils.start_isolated_client(:exclusive_contender, broker)
 
     {:ok, holder} = Pulsar.Consumer.start(@topic, subscription, @consumer_callback, subscription_options(:exclusive, 1))
     :ok = Pulsar.Consumer.await_ready(holder, client: @client)
@@ -137,13 +138,14 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
         @topic,
         subscription,
         @consumer_callback,
-        [name: "exclusive-contender"] ++ subscription_options(:exclusive, 1)
+        [name: "exclusive-contender"] ++
+          Keyword.put(subscription_options(:exclusive, 1), :client, contender_client)
       )
 
     ref = Process.monitor(contender)
 
     assert_receive {:DOWN, ^ref, :process, ^contender, :shutdown}, 10_000
-    refute contender in Pulsar.Client.consumers(@client)
+    refute contender in Pulsar.Client.consumers(contender_client)
 
     assert Process.alive?(holder)
   end

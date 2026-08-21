@@ -118,15 +118,16 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert message.raw.metadata.schema_version
   end
 
-  test "a producer whose schema the topic will not accept gives up instead of becoming ready" do
+  test "a producer whose schema the topic will not accept gives up instead of becoming ready", %{broker: broker} do
     topic = "persistent://public/default/producer-schema-compat-test"
     :ok = System.create_topic(topic)
+    incompatible_client = Utils.start_isolated_client(:producer_incompatible_schema, broker)
 
     _producer1 = start_producer(topic, schema: [type: :String], name: "compat-test-producer-1")
 
     {:ok, producer_group} =
       Pulsar.Producer.start(topic,
-        client: @client,
+        client: incompatible_client,
         schema: [type: :Int32],
         name: "compat-test-producer-2"
       )
@@ -136,7 +137,7 @@ defmodule Pulsar.Integration.Producer.SchemaTest do
     assert_receive {:DOWN, ^ref, :process, ^producer_group, :shutdown}, 5_000
 
     assert Pulsar.Producer.await_ready(producer_group, timeout: 1_000) == {:error, :not_found}
-    refute producer_group in Pulsar.Client.producers(@client)
+    refute producer_group in Pulsar.Client.producers(incompatible_client)
   end
 
   test "an evolved schema is stored as a new version of the old one" do
