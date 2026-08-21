@@ -384,10 +384,12 @@ defmodule Pulsar.Producer.Worker do
     attempt_register(state, backoff, deadline)
   end
 
-  def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
-    Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, producer will restart")
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
 
-    {:stop, :broker_exited, state}
+  def handle_info({:EXIT, pid, reason}, state) do
+    Logger.info("#{inspect(pid)} exited: #{inspect(reason)}, producer stopping")
+
+    {:stop, reason, state}
   end
 
   @impl true

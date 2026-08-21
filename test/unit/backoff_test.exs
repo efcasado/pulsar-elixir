@@ -39,6 +39,7 @@ defmodule Pulsar.BackoffTest do
       # The last two are how Pulsar.Topology.Resolver reports a failed lookup: the reason that
       # decides this is wrapped, and a bundle unload answers :ServiceNotReady through it.
       reasons = [
+        :connection_lost,
         :disconnected,
         :no_broker_available,
         {:ServiceNotReady, "try again"},
@@ -72,6 +73,16 @@ defmodule Pulsar.BackoffTest do
              end) == error
 
       assert :counters.get(counter, 1) == 1
+    end
+
+    test "only retries resolver exits caused by a disappearing server call" do
+      call = {:gen_statem, :call, [self(), :metadata, 5_000]}
+
+      assert Backoff.retryable?({:resolver_failed, :exit, {:noproc, call}})
+      assert Backoff.retryable?({:resolver_failed, :exit, {:timeout, call}})
+
+      refute Backoff.retryable?({:resolver_failed, :exit, :noproc})
+      refute Backoff.retryable?({:resolver_failed, :error, %RuntimeError{message: "bug"}})
     end
   end
 

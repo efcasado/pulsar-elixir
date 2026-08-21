@@ -45,6 +45,22 @@ defmodule Pulsar.Producer.SendAsyncTest do
     %{state: ProducerState.new(broker)}
   end
 
+  test "preserves linked exit semantics", ctx do
+    assert {:noreply, state} = Worker.handle_info({:EXIT, self(), :normal}, ctx.state)
+    assert state == ctx.state
+
+    assert {:stop, :shutdown, state} = Worker.handle_info({:EXIT, self(), :shutdown}, ctx.state)
+    assert state == ctx.state
+
+    assert {:stop, {:shutdown, :finished}, state} =
+             Worker.handle_info({:EXIT, self(), {:shutdown, :finished}}, ctx.state)
+
+    assert state == ctx.state
+
+    assert {:stop, :boom, state} = Worker.handle_info({:EXIT, self(), :boom}, ctx.state)
+    assert state == ctx.state
+  end
+
   describe "taking a send by cast" do
     test "publishes it and parks its caller", ctx do
       {:noreply, state} = cast(ctx.state, "a")

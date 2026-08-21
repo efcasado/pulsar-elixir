@@ -53,11 +53,15 @@ defmodule Pulsar.Topology.Controller do
 
         case reconcile(state, desired) do
           {:ok, outcome} -> ready(state, outcome)
-          {:error, reason} -> retry_discovery(state, :reconciliation, reason)
+          {:error, reason} -> fail_discovery(state, :reconciliation, reason)
         end
 
       {:error, reason} ->
-        retry_discovery(state, :metadata, reason)
+        if Backoff.retryable?(reason) do
+          retry_discovery(state, :metadata, reason)
+        else
+          fail_discovery(state, :metadata, reason)
+        end
     end
   end
 
@@ -68,6 +72,11 @@ defmodule Pulsar.Topology.Controller do
 
     Process.send_after(self(), :discover, wait)
     {:noreply, %{state | discovery_backoff: wait}}
+  end
+
+  defp fail_discovery(state, stage, reason) do
+    Logger.error("Topology #{stage_label(stage)} for #{state.topic} failed terminally: #{inspect(reason)}")
+    {:stop, reason, state}
   end
 
   defp stage_label(:metadata), do: "metadata discovery"
