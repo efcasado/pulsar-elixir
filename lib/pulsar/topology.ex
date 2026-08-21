@@ -94,10 +94,9 @@ defmodule Pulsar.Topology do
   defp group_ready?({_index, group}, worker_module, deadline) when is_pid(group) do
     children = supervisor_children(group)
 
-    # A group running short of workers is a normal steady state, so this asks about those there.
-    live = for {_id, worker, :worker, [^worker_module]} <- children, is_pid(worker), do: worker
+    workers = for {_id, worker, :worker, [^worker_module]} <- children, do: worker
 
-    live != [] and Enum.all?(live, &worker_ready?(worker_module, &1, deadline))
+    workers != [] and Enum.all?(workers, &(is_pid(&1) and worker_ready?(worker_module, &1, deadline)))
   end
 
   defp group_ready?({_index, _not_running}, _worker_module, _deadline), do: false
@@ -267,7 +266,7 @@ defmodule Pulsar.Topology do
   def supervisor_children(supervisor) do
     Supervisor.which_children(supervisor)
   catch
-    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown, :timeout] ->
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
       []
 
     :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->

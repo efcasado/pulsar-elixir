@@ -440,12 +440,13 @@ defmodule Pulsar.Consumer.Worker do
     attempt_subscribe(state, init_args, backoff, deadline)
   end
 
-  # A reconnecting broker stays alive and exits its consumers to make them subscribe again.
-  # Trapped, that signal is a message, and a worker that outlives it subscribes to nothing.
-  def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
-    Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, consumer will restart")
+  # Untrapped, any linked process dying took this one with it, and a reconnecting broker relies
+  # on that to make its consumers subscribe again. Trapping is for terminate/2 and nothing else,
+  # so every exit is still fatal - gen_server answers the parent's itself and never sends it here.
+  def handle_info({:EXIT, pid, reason}, state) do
+    Logger.info("#{inspect(pid)} exited: #{inspect(reason)}, consumer will restart")
 
-    {:stop, :broker_exited, state}
+    {:stop, :linked_process_exited, state}
   end
 
   # Nothing is handed to a callback before its init/2 has run, and the startup delay and the
@@ -627,10 +628,6 @@ defmodule Pulsar.Consumer.Worker do
         )
 
         {%{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
-
-      unexpected_result ->
-        Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-        {state, nacked_acc}
     end
   end
 
