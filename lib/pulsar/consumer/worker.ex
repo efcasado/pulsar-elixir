@@ -98,6 +98,16 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Public API
 
+  @doc false
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :transient,
+      type: :worker
+    }
+  end
+
   @doc """
   Starts one consumer process.
 
@@ -389,13 +399,16 @@ defmodule Pulsar.Consumer.Worker do
       |> ack_message_ids(skipped_ids)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
-    new_state =
+    result =
       case divert(new_state, messages) do
-        {:divert, redelivery_count} -> send_batch_to_dead_letter(new_state, messages, redelivery_count)
+        {:divert, redelivery_count} -> {:continue, send_batch_to_dead_letter(new_state, messages, redelivery_count)}
         :deliver -> process_messages_normally(new_state, messages)
       end
 
-    {:noreply, apply_flow_policy(new_state, permits_consumed)}
+    case result do
+      {:continue, new_state} -> {:noreply, apply_flow_policy(new_state, permits_consumed)}
+      {:stop, reason, new_state} -> {:stop, reason, new_state}
+    end
   end
 
   @impl true
@@ -440,17 +453,19 @@ defmodule Pulsar.Consumer.Worker do
     attempt_subscribe(state, init_args, backoff, deadline)
   end
 
-  # A reconnecting broker stays alive and exits its consumers to make them subscribe again.
-  # Trapped, that signal is a message, and a worker that outlives it subscribes to nothing.
-  def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
-    Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, consumer will restart")
+  # Trapping exits solely to run terminate/2 must preserve the exit reason an untrapped process
+  # would receive. In particular, transient children must remain stopped after a linked shutdown.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
 
-    {:stop, :broker_exited, state}
+  def handle_info({:EXIT, pid, reason}, state) do
+    Logger.info("#{inspect(pid)} exited: #{inspect(reason)}, consumer stopping")
+
+    {:stop, reason, state}
   end
 
   # Nothing is handed to a callback before its init/2 has run, and the startup delay and the
   # gaps between subscribe retries both leave the worker reading its mailbox.
-  def handle_info(_message, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
+  def handle_info(_message, %__MODULE__{ready: false} = state), do: {:noreply, state}
 
   @impl true
   def handle_info(message, state) do
@@ -460,17 +475,30 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 
-  # The return is ignored, as terminate/2's is: these tell a callback something happened, and a
-  # consumer is stopped through Pulsar.Consumer.stop/2 rather than from inside one.
-  defp dispatch_event(%__MODULE__{callback_state: nil} = state, _callback_fun), do: {:noreply, state}
+  defp dispatch_event(%__MODULE__{ready: false} = state, _callback_fun), do: {:noreply, state}
 
   defp dispatch_event(state, callback_fun) do
-    apply(state.callback_module, callback_fun, [state.callback_state])
+    case apply(state.callback_module, callback_fun, [state.callback_state]) do
+      {:ok, callback_state} ->
+        {:noreply, %{state | callback_state: callback_state}}
 
-    {:noreply, state}
+      # Kept for callback compatibility: these notifications used the GenServer-style result
+      # before {:ok, state} made their notification-only role explicit.
+      {:noreply, callback_state} ->
+        {:noreply, %{state | callback_state: callback_state}}
+
+      {:noreply, callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, callback_state} ->
+        {:stop, reason, %{state | callback_state: callback_state}}
+    end
   end
 
   # Answered before counting, so a consumer with no dead letter policy never walks a delivery.
@@ -533,10 +561,19 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
-    {new_state, nacked_ids} =
-      Enum.reduce(messages, {state, []}, fn message, {acc_state, nacked_acc} ->
-        process_single_message(acc_state, message, nacked_acc)
+    result =
+      Enum.reduce_while(messages, {:continue, state, []}, fn message, {:continue, acc_state, nacked_acc} ->
+        case process_single_message(acc_state, message, nacked_acc) do
+          {:continue, _state, _nacked_ids} = result -> {:cont, result}
+          {:stop, _reason, _state, _nacked_ids} = result -> {:halt, result}
+        end
       end)
+
+    {outcome, new_state, nacked_ids} =
+      case result do
+        {:continue, new_state, nacked_ids} -> {:continue, new_state, nacked_ids}
+        {:stop, reason, new_state, nacked_ids} -> {{:stop, reason}, new_state, nacked_ids}
+      end
 
     if nacked_ids != [] do
       :telemetry.execute(
@@ -546,7 +583,12 @@ defmodule Pulsar.Consumer.Worker do
       )
     end
 
-    track_nacked(new_state, nacked_ids)
+    new_state = track_nacked(new_state, nacked_ids)
+
+    case outcome do
+      :continue -> {:continue, new_state}
+      {:stop, reason} -> {:stop, reason, new_state}
+    end
   end
 
   defp request_redelivery(state, entry_ids) do
@@ -614,10 +656,10 @@ defmodule Pulsar.Consumer.Worker do
     case result do
       {:ok, new_callback_state} ->
         state = ack_message_ids(state, message_ids_list, validation_error(message))
-        {%{state | callback_state: new_callback_state}, nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, nacked_acc}
 
       {:noreply, new_callback_state} ->
-        {%{state | callback_state: new_callback_state}, nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, nacked_acc}
 
       {:error, reason, new_callback_state} ->
         redelivery_count = Pulsar.Message.redelivery_count(message)
@@ -626,15 +668,19 @@ defmodule Pulsar.Consumer.Worker do
           "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
         )
 
-        {%{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
 
-      unexpected_result ->
-        Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-        {state, nacked_acc}
+      {:stop, reason, new_callback_state} ->
+        # Do not force an entry-level ack for a partial batch: that would also acknowledge the
+        # unread suffix. The normal ledger sends the prefix only when batch-index acks are enabled.
+        state = ack_message_ids(state, message_ids_list, validation_error(message))
+        {:stop, reason, %{state | callback_state: new_callback_state}, nacked_acc}
     end
   end
 
   @impl true
+  def terminate(_reason, %__MODULE__{ready: false}), do: :ok
+
   def terminate(reason, state) do
     try do
       state.callback_module.terminate(reason, state.callback_state)
@@ -691,7 +737,7 @@ defmodule Pulsar.Consumer.Worker do
     {:reply, :ok, track_nacked(state, message_ids)}
   end
 
-  def handle_call(_request, _from, %__MODULE__{callback_state: nil} = state) do
+  def handle_call(_request, _from, %__MODULE__{ready: false} = state) do
     {:reply, {:error, :not_ready}, state}
   end
 
@@ -708,11 +754,17 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, reply, new_callback_state} ->
+        {:stop, reason, reply, %{state | callback_state: new_callback_state}}
+
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 
   @impl true
-  def handle_cast(_request, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
+  def handle_cast(_request, %__MODULE__{ready: false} = state), do: {:noreply, state}
 
   def handle_cast(request, state) do
     case state.callback_module.handle_cast(request, state.callback_state) do
@@ -721,6 +773,9 @@ defmodule Pulsar.Consumer.Worker do
 
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, new_callback_state} ->
+        {:stop, reason, %{state | callback_state: new_callback_state}}
     end
   end
 

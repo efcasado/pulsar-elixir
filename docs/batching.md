@@ -137,6 +137,9 @@ Three consequences:
 - **A partially acked batch can leave backlog metrics unchanged.** The subscription cursor cannot
   advance past the entry until every message in it is acknowledged, so the backlog moves at entry
   boundaries rather than after each processed message.
+- **Stopping a callback partway through a batch leaves the entry outstanding.** Without batch-index
+  acknowledgements, the processed prefix may be redelivered with the unread suffix when another
+  consumer receives the entry.
 
 ### Narrowing redelivery with `:batch_index_ack_enabled`
 

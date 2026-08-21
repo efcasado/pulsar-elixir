@@ -82,6 +82,22 @@ defmodule Pulsar.TopologyTest do
     def start_link(opts), do: Agent.start_link(fn -> Keyword.fetch!(opts, :topic) end)
   end
 
+  defmodule TransientWorker do
+    @moduledoc false
+    use Agent
+
+    def child_spec(opts) do
+      %{
+        id: __MODULE__,
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :transient,
+        type: :worker
+      }
+    end
+
+    def start_link(opts), do: Agent.start_link(fn -> Keyword.fetch!(opts, :topic) end)
+  end
+
   defmodule PartitionFourFails do
     @moduledoc false
     use Agent
@@ -241,6 +257,66 @@ defmodule Pulsar.TopologyTest do
       :ok = Topology.await_ready(root, 1_000)
       assert Agent.get(attempts, & &1) >= 2
       assert length(Topology.groups(root)) == 3
+    end
+
+    test "retries wrapped ServiceNotReady metadata failures" do
+      attempts = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        case Agent.get_and_update(attempts, &{&1, &1 + 1}) do
+          0 -> {:error, {:partition_metadata_check_failed, :ServiceNotReady}}
+          _later -> {:ok, 1}
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver)
+
+      :ok = Topology.await_ready(root, 1_000)
+      assert Agent.get(attempts, & &1) >= 2
+    end
+
+    test "retries connection loss during metadata discovery" do
+      attempts = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        case Agent.get_and_update(attempts, &{&1, &1 + 1}) do
+          0 -> {:error, :connection_lost}
+          _later -> {:ok, 1}
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver)
+
+      :ok = Topology.await_ready(root, 1_000)
+      assert Agent.get(attempts, & &1) >= 2
+    end
+
+    test "retries when the selected broker disappears during the metadata call" do
+      attempts = start_supervised!({Agent, fn -> 0 end})
+
+      resolver = fn _topic, _opts ->
+        case Agent.get_and_update(attempts, &{&1, &1 + 1}) do
+          0 -> exit({:noproc, {:gen_statem, :call, [self(), :metadata, 5_000]}})
+          _later -> {:ok, 1}
+        end
+      end
+
+      {root, _registry} = start_async_topology(resolver)
+
+      :ok = Topology.await_ready(root, 1_000)
+      assert Agent.get(attempts, & &1) >= 2
+    end
+
+    test "stops discovery on terminal metadata failures" do
+      failures = [
+        {fn _topic, _opts -> {:error, {:AuthorizationError, "denied"}} end, {:AuthorizationError, "denied"}},
+        {fn _topic, _opts -> {:ok, :invalid} end, {:invalid_partition_count, :invalid}},
+        {fn _topic, _opts -> raise "resolver bug" end, {:resolver_failed, :error, %RuntimeError{message: "resolver bug"}}}
+      ]
+
+      for {resolver, expected} <- failures do
+        assert_controller_stops(resolver, expected)
+      end
     end
 
     test "a false polling interval still performs initial discovery exactly once" do
@@ -492,6 +568,23 @@ defmodule Pulsar.TopologyTest do
       assert Enum.count(Supervisor.which_children(group), &match?({_id, :undefined, _type, _modules}, &1)) == 1
     end
 
+    test "a transient worker that finishes normally stays absent under permanent boundaries" do
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], worker: TransientWorker)
+
+      :ok = Topology.await_ready(root, 1_000)
+      [{0, group}] = Topology.groups(root)
+      [{id, worker, :worker, _modules}] = Supervisor.which_children(group)
+
+      ref = Process.monitor(worker)
+      :ok = Agent.stop(worker, :normal)
+      assert_receive {:DOWN, ^ref, :process, ^worker, :normal}
+
+      assert Process.alive?(group)
+      assert Process.alive?(root)
+      assert [{^id, :undefined, :worker, _modules}] = Supervisor.which_children(group)
+    end
+
     test "a group that goes down leaves its siblings and its root alone" do
       {root, _registry} = start_topology(2)
 
@@ -630,6 +723,15 @@ defmodule Pulsar.TopologyTest do
   defp discovery(root) do
     [pid] = for {{Controller, _kind, _topic, _scheme}, pid, _type, _modules} <- Supervisor.which_children(root), do: pid
     pid
+  end
+
+  defp assert_controller_stops(resolver, expected) do
+    opts = [topic: @topic, client: :test, partition_discovery_interval_ms: false]
+    config = %{worker: StubWorker, kind: :consumers, worker_count: 1, opts: opts}
+
+    assert {:ok, controller} = GenServer.start(Controller, {self(), config, [resolver: resolver]})
+    ref = Process.monitor(controller)
+    assert_receive {:DOWN, ^ref, :process, ^controller, ^expected}, 1_000
   end
 
   defp topology_spec(worker) do

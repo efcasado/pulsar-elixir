@@ -33,7 +33,29 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     drain()
   end
 
-  # A callback cannot stop its own consumer, so this one tells Pulsar.Consumer.stop/2 instead -
+  test "lets a callback finish its transient worker without stopping the resource" do
+    topic = @topic <> "-worker-finished"
+
+    consumer =
+      start_consumer(topic, "worker-finished-sub", init_args: [finish_at_end_of_topic: true])
+
+    [worker] = Topology.workers(consumer)
+    assert_receive {:consumer_started, ^worker, _context}
+    worker_ref = Process.monitor(worker)
+
+    drain()
+    :ok = System.terminate_topic(topic)
+
+    assert_receive {:consumer_end_of_topic, ^worker}, 10_000
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :normal}, 5_000
+    assert_receive {:consumer_terminated, ^worker, :normal}, 5_000
+
+    assert Process.alive?(consumer)
+    assert Topology.workers(consumer) == []
+    refute_receive {:consumer_started, _replacement, _context}, 500
+  end
+
+  # A callback stop finishes only its worker, so this one tells Pulsar.Consumer.stop/2 instead -
   # which is what the whole consumer coming down proves, and terminate/2 running with it.
   test "lets a callback have its consumer stopped once the topic is done" do
     topic = @topic <> "-stopping"
