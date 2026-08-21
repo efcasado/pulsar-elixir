@@ -37,7 +37,7 @@ defmodule Pulsar.Integration.AccessModesTest do
 
   @tag telemetry_listen: [@opened]
   test ":exclusive fences a second producer until the first releases the topic", %{broker: broker} do
-    contender = start_isolated_client(:access_modes_contender, broker)
+    contender = Utils.start_isolated_client(:access_modes_contender, broker)
 
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
@@ -206,19 +206,5 @@ defmodule Pulsar.Integration.AccessModesTest do
                    15_000
 
     Pulsar.Producer.stop(group_pid_2)
-  end
-
-  # A producer that is refused escalates, and escalation reaches the client, so it is given one of
-  # its own rather than taking the shared client's other producers down with it. Temporary,
-  # because that is exactly what is expected to happen to it.
-  defp start_isolated_client(name, broker) do
-    start_supervised!(
-      Supervisor.child_spec({Pulsar.Client, name: name, host: broker.service_url},
-        id: name,
-        restart: :temporary
-      )
-    )
-
-    name
   end
 end

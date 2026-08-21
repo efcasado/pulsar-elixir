@@ -52,7 +52,9 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   # this cannot reproduce the cross-node case: two nodes drawing names from a per-VM counter
   # would collide, and only one of them would be seated on an :exclusive subscription.
   test "two readers on one topic each read all of it" do
-    read = fn -> @topic |> Pulsar.Reader.stream(client: @client, timeout: 100) |> Enum.count() end
+    # A longer idle timeout than the tests above: two readers sharing the topic take turns, so
+    # 100ms of quiet is not evidence that the topic is drained.
+    read = fn -> @topic |> Pulsar.Reader.stream(client: @client, timeout: 2_000) |> Enum.count() end
 
     [first, second] = [read, read] |> Enum.map(&Task.async/1) |> Task.await_many(30_000)
 
