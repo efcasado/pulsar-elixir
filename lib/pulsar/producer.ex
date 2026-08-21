@@ -124,7 +124,9 @@ defmodule Pulsar.Producer do
   @doc """
   Publishes a message, given a producer's pid or name.
 
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
+  Returns `{:error, :not_ready}` until it can publish: while its topic topology is being
+  discovered, while the partition it routed to is between lives, and while the worker it
+  reached is still registering with its broker.
 
   A message too large for the broker is refused here rather than sent, since the broker would
   answer it by closing a connection shared with every other producer and consumer:
@@ -334,7 +336,7 @@ defmodule Pulsar.Producer do
 
         case List.keyfind(groups, index, 0) do
           {_index, group} when is_pid(group) -> pick_worker(Topology.workers(group))
-          {_index, _restarting} -> {:error, :no_producers_available}
+          {_index, _restarting} -> {:error, :not_ready}
           nil -> {:error, {:partition_not_found, index}}
         end
     end
@@ -356,7 +358,7 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp pick_worker([]), do: {:error, :no_producers_available}
+  defp pick_worker([]), do: {:error, :not_ready}
   defp pick_worker([worker | _rest]), do: {:ok, worker}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows

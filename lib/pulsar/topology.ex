@@ -94,8 +94,7 @@ defmodule Pulsar.Topology do
   defp group_ready?({_index, group}, worker_module, deadline) when is_pid(group) do
     children = supervisor_children(group)
 
-    # A worker that stopped leaves its slot behind, and a group running short of workers is a
-    # normal steady state: readiness asks about the ones that are there.
+    # A group running short of workers is a normal steady state, so this asks about those there.
     live = for {_id, worker, :worker, [^worker_module]} <- children, is_pid(worker), do: worker
 
     live != [] and Enum.all?(live, &worker_ready?(worker_module, &1, deadline))
@@ -268,7 +267,7 @@ defmodule Pulsar.Topology do
   def supervisor_children(supervisor) do
     Supervisor.which_children(supervisor)
   catch
-    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown, :timeout] ->
       []
 
     :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
@@ -381,8 +380,7 @@ defmodule Pulsar.Topology do
     :exit, _reason -> {:error, :not_found}
   end
 
-  # A resource that is already gone reads as stopped, which is also what a caller holding a
-  # pid replaced by a restart sees.
+  # A resource that is already gone reads as stopped.
   defp stop_directly(pid) do
     Supervisor.stop(pid)
   catch

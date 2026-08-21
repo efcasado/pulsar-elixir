@@ -4,6 +4,8 @@ defmodule Pulsar.Integration.Client.EscalationTest do
   alias Pulsar.Client
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
+  alias Pulsar.Test.Support.Utils
+  alias Pulsar.Topology
 
   @moduletag :integration
 
@@ -32,9 +34,8 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     host_tree([{Client, name: name, host: System.broker().service_url, consumers: [consumer]}], intensity)
   end
 
-  # One cascade takes about five seconds, most of it a client reconnecting and bootstrapping, so
-  # a host allowing three restarts in five of them never fills its budget. One restart in sixty
-  # fills on the second cascade, and waits for two rather than four of them to do it.
+  # A cascade takes about five seconds, most of it a client reconnecting, so a host allowing
+  # three restarts in five never fills its budget. One in sixty fills on the second cascade.
   @tag timeout: 180_000
   test "a declared resource that cannot run reaches a host whose window outlasts a cascade" do
     host = declared_client(:escalation_wide, max_restarts: 1, max_seconds: 60)
@@ -48,6 +49,36 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     ref = Process.monitor(host)
 
     refute_receive {:DOWN, ^ref, :process, ^host, _reason}, 20_000
+  end
+
+  # A worker waiting to start still reads its mailbox, so it is not killed after the timeout.
+  test "a consumer still in its startup delay stops promptly" do
+    host_tree([{Client, name: :escalation_delay, host: System.broker().service_url}])
+
+    topic = "persistent://public/default/escalation-test-delayed"
+    :ok = System.create_topic(topic)
+
+    {:ok, consumer} =
+      Pulsar.Consumer.start(topic, "escalation-delay", DummyConsumer,
+        client: :escalation_delay,
+        startup_delay_ms: 30_000
+      )
+
+    # Its worker exists but has not subscribed: await_ready/2 would sit out the whole delay.
+    [worker] =
+      Utils.wait_for(fn -> Topology.workers(consumer) end,
+        until: &match?([_worker], &1),
+        description: "the delayed worker to be started"
+      )
+
+    ref = Process.monitor(worker)
+
+    started = :erlang.monotonic_time(:millisecond)
+    :ok = Pulsar.Consumer.stop(consumer, client: :escalation_delay)
+    assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 15_000
+    elapsed = :erlang.monotonic_time(:millisecond) - started
+
+    assert elapsed < 4_000, "took #{elapsed}ms; a worker asleep is killed after the 5000ms timeout"
   end
 
   # Bootstrap only recreates declared resources, so once the branch is rebuilt without this one

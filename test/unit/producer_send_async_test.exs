@@ -67,7 +67,7 @@ defmodule Pulsar.Producer.SendAsyncTest do
     test "refuses while the producer is still registering", ctx do
       {ref, {:noreply, state}} = cast_with_ref(%{ctx.state | ready: false}, "a")
 
-      assert_received {^ref, {:error, :producer_waiting}}
+      assert_received {^ref, {:error, :not_ready}}
       assert [] == published()
       assert state.pending_messages == 0
     end

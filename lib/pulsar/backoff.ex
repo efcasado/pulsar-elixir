@@ -92,6 +92,39 @@ defmodule Pulsar.Backoff do
     end
   end
 
-  defp retryable?({code, _message}), do: code in @retryable_errors
+  @doc """
+  How long to wait before retrying `reason`, for a caller that schedules rather than sleeps.
+
+  `previous` is the last wait this caller used and `deadline` the monotonic millisecond it may
+  keep trying until. Answers `{:retry, wait, next}` to try again in `wait` ms, carrying `next`
+  into the following call, or `:give_up` once the reason is not retryable or the deadline has
+  passed. Same policy and budget as `run/1`, without blocking the caller.
+  """
+  @spec retry_in(term(), non_neg_integer(), integer() | :infinity) ::
+          {:retry, pos_integer(), pos_integer()} | :give_up
+  def retry_in(reason, previous, deadline) do
+    if retryable?(reason) do
+      wait = next(previous)
+
+      case retry_wait(deadline, wait) do
+        :exhausted -> :give_up
+        retry_wait -> {:retry, retry_wait, wait}
+      end
+    else
+      :give_up
+    end
+  end
+
+  @doc """
+  The monotonic millisecond a retry started now may keep trying until.
+  """
+  @spec deadline() :: integer()
+  def deadline, do: System.monotonic_time(:millisecond) + @retry_budget
+
+  # A broker's own error is {code, message}, and the code decides. Resolver wraps a failed
+  # lookup as {:lookup_failed, reason}, where the reason that decides is the one inside - asked
+  # second, so a broker error whose message is not a binary is still read by its code.
+  defp retryable?({code, _message}) when code in @retryable_errors, do: true
+  defp retryable?({_wrapper, reason}) when not is_binary(reason), do: retryable?(reason)
   defp retryable?(reason), do: reason in @retryable_errors
 end

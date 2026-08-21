@@ -30,8 +30,7 @@ defmodule Pulsar.Topology.Root do
     start_link(worker, registry, kind, opts, [])
   end
 
-  # The fifth argument is an internal seam for exercising asynchronous discovery without a
-  # broker. Consumer and Producer deliberately keep it out of the API they document.
+  # The fifth argument is an internal seam for exercising discovery without a broker.
   @doc false
   @spec start_link(module(), atom() | nil, :consumers | :producers, keyword(), keyword()) ::
           Supervisor.on_start()
@@ -91,15 +90,14 @@ defmodule Pulsar.Topology.Root do
       |> Controller.child_spec()
       |> Map.put(:id, {Controller, config.kind, topic, hashing_scheme_for_config(config)})
 
-    # Companions start before the controller so a worker never observes the tree without them.
-    # They resolve their own brokers asynchronously, so none of them delays this root coming up.
+    # Before the controller, so a worker never observes the tree without them. They resolve
+    # their own brokers, so none delays this root coming up.
     children = companions ++ [controller]
 
     Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
   end
 
-  # Popped rather than read: `:companions` configures this root and is not part of what a worker
-  # is started with.
+  # `:companions` configures this root, and is not part of what a worker is started with.
   defp attach_companions(config, root) do
     case Keyword.pop(config.opts, :companions) do
       {nil, opts} ->
@@ -214,8 +212,7 @@ defmodule Pulsar.Topology.Root do
     end
   end
 
-  # A worker carries both the topic it subscribes to and the one the resource was configured
-  # with, so a callback can tell which partition it handles without reading the tree.
+  # Both topics, so a callback can tell which partition it handles without reading the tree.
   defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
     topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 

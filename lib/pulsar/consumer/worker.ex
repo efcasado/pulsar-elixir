@@ -107,14 +107,6 @@ defmodule Pulsar.Consumer.Worker do
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc """
-  Gracefully stops a consumer process.
-  """
-  @spec stop(GenServer.server(), term(), timeout()) :: :ok
-  def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
-    GenServer.stop(consumer, reason, timeout)
-  end
-
   @doc false
   @spec ready?(pid(), timeout()) :: boolean()
   def ready?(consumer, timeout), do: GenServer.call(consumer, :ready?, timeout)
@@ -199,32 +191,28 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
-  # A callback asking to stop parks: the worker answers whatever it owes first, then arranges
-  # its own removal. Stopping can fail, and a caller waiting on a reply should get the one its
-  # callback built rather than the exit of a worker that could not arrange to stop.
+  # Answers whatever it owes before removing itself, so a stop that fails cannot cost a caller
+  # the reply its callback built.
   @impl true
   def handle_continue(:stop, state) do
     :ok = Topology.stop(self())
     {:noreply, state}
   end
 
+  # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
+  # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout -
+  # skipping the terminate/2 that trapping exists to guarantee.
   def handle_continue({:startup_delay, base_delay_ms, jitter_ms, init_args}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
-    total_sleep_ms = base_delay_ms + jitter
-    Logger.debug("Consumer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
-    Process.sleep(total_sleep_ms)
-    {:noreply, state, {:continue, {:subscribe, init_args}}}
+    total_delay_ms = base_delay_ms + jitter
+    Logger.debug("Consumer waiting #{total_delay_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Process.send_after(self(), {:subscribe_now, init_args}, total_delay_ms)
+
+    {:noreply, state}
   end
 
   def handle_continue({:subscribe, init_args}, state) do
-    case Backoff.run(fn -> subscribe(state) end) do
-      {:ok, broker_pid} ->
-        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
-
-      {:error, reason} ->
-        Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
-        {:stop, reason, state}
-    end
+    attempt_subscribe(state, init_args, 0, Backoff.deadline())
   end
 
   def handle_continue({:seek_subscription, init_args}, state) do
@@ -451,14 +439,26 @@ defmodule Pulsar.Consumer.Worker do
     {:stop, :broker_crashed, state}
   end
 
+  @impl true
+  def handle_info({:subscribe_now, init_args}, state) do
+    {:noreply, state, {:continue, {:subscribe, init_args}}}
+  end
+
+  def handle_info({:retry_subscribe, init_args, backoff, deadline}, state) do
+    attempt_subscribe(state, init_args, backoff, deadline)
+  end
+
   # A reconnecting broker stays alive and exits its consumers to make them subscribe again.
   # Trapped, that signal is a message, and a worker that outlives it subscribes to nothing.
-  @impl true
   def handle_info({:EXIT, broker_pid, reason}, %__MODULE__{broker_pid: broker_pid} = state) do
     Logger.info("Broker #{inspect(broker_pid)} exited: #{inspect(reason)}, consumer will restart")
 
     {:stop, :broker_exited, state}
   end
+
+  # Before init_callback there is no callback state to hand anything to, and both the startup
+  # delay and the gaps between subscribe retries leave the worker reading its mailbox.
+  def handle_info(_message, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
 
   @impl true
   def handle_info(message, state) do
@@ -473,6 +473,8 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: new_callback_state}, {:continue, :stop}}
     end
   end
+
+  defp dispatch_event(%__MODULE__{callback_state: nil} = state, _callback_fun), do: {:noreply, state}
 
   defp dispatch_event(state, callback_fun) do
     case apply(state.callback_module, callback_fun, [state.callback_state]) do
@@ -512,7 +514,6 @@ defmodule Pulsar.Consumer.Worker do
         "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
-    # Resolved once for the delivery: this is a call into the topology root.
     {:ok, producer} = DeadLetter.producer(state.dead_letter_root)
 
     state =
@@ -672,6 +673,11 @@ defmodule Pulsar.Consumer.Worker do
     {:reply, state.topic, state}
   end
 
+  def handle_call(request, _from, %__MODULE__{broker_pid: nil} = state)
+      when elem(request, 0) in [:send_flow, :ack, :nack] do
+    {:reply, {:error, :not_ready}, state}
+  end
+
   def handle_call({:send_flow, permits}, _from, state) do
     case send_flow_command(state, permits) do
       :ok ->
@@ -705,6 +711,10 @@ defmodule Pulsar.Consumer.Worker do
     {:reply, :ok, track_nacked(state, message_ids)}
   end
 
+  def handle_call(_request, _from, %__MODULE__{callback_state: nil} = state) do
+    {:reply, {:error, :not_ready}, state}
+  end
+
   def handle_call(request, from, state) do
     case state.callback_module.handle_call(request, from, state.callback_state) do
       {:reply, reply, new_callback_state} ->
@@ -728,6 +738,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
+  def handle_cast(_request, %__MODULE__{callback_state: nil} = state), do: {:noreply, state}
+
   def handle_cast(request, state) do
     case state.callback_module.handle_cast(request, state.callback_state) do
       {:noreply, new_callback_state} ->
@@ -742,6 +754,24 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   ## Private Functions
+
+  defp attempt_subscribe(state, init_args, backoff, deadline) do
+    case subscribe(state) do
+      {:ok, broker_pid} ->
+        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
+
+      {:error, reason} ->
+        case Backoff.retry_in(reason, backoff, deadline) do
+          {:retry, wait, next} ->
+            Process.send_after(self(), {:retry_subscribe, init_args, next, deadline}, wait)
+            {:noreply, state}
+
+          :give_up ->
+            Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
+            {:stop, reason, state}
+        end
+    end
+  end
 
   defp initial_position(:latest), do: :Latest
   defp initial_position(:earliest), do: :Earliest

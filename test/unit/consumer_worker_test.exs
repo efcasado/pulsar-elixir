@@ -434,8 +434,16 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert {:noreply, ^state} = Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
 
+    test "waits out its startup delay by timer rather than sleeping through it" do
+      state = worker_state()
+
+      # Returning leaves it reading its mailbox, which is what lets it be shut down at all.
+      assert {:noreply, ^state} = Worker.handle_continue({:startup_delay, 30, 0, []}, state)
+      assert_receive {:subscribe_now, []}, 500
+    end
+
     test "lets the callback stop the worker" do
-      state = %{worker_state() | callback_module: StoppingCallback}
+      state = %{worker_state() | callback_module: StoppingCallback, callback_state: :started}
 
       # Parks to be stopped rather than exiting; end_of_topic_test.exs asserts it is then removed.
       assert {:noreply, ^state, {:continue, :stop}} =
@@ -443,7 +451,7 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
 
     test "answers a call that stops it before arranging to stop" do
-      state = %{worker_state() | callback_module: StoppingCallback}
+      state = %{worker_state() | callback_module: StoppingCallback, callback_state: :started}
 
       # The reply comes first: stopping can fail, and the caller is owed the answer either way.
       assert {:reply, :answered, ^state, {:continue, :stop}} =
@@ -451,7 +459,7 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
 
     test "parks the same way whichever callback asked to stop" do
-      state = %{worker_state() | callback_module: StoppingCallback}
+      state = %{worker_state() | callback_module: StoppingCallback, callback_state: :started}
 
       assert {:noreply, ^state, {:continue, :stop}} =
                Worker.handle_call(:stop_quietly, {self(), make_ref()}, state)
