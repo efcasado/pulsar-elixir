@@ -44,7 +44,54 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     :ok = System.terminate_topic(topic)
 
     assert_receive {:consumer_end_of_topic, ^worker}, 10_000
-    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^worker, :shutdown}, 5_000
+  end
+
+  # Regression for #198.
+  test "leaves a consumer that stopped at the end of the topic stopped" do
+    topic = @topic <> "-stays-stopped"
+    consumer = start_consumer(topic, "stays-stopped-sub", init_args: [stop_at_end_of_topic: true])
+    [worker] = Topology.workers(consumer)
+
+    drain()
+
+    ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic)
+
+    assert_receive {:consumer_end_of_topic, ^worker}, 10_000
+
+    assert_receive {:DOWN, ^ref, :process, ^consumer, :shutdown}, 10_000
+    refute consumer in Pulsar.Client.consumers(@client)
+  end
+
+  test "keeps draining the other partitions when one of them stops at its end" do
+    topic = @topic <> "-partitioned-stopping"
+    :ok = System.create_topic(topic, 2)
+
+    consumer =
+      start_consumer(topic, "partitioned-stopping-sub",
+        create_topic?: false,
+        init_args: [stop_at_end_of_topic: true]
+      )
+
+    groups = Map.new(Topology.groups(consumer))
+    [ending] = partition_workers(groups, 0)
+    [surviving] = partition_workers(groups, 1)
+
+    drain()
+
+    ending_ref = Process.monitor(ending)
+    :ok = System.terminate_topic(topic <> "-partition-0")
+    assert_receive {:DOWN, ^ending_ref, :process, ^ending, :shutdown}, 10_000
+
+    assert Process.alive?(consumer)
+    Utils.seed_topic(topic <> "-partition-1", ["after-the-other-ended"], client: @client)
+    assert_receive {:consumer, ^surviving, %Pulsar.Message{payload: "after-the-other-ended"}}, 10_000
+
+    consumer_ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic <> "-partition-1")
+
+    assert_receive {:DOWN, ^consumer_ref, :process, ^consumer, :shutdown}, 10_000
   end
 
   test "tells every consumer on a shared subscription" do
@@ -100,6 +147,10 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     :ok = Pulsar.Consumer.await_ready(consumer, client: @client)
 
     consumer
+  end
+
+  defp partition_workers(groups, index) do
+    for {_id, worker, :worker, _modules} <- Supervisor.which_children(Map.fetch!(groups, index)), do: worker
   end
 
   defp drain do

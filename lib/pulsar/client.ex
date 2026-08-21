@@ -79,6 +79,34 @@ defmodule Pulsar.Client do
               the lifecycle of declared resources.
               """
             ],
+            worker_restart_intensity: [
+              type: :keyword_list,
+              keys: [max_restarts: [type: :non_neg_integer], max_seconds: [type: :pos_integer]],
+              default: [max_restarts: 100, max_seconds: 60],
+              doc: """
+              How often a consumer or producer worker under this client may be restarted before
+              its partition gives up, as `[max_restarts: integer, max_seconds: integer]`.
+
+              Sized for correlated failures rather than for one worker: a broker losing its
+              connection exits every worker registered with it at once, and several partitions
+              or resources can go together. `Pulsar.Backoff` already holds a worker for seconds
+              before it gives up, so an unreachable broker cannot spend this budget.
+              """
+            ],
+            resource_restart_intensity: [
+              type: :keyword_list,
+              keys: [max_restarts: [type: :non_neg_integer], max_seconds: [type: :pos_integer]],
+              default: [max_restarts: 3, max_seconds: 60],
+              doc: """
+              How many times a partition may give up before the consumer or producer it belongs
+              to does, and how many resources may do that before the client does. The failure
+              then reaches whatever supervises the client.
+
+              Much smaller than `:worker_restart_intensity`, and deliberately so: a partition
+              only gives up when it genuinely cannot run, and tying this to the larger budget
+              would make escalation depend on how quickly the failure comes back.
+              """
+            ],
             producers: [
               type: {:list, :keyword_list},
               default: [],
@@ -92,6 +120,14 @@ defmodule Pulsar.Client do
               """
             ]
           ] ++ BrokerOptions.schema()
+
+  @default_client_terms %{
+    broker_opts: [],
+    restart_intensity: [
+      worker: @schema[:worker_restart_intensity][:default],
+      resource: @schema[:resource_restart_intensity][:default]
+    ]
+  }
 
   ## Public API
 
@@ -128,9 +164,14 @@ defmodule Pulsar.Client do
   @impl true
   def init(opts) do
     client_name = Keyword.fetch!(opts, :name)
-    broker_opts = build_broker_opts(opts)
 
-    :persistent_term.put(broker_opts_key(client_name), broker_opts)
+    :persistent_term.put(client_key(client_name), %{
+      broker_opts: build_broker_opts(opts),
+      restart_intensity: [
+        worker: Keyword.fetch!(opts, :worker_restart_intensity),
+        resource: Keyword.fetch!(opts, :resource_restart_intensity)
+      ]
+    })
 
     EpochStore.init(client_name)
 
@@ -194,7 +235,7 @@ defmodule Pulsar.Client do
 
     children = [
       {Registry, keys: :unique, name: registry},
-      {DynamicSupervisor, [strategy: :one_for_one, name: supervisor] ++ Pulsar.Topology.restart_intensity()},
+      {DynamicSupervisor, [strategy: :one_for_one, name: supervisor] ++ restart_intensity(client, :resource)},
       {Bootstrap, {kind, opts}}
     ]
 
@@ -221,6 +262,12 @@ defmodule Pulsar.Client do
   rescue
     # Registry.lookup/2 raises when the client's registry is not running.
     ArgumentError -> {:error, :not_found}
+  end
+
+  @doc false
+  @spec restart_intensity(atom(), :worker | :resource) :: keyword()
+  def restart_intensity(client_name, level) when level in [:worker, :resource] do
+    client_name |> client_term(:restart_intensity) |> Keyword.fetch!(level)
   end
 
   @doc false
@@ -312,8 +359,13 @@ defmodule Pulsar.Client do
   def resource_supervisor(:producers, client_name), do: Module.concat([__MODULE__, client_name, "ProducerSupervisor"])
 
   @doc false
-  def get_broker_opts(client_name) do
-    :persistent_term.get(broker_opts_key(client_name), [])
+  def get_broker_opts(client_name), do: client_term(client_name, :broker_opts)
+
+  defp client_term(client_name, key) do
+    client_name
+    |> client_key()
+    |> :persistent_term.get(@default_client_terms)
+    |> Map.fetch!(key)
   end
 
   @doc """
@@ -445,7 +497,7 @@ defmodule Pulsar.Client do
   def stop(client_name, opts \\ []) when is_atom(client_name) do
     timeout = Keyword.get(opts, :timeout, 5000)
 
-    :persistent_term.erase(broker_opts_key(client_name))
+    :persistent_term.erase(client_key(client_name))
 
     try do
       Supervisor.stop(client_name, :normal, timeout)
@@ -500,5 +552,5 @@ defmodule Pulsar.Client do
     Keyword.take(opts, BrokerOptions.keys())
   end
 
-  defp broker_opts_key(client_name), do: {__MODULE__, client_name, :broker_opts}
+  defp client_key(client_name), do: {__MODULE__, client_name}
 end

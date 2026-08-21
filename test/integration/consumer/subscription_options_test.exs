@@ -228,7 +228,7 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     refute "non-durable" in subscriptions
   end
 
-  test "force_create_topic: false leaves the consumer running with no workers" do
+  test "force_create_topic: false stops the consumer instead of leaving it running" do
     non_existent_topic = "persistent://public/default/subscription-options-non-existent"
 
     {:ok, no_force_create_group} =
@@ -239,20 +239,11 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
         subscription_options(:earliest, force_create_topic: false)
       )
 
-    :ok = Topology.await_ready(no_force_create_group, 1_000)
-
-    # The topic does not exist and this consumer will not create one, so its worker gives up
-    # rather than ever becoming ready.
-    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(no_force_create_group) == []
-
-    assert Process.alive?(no_force_create_group)
-    assert no_force_create_group in Pulsar.Client.consumers(@client)
-    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
-
     ref = Process.monitor(no_force_create_group)
-    assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, _reason}
+
+    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, :shutdown}, 5_000
+
+    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 1_000) == {:error, :not_found}
     refute no_force_create_group in Pulsar.Client.consumers(@client)
   end
 

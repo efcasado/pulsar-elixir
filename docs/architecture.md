@@ -143,14 +143,60 @@ batching domain per partition. Consumer groups may contain several workers, conf
 itself. This is why names, stop operations, client listings, and publishing target the logical
 resource instead of a particular worker.
 
-The stable root represents that logical resource even when none of its groups currently has
-a live worker. It remains registered and appears in client listings while operations report
-that no workers are available. This lets reconciliation recover the resource without changing
-the pid applications use to address it.
+The stable root represents that logical resource across worker restarts and broker
+reconnections. It remains registered and appears in client listings while operations report
+that no workers are available, so the pid applications use to address the resource does not
+change while its workers churn.
+
+Every level of the tree is `restart: :permanent`, so an exit means one thing only: something
+went wrong, and it is passed upward. A worker that is finished, or that hit something retrying
+cannot fix, therefore does not exit. It asks to be retired, and `Pulsar.Topology.Discovery`
+terminates it through its parent, which no restart type undoes. Its slot stays `:undefined`,
+which is also what tells discovery the partition is accounted for and must not be built again.
+
+Retiring cascades. A group whose workers have all gone is retired from the root, and a root
+whose groups have all gone is removed from its client, taking discovery and any companions
+with it. One partition of a terminated topic finishing leaves its siblings draining at their
+own pace; the last one to finish takes the whole resource away and leaves nothing behind.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
 that group's worker. Consumer workers receive broker messages and invoke the configured
 `Pulsar.Consumer.Callback` in the worker process.
+
+## Partitioned and Non-Partitioned Resources
+
+Both shapes are the same resource to a caller. There is one stable root either way, and it is what
+names, listings, `stop`, `await_ready` and publishing address. Each unit of work is one group, groups
+hold the workers, and retiring cascades identically. <code>Pulsar.Topology.groups/1</code> answers
+`{index, pid}` for both — a non-partitioned topology reports its single group at index zero, and a
+group passed directly answers itself — so code routing over either shape needs no special case.
+
+The differences all sit below that line.
+
+**Identity.** A non-partitioned group has the child id `{:topic, :non_partitioned}`; a partitioned one
+has `{:partition, index}`. Those ids are the tree's memory: reconciliation derives the set of existing
+partitions from them with the pid wildcarded, which is how a retired partition reads as accounted for
+rather than missing.
+
+**What a worker is told.** A partition worker is started with `:topic` set to its own partition and
+`:base_topic` to the topic the resource was configured with, alongside its `:partition` index. A
+non-partitioned worker has the two topics equal and `:partition` set to `nil`. A callback can tell
+which partition it handles without inspecting the tree it lives in.
+
+**How many workers.** A producer group always holds one worker, preserving a single ordered send lane
+and one sequence-id and batching domain per partition. A consumer group holds `:consumer_count` of
+them, so a partitioned consumer runs partitions × `:consumer_count` workers in total.
+
+**Discovery.** Metadata answering zero partitions means non-partitioned, and discovery then stops
+polling — there is nothing for the topology to grow into. A partitioned topology keeps checking on
+`:partition_discovery_interval_ms`. Growth is one-way: Pulsar topics do not shrink, so a lower
+transient result never removes groups.
+
+**Mismatches are refused rather than reconciled.** A non-partitioned topology later told it has
+partitions answers `{:error, {:incompatible_topology, :non_partitioned, count}}`, and a tree holding
+both a non-partitioned group and partition groups answers `{:error, :inconsistent_topology}`. Neither
+is repaired in place, because either would mean the topic changed identity underneath a running
+resource.
 
 ## Startup Is Asynchronous
 
@@ -181,11 +227,10 @@ periodically checks for newly added partitions and adds the missing groups witho
 the existing ones. Pulsar topics do not shrink, so a lower transient metadata result does not
 remove groups.
 
-Independently of those broker checks, Discovery periodically reconciles the topology shape it
-already knows. This local pass revives stopped groups for both partitioned and non-partitioned
-topics without making a metadata request. Setting `:partition_discovery_interval_ms` to
-`false` disables only later metadata checks; initial discovery and local group recovery remain
-enabled.
+A retired group is never rebuilt. Its workers finished, or stopped for a reason retrying
+cannot change, and its `:undefined` slot is what discovery reads to know the partition is
+accounted for. Setting `:partition_discovery_interval_ms` to `false` disables later metadata
+checks; initial discovery still runs.
 
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
@@ -216,10 +261,12 @@ Recovery happens at the narrowest useful boundary:
 - An unexpected worker failure is restarted inside its group.
 - A broker connection loss restarts the workers that depended on it while the client remains
   available.
-- A terminal broker rejection, such as an incompatible schema, ends that worker's immediate
-  retry cycle. A group with no viable workers shuts down, but the stable root and Discovery
-  remain available. A later reconciliation pass can try the stopped group again without
-  immediately repeating the terminal failure.
+- A terminal broker rejection, such as an incompatible schema or an `:exclusive` subscription
+  already held, retires that worker rather than restarting it into the same answer. Its group
+  is retired once its last worker has gone, and the resource once its last group has. Callers
+  then see `{:error, :not_found}` rather than a registered resource with nothing in it.
+- A resource that cannot run at all is not left quietly missing; the failure reaches whatever
+  supervises the client. See [Error Propagation](#error-propagation).
 - A consumer branch failure is isolated from the producer branch, and vice versa.
 - A client or branch restart recreates declared resources; runtime resources remain the
   responsibility of their caller.
@@ -228,19 +275,58 @@ Registry and broker lookups also account for these restart windows. Public opera
 their documented error tuples when a client, branch, registry, broker, or worker is missing
 instead of making the caller exit because an internal process is temporarily unavailable.
 
+## Error Propagation
+
+One rule decides the shape of this: **an exit is a failure**. Anything finished leaves by being
+removed from its supervisor, which no restart type undoes and which spends no budget. Every exit that
+reaches a supervisor is therefore something going wrong, and it is allowed to travel.
+
+It travels one level at a time, and each level has a budget:
+
+| Level | Absorbs | Budget |
+| --- | --- | --- |
+| group | worker exits | `:worker_restart_intensity` |
+| root | groups that gave up | `:resource_restart_intensity` |
+| client branch | resources that gave up | `:resource_restart_intensity` |
+| client | branches that gave up | OTP's default |
+
+A worker that crashes is restarted in place. A partition that cannot run exhausts the worker budget
+and its group exits. A resource whose partitions keep giving up exhausts the resource budget and its
+root exits. A client whose resources keep giving up runs out in turn, and the failure arrives at
+whatever supervises the client.
+
+Two things keep that from firing on ordinary trouble.
+
+A broker being away cannot spend the worker budget. <code>Pulsar.Backoff</code> holds a starting
+worker for its retry budget before giving up, so a start against an unreachable broker costs seconds
+rather than microseconds and an outage produces far fewer restarts than the window allows. A group
+that exits has hit something retrying cannot fix.
+
+The two budgets are deliberately far apart. `:worker_restart_intensity` is sized for correlated
+failure — a broker dropping every worker registered with it at once. `:resource_restart_intensity` is
+small, because it counts events that already mean something is broken. Sharing one number between the
+levels would tie escalation to how quickly a failure returns: with the larger budget at both levels,
+100 group failures at a 10ms round trip is 112 seconds against a 60 second window, so the level above
+never exhausts and the resource loops instead of coming down. Both are configured on `Pulsar.Client`.
+
+Retirement contributes to none of this. A retired worker, group or resource was terminated by its
+parent rather than exiting, so it costs no restart and escalates nothing.
+
 ## Implementation Notes for Contributors
 
 <code>Pulsar.Topology</code> is the stable root of a logical resource, and
 <code>Pulsar.Topology.Group</code> owns the workers for one topic or partition. The stateful
-<code>Pulsar.Topology.Discovery</code> process owns discovery status, retry backoff, and polling;
-the stateless <code>Pulsar.Topology.Resolver</code> performs broker metadata and owner lookups.
+<code>Pulsar.Topology.Discovery</code> process owns discovery status, retry backoff, and polling,
+and is the only process that changes the shape of a resource's tree — both reconciliation and
+retirement are carried out there, so the two cannot interleave. <code>Pulsar.Topology</code>
+supplies those operations and Discovery performs them; the stateless
+<code>Pulsar.Topology.Resolver</code> performs broker metadata and owner lookups.
 These modules remain behind the Consumer and Producer facades.
 
 After a metadata lookup, Discovery reconciles the root and remembers the resulting partition
-count. A separate local schedule reconciles that known shape without contacting a broker. A
-pass first restarts stopped groups whose child specifications remain under the root, then adds
-missing partition groups from highest index to lowest. Existing groups are not replaced, and
-a lower metadata result never removes partitions.
+count. A pass adds missing partition groups from highest index to lowest. Existing groups are
+not replaced, retired groups are left alone, and a lower metadata result never removes
+partitions.
 
 Starting higher indexes first lets producer routing treat growth as one transition. Routing
 uses the contiguous partition range beginning at zero, so a partial 4-to-6 expansion continues
@@ -257,15 +343,16 @@ Discovery and reconciliation logs report topology changes and failures. Their te
 use `[:pulsar, :topology, :discovery, ...]` and
 `[:pulsar, :topology, :reconciliation, ...]`; resolver spans use
 `[:pulsar, :topology, :resolver, ...]`. Metadata polling follows
-`:partition_discovery_interval_ms`, while local recovery remains enabled when polling is
-disabled.
+`:partition_discovery_interval_ms`.
 
 ## Design Invariants
 
 1. A consumer or producer cannot outlive the client context it depends on.
-2. Each logical consumer or producer has one registered stable root, even while it has no
-   live workers.
+2. Each logical consumer or producer has one registered stable root, which persists while its
+   workers restart and is removed once every one of its groups has been retired.
 3. Partitions, groups, and worker pids stay behind the public facade.
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.
 6. Declared resources are restored automatically; owners restore runtime resources.
+7. An exit means a failure and is passed upward. Anything that is finished leaves by being
+   removed from its supervisor, never by exiting.

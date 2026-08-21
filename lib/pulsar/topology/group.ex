@@ -3,7 +3,7 @@ defmodule Pulsar.Topology.Group do
 
   @behaviour Supervisor
 
-  alias Pulsar.Topology
+  alias Pulsar.Client
 
   require Logger
 
@@ -15,6 +15,7 @@ defmodule Pulsar.Topology.Group do
   @impl true
   def init({worker, count, opts}) do
     name = Keyword.fetch!(opts, :name)
+    client = Keyword.fetch!(opts, :client)
 
     Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
@@ -28,15 +29,13 @@ defmodule Pulsar.Topology.Group do
         %{
           id: worker_name,
           start: {worker, :start_link, [Keyword.put(opts, :name, worker_name)]},
-          restart: :transient,
-          significant: true,
+          restart: :permanent,
           type: :worker
         }
       end
 
-    # A worker that stops cleanly hit something retrying cannot fix, so it is not brought back.
-    # :all_significant then keeps the group running while any sibling still has the topic, and
-    # shuts it down once the last one is gone rather than leaving a group with nothing in it.
-    Supervisor.init(children, [strategy: :one_for_one, auto_shutdown: :all_significant] ++ Topology.restart_intensity())
+    # A worker that is finished is retired rather than exiting, so every exit reaching here is a
+    # failure.
+    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker))
   end
 end

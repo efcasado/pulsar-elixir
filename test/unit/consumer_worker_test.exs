@@ -429,10 +429,11 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert {:noreply, ^state} = Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
 
-    test "lets the callback stop the worker" do
+    test "lets the callback retire the worker" do
       state = %{worker_state() | callback_module: StoppingCallback}
 
-      assert {:stop, :normal, ^state} =
+      # Parks to be retired rather than exiting; end_of_topic_test.exs asserts it is then removed.
+      assert {:noreply, ^state} =
                Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
   end

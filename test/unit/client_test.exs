@@ -329,6 +329,35 @@ defmodule Pulsar.ClientTest do
     end
   end
 
+  describe "restart intensity" do
+    test "a client that does not configure them, and one that never started, answer the defaults" do
+      start_supervised!({Client, name: :intensity_defaults, host: "pulsar://127.0.0.1:1"})
+
+      assert Client.restart_intensity(:intensity_defaults, :worker) == [max_restarts: 100, max_seconds: 60]
+      assert Client.restart_intensity(:intensity_defaults, :resource) == [max_restarts: 3, max_seconds: 60]
+      assert Client.restart_intensity(:never_started, :resource) == [max_restarts: 3, max_seconds: 60]
+    end
+
+    test "what a client configures reaches its resource supervisors" do
+      start_supervised!(
+        {Client,
+         name: :intensity_configured,
+         host: "pulsar://127.0.0.1:1",
+         worker_restart_intensity: [max_restarts: 7, max_seconds: 11],
+         resource_restart_intensity: [max_restarts: 1, max_seconds: 5]}
+      )
+
+      assert Client.restart_intensity(:intensity_configured, :worker) == [max_restarts: 7, max_seconds: 11]
+      assert Client.restart_intensity(:intensity_configured, :resource) == [max_restarts: 1, max_seconds: 5]
+
+      supervisor = Process.whereis(Client.resource_supervisor(:consumers, :intensity_configured))
+      state = :sys.get_state(supervisor)
+
+      assert state.max_restarts == 1
+      assert state.max_seconds == 5
+    end
+  end
+
   describe "broker options" do
     test "owns the initial broker in a client-level broker branch" do
       client = :initial_broker_owner

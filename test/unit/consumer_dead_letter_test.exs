@@ -153,6 +153,18 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert Topology.resource?(restarted, :producers)
     end
 
+    test "a retired dead letter producer is not started over" do
+      root = root()
+      dlq = dead_letter_producer(root)
+      ref = Process.monitor(dlq)
+
+      # A static child, so it is reached by id; stopping a :permanent child would start it over.
+      :ok = Topology.remove(dlq)
+      assert_receive {:DOWN, ^ref, :process, ^dlq, _reason}
+
+      assert dead_letter_producer(root) == nil
+    end
+
     test "goes down with the consumer that owns it" do
       root = root()
       dlq = dead_letter_producer(root)
