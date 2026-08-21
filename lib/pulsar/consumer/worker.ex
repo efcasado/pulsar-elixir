@@ -223,7 +223,8 @@ defmodule Pulsar.Consumer.Worker do
       # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic stays
       # malformed, and an :exclusive subscription already taken stays taken.
       {:error, {code, _message} = reason} when code in @terminal_errors ->
-        Topology.retire(self(), reason)
+        Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
+        Topology.stop(self())
         {:noreply, state}
 
       {:error, reason} ->
@@ -464,8 +465,8 @@ defmodule Pulsar.Consumer.Worker do
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-      {:stop, reason, new_callback_state} ->
-        Topology.retire(self(), reason)
+      {:stop, _reason, new_callback_state} ->
+        Topology.stop(self())
         {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
@@ -478,8 +479,8 @@ defmodule Pulsar.Consumer.Worker do
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-      {:stop, reason, new_callback_state} ->
-        Topology.retire(self(), reason)
+      {:stop, _reason, new_callback_state} ->
+        Topology.stop(self())
         {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
@@ -716,12 +717,12 @@ defmodule Pulsar.Consumer.Worker do
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-      {:stop, reason, reply, new_callback_state} ->
-        Topology.retire(self(), reason)
+      {:stop, _reason, reply, new_callback_state} ->
+        Topology.stop(self())
         {:reply, reply, %{state | callback_state: new_callback_state}}
 
-      {:stop, reason, new_callback_state} ->
-        Topology.retire(self(), reason)
+      {:stop, _reason, new_callback_state} ->
+        Topology.stop(self())
         {:noreply, %{state | callback_state: new_callback_state}}
     end
   end
@@ -735,8 +736,8 @@ defmodule Pulsar.Consumer.Worker do
       {:noreply, new_callback_state, timeout_or_hibernate} ->
         {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
 
-      {:stop, reason, new_callback_state} ->
-        Topology.retire(self(), reason)
+      {:stop, _reason, new_callback_state} ->
+        Topology.stop(self())
         {:noreply, %{state | callback_state: new_callback_state}}
     end
   end

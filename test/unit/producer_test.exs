@@ -3,8 +3,8 @@ defmodule Pulsar.ProducerTest do
 
   alias Pulsar.Hash
   alias Pulsar.Producer
-  alias Pulsar.Topology
   alias Pulsar.Topology.Group
+  alias Pulsar.Topology.Root
 
   defmodule RoutingWorker do
     @moduledoc false
@@ -182,7 +182,7 @@ defmodule Pulsar.ProducerTest do
     root =
       start_supervised!(%{
         id: {:routing_topology, System.unique_integer([:positive])},
-        start: {Topology, :start_link, [RoutingWorker, registry, :producers, opts, [resolver: resolver]]},
+        start: {Root, :start_link, [RoutingWorker, registry, :producers, opts, [resolver: resolver]]},
         type: :supervisor
       })
 

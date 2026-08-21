@@ -1,18 +1,17 @@
 defmodule Pulsar.Topology do
   @moduledoc false
 
-  # Stable root for one logical consumer or producer; Discovery reconciles its internal groups.
-
-  @behaviour Supervisor
+  # Everything asked of a resource from outside it: which level a pid is, what a root owns,
+  # whether it is ready, and stopping a resource or one of its workers.
 
   alias Pulsar.Backoff
   alias Pulsar.Client
   alias Pulsar.Consumer.Worker, as: ConsumerWorker
   alias Pulsar.Hash
   alias Pulsar.Producer.Worker, as: ProducerWorker
-  alias Pulsar.Topic
-  alias Pulsar.Topology.Discovery
+  alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Group
+  alias Pulsar.Topology.Root
 
   require Logger
 
@@ -20,38 +19,6 @@ defmodule Pulsar.Topology do
     client: [type: {:or, [:atom, :pid]}, default: :default],
     timeout: [type: :timeout, default: 5_000]
   ]
-
-  @doc false
-  def child_spec(module, id, opts) do
-    %{
-      id: {module, id},
-      start: {module, :start_link, [opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
-  end
-
-  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword()) ::
-          Supervisor.on_start()
-  def start_link(worker, registry, kind, opts) when kind in [:consumers, :producers] do
-    start_link(worker, registry, kind, opts, [])
-  end
-
-  # The fifth argument is an internal seam for exercising asynchronous discovery without a
-  # broker. Consumer and Producer deliberately keep it out of the API they document.
-  @doc false
-  @spec start_link(module(), atom() | nil, :consumers | :producers, keyword(), keyword()) ::
-          Supervisor.on_start()
-  def start_link(worker, registry, kind, opts, controller_opts) when kind in [:consumers, :producers] do
-    name = Keyword.fetch!(opts, :name)
-    config = %{worker: worker, kind: kind, worker_count: worker_count(kind, opts), opts: opts}
-
-    Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
-  end
-
-  defp start_options(nil, _name), do: []
-  defp start_options(registry, name), do: [name: {:via, Registry, {registry, name}}]
-
   @typedoc false
   @type status :: :initializing | {:ready, :non_partitioned | {:partitioned, pos_integer()}}
 
@@ -187,24 +154,30 @@ defmodule Pulsar.Topology do
       :initializing
   end
 
-  defp controller(root) do
-    root
-    |> supervisor_children()
-    |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, _kind, _topic, _scheme}, pid, :worker, [Discovery]} when is_pid(pid) -> {:ok, pid}
-      _child -> false
+  defp controller_child(children) do
+    Enum.find_value(children, fn
+      {{Controller, kind, topic, scheme}, pid, :worker, [Controller]} ->
+        %{kind: kind, topic: topic, scheme: scheme, pid: pid}
+
+      _child ->
+        false
     end)
+  end
+
+  defp controller(root) do
+    case controller_child(supervisor_children(root)) do
+      %{pid: pid} when is_pid(pid) -> {:ok, pid}
+      _not_running -> {:error, :not_found}
+    end
   end
 
   @doc false
   @spec topic(pid()) :: String.t() | {:error, :not_found}
   def topic(root) do
-    root
-    |> supervisor_children()
-    |> Enum.find_value({:error, :not_found}, fn
-      {{Discovery, _kind, topic, _scheme}, _pid, :worker, [Discovery]} -> topic
-      _child -> false
-    end)
+    case controller_child(supervisor_children(root)) do
+      %{topic: topic} -> topic
+      nil -> {:error, :not_found}
+    end
   end
 
   @doc false
@@ -214,15 +187,13 @@ defmodule Pulsar.Topology do
   end
 
   defp resource_kind(root) do
-    root
-    |> supervisor_children()
-    |> Enum.find_value(:unknown, fn
-      {{Discovery, kind, _topic, _scheme}, _pid, :worker, [Discovery]} -> kind
-      _child -> false
-    end)
+    case controller_child(supervisor_children(root)) do
+      %{kind: kind} -> kind
+      nil -> :unknown
+    end
   end
 
-  # Discovery is also an OTP :worker child, so traversal explicitly allows only resource workers.
+  # Controller is also an OTP :worker child, so traversal explicitly allows only resource workers.
   @worker_modules [ConsumerWorker, ProducerWorker]
 
   @doc """
@@ -293,13 +264,14 @@ defmodule Pulsar.Topology do
   end
 
   defp hashing_scheme_from(children) do
-    Enum.find_value(children, fn
-      {{Discovery, _kind, _topic, scheme}, _pid, :worker, [Discovery]} -> scheme
-      _child -> false
-    end)
+    case controller_child(children) do
+      %{scheme: scheme} -> scheme
+      nil -> nil
+    end
   end
 
-  defp supervisor_children(supervisor) do
+  @doc false
+  def supervisor_children(supervisor) do
     Supervisor.which_children(supervisor)
   catch
     :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
@@ -318,64 +290,55 @@ defmodule Pulsar.Topology do
   @spec kind(pid()) :: :topology | :group | :worker
   def kind(pid) do
     case :proc_lib.initial_call(pid) do
-      {:supervisor, __MODULE__, _args} -> :topology
+      {:supervisor, Root, _args} -> :topology
       {:supervisor, Group, _args} -> :group
       _worker -> :worker
     end
   end
 
   @doc """
-  Retires `worker`, and whatever above it is left with nothing to do.
+  Stops a resource, or one worker of one.
 
-  Retiring is how a worker that is finished, or that hit something retrying cannot fix, leaves
-  the tree. It is terminated by its parent rather than exiting, and no restart type undoes that,
-  so an exit is left to mean one thing only: something went wrong. The slot stays `:undefined`,
-  which is what tells discovery the partition is accounted for and must not be built again.
+  Whichever it is, the subject is terminated by its parent rather than exiting, which no restart
+  type undoes, so an exit is left to mean one thing only: something went wrong. The slot stays
+  `:undefined`, which is what tells the controller it is accounted for and must not be built
+  again.
 
-  `Supervisor.terminate_child/2` returns only once the child is down, so the tree can be read
-  straight afterwards to decide whether to carry on up: a group whose workers have all gone is
-  retired from the root, and a root whose groups have all gone is removed from its client.
+  Stopping a worker cascades. `Supervisor.terminate_child/2` returns only once the child is
+  down, so the tree can be read straight afterwards to decide whether to carry on up: a group
+  whose workers have all gone is stopped from the root, and a root whose groups have all gone is
+  stopped from its client.
+
+  `:ok` does not mean the same thing throughout. A root is gone by the time this returns. A
+  group or a worker has only been *asked* for, because the caller is often the worker itself and
+  a child that terminates through its own supervisor dies mid-call, taking the rest of the
+  cascade with it - so that half is handed to the controller and runs there. Wait for a `:DOWN`
+  rather than checking liveness straight after.
   """
-  @spec retire(pid(), term()) :: :ok
-  def retire(worker, reason \\ :retired) when is_pid(worker) do
-    # Discovery does it: a child asking its own supervisor to terminate it is shut down mid-call,
-    # taking the rest of the cascade with it.
+  @spec stop(pid()) :: :ok
+  def stop(pid) when is_pid(pid) do
+    case kind(pid) do
+      :topology -> stop_root(pid)
+      :worker -> stop_worker(pid)
+    end
+  end
+
+  defp stop_worker(worker) do
     with group when is_pid(group) <- owning_supervisor(worker),
          root when is_pid(root) <- owning_supervisor(group),
          {:ok, controller} <- controller(root) do
-      Logger.info("Retiring worker for #{topic(root)}: #{inspect(reason)}")
-      Discovery.retire(controller, worker)
+      Logger.info("Stopping worker for #{topic(root)}")
+      Controller.stop_worker(controller, worker)
     else
       _unavailable -> :ok
     end
   end
 
+  # Only a supervisor is asked to terminate a child. Started with `start_link/1` from an
+  # ordinary process, the first ancestor is whoever called it — and asking a GenServer to
+  # `terminate_child` crashes it on an unmatched call while this reports success.
   @doc false
-  @spec perform_retirement(pid(), pid()) :: :ok
-  def perform_retirement(root, worker) do
-    with group when is_pid(group) <- owning_supervisor(worker),
-         true <- terminated?(group, worker) and empty?(group) do
-      retire_group(root, group)
-    else
-      _nothing_to_cascade -> :ok
-    end
-  end
-
-  # Removing the root takes Discovery, and so this call, with it. The removal still completes.
-  defp retire_group(root, group) do
-    if terminated?(root, group) and no_groups_left?(root), do: remove(root), else: :ok
-  end
-
-  defp no_groups_left?(root), do: Enum.all?(groups(root), fn {_index, pid} -> not is_pid(pid) end)
-
-  defp terminated?(supervisor, child) do
-    case child_id(supervisor, child) do
-      {:ok, id} -> terminate_by_id(supervisor, id) == :ok
-      :error -> false
-    end
-  end
-
-  defp child_id(supervisor, pid) do
+  def child_id(supervisor, pid) do
     supervisor
     |> supervisor_children()
     |> Enum.find_value(:error, fn
@@ -384,75 +347,35 @@ defmodule Pulsar.Topology do
     end)
   end
 
-  defp empty?(supervisor) do
-    supervisor
-    |> supervisor_children()
-    |> Enum.all?(fn {_id, pid, _type, _modules} -> not is_pid(pid) end)
-  end
-
-  defp terminate_by_id(supervisor, id) do
+  @doc false
+  def terminate_by_id(supervisor, id) do
     Supervisor.terminate_child(supervisor, id)
   catch
     :exit, _reason -> {:error, :not_found}
   end
 
-  @doc """
-  Removes `root` from the supervisor that owns it.
-
-  Used without a known owner for resources started directly with `start_link/1` and as the
-  fallback when the expected client supervisor does not own `root`.
-  """
-  @spec remove(pid()) :: :ok
-  def remove(root) do
+  # The owner is read from the root's ancestors rather than passed in. A resource started with
+  # start_link/1 from an ordinary process has no supervising owner, and is stopped directly.
+  defp stop_root(root) do
     supervisor = owning_supervisor(root)
 
     case terminate_by_pid(supervisor, root) do
       :ok -> :ok
-      {:error, :not_found} -> remove_by_id(supervisor, root)
+      {:error, :not_found} -> stop_by_id(supervisor, root)
     end
   end
 
   # A plain supervisor finds its children by id, not by pid, and merely stopping a :permanent
   # child would have it started over.
-  defp remove_by_id(nil, root), do: stop_directly(root)
+  defp stop_by_id(nil, root), do: stop_directly(root)
 
-  defp remove_by_id(supervisor, root) do
+  defp stop_by_id(supervisor, root) do
     with {:ok, id} <- child_id(supervisor, root),
          :ok <- terminate_by_id(supervisor, id) do
       :ok
     else
       _absent -> stop_directly(root)
     end
-  end
-
-  @doc false
-  @spec remove(pid(), GenServer.server()) :: :ok
-  def remove(root, supervisor) do
-    case terminate_by_pid(supervisor, root) do
-      :ok -> :ok
-      {:error, :not_found} -> remove(root)
-    end
-  end
-
-  # Only a supervisor is asked to terminate a child. Started with `start_link/1` from an
-  # ordinary process, the first ancestor is whoever called it — and asking a GenServer to
-  # `terminate_child` crashes it on an unmatched call while this reports success.
-  defp owning_supervisor(pid) do
-    with {:dictionary, dictionary} <- Process.info(pid, :dictionary),
-         [ancestor | _rest] <- Keyword.get(dictionary, :"$ancestors", []),
-         supervisor when not is_nil(supervisor) <- whereis(ancestor),
-         true <- supervisor?(supervisor) do
-      supervisor
-    else
-      _not_a_supervisor -> nil
-    end
-  end
-
-  defp whereis(name) when is_atom(name), do: Process.whereis(name)
-  defp whereis(pid) when is_pid(pid), do: pid
-
-  defp supervisor?(pid) do
-    match?({:supervisor, _module, _args}, :proc_lib.initial_call(pid))
   end
 
   defp terminate_by_pid(nil, _pid), do: {:error, :not_found}
@@ -471,176 +394,22 @@ defmodule Pulsar.Topology do
     :exit, _reason -> :ok
   end
 
-  @impl true
-  def init({config, controller_opts}) do
-    {config, companions} = attach_companions(config, self())
-    %{worker: worker, opts: opts} = config
-    topic = Keyword.fetch!(opts, :topic)
-    client = Keyword.fetch!(opts, :client)
-
-    Logger.debug("Starting #{inspect(worker)} topology for topic #{topic}")
-
-    discovery =
-      {self(), config, controller_opts}
-      |> Discovery.child_spec()
-      |> Map.put(:id, {Discovery, config.kind, topic, hashing_scheme_for_config(config)})
-
-    # Companions start before discovery so a worker never observes the tree without them. They
-    # resolve their own brokers asynchronously, so none of them delays this root coming up.
-    children = companions ++ [discovery]
-
-    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
-  end
-
-  # Popped rather than read: `:companions` configures this root and is not part of what a worker
-  # is started with.
-  defp attach_companions(config, root) do
-    case Keyword.pop(config.opts, :companions) do
-      {nil, opts} ->
-        {%{config | opts: opts}, []}
-
-      {attach, opts} ->
-        {opts, specs} = attach.(opts, root)
-        {%{config | opts: opts}, specs}
-    end
-  end
-
-  # Carried on the child id so routing reads it from the same which_children the groups come
-  # from, keeping a send to one call. The registry value would be the usual place for this, but
-  # it cannot serve every caller: Producer.send/3 takes a pid without consulting the registry,
-  # and a producer started with start_link_unregistered/1 has none.
-  #
-  # nil where a resource does not route on a key, and for a producer whose options have not been
-  # through Producer.Options; Hash.partition/3 resolves it to the default.
-  defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
-    Keyword.get(opts, :hashing_scheme)
-  end
-
-  defp hashing_scheme_for_config(_config), do: nil
-
   @doc false
-  @spec reconcile(pid(), non_neg_integer(), map()) ::
-          {:ok, %{partition_count: non_neg_integer(), added_groups: [non_neg_integer()]}}
-          | {:error, term()}
-  def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
-    children = Supervisor.which_children(root)
-
-    case reconcile_children(root, children, desired, config) do
-      {:ok, partition_count, added_groups} ->
-        {:ok, %{partition_count: partition_count, added_groups: added_groups}}
-
-      {:error, _reason} = error ->
-        error
-    end
-  catch
-    :exit, reason -> {:error, reason}
-  end
-
-  defp reconcile_children(root, children, desired, config) do
-    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
-
-    partitions =
-      Enum.flat_map(children, fn
-        {{:partition, index}, _pid, :supervisor, _modules} -> [index]
-        _child -> []
-      end)
-
-    reconcile_shape(topology_shape(topic?, partitions), root, desired, config)
-  end
-
-  defp topology_shape(true, partitions) do
-    if partitions == [], do: :non_partitioned, else: :inconsistent
-  end
-
-  defp topology_shape(false, partitions) do
-    if partitions == [], do: :empty, else: {:partitioned, partitions}
-  end
-
-  defp reconcile_shape(:non_partitioned, _root, 0, _config), do: {:ok, 0, []}
-
-  defp reconcile_shape(:non_partitioned, _root, desired, _config) do
-    {:error, {:incompatible_topology, :non_partitioned, desired}}
-  end
-
-  defp reconcile_shape(:inconsistent, _root, _desired, _config) do
-    {:error, :inconsistent_topology}
-  end
-
-  defp reconcile_shape({:partitioned, partitions}, _root, 0, _config) do
-    {:ok, partition_width(partitions), []}
-  end
-
-  defp reconcile_shape({:partitioned, partitions}, root, desired, config) do
-    with {:ok, added_groups} <- add_missing_partitions(root, desired, partitions, config) do
-      {:ok, max(desired, partition_width(partitions)), added_groups}
+  def owning_supervisor(pid) do
+    with {:dictionary, dictionary} <- Process.info(pid, :dictionary),
+         [ancestor | _rest] <- Keyword.get(dictionary, :"$ancestors", []),
+         supervisor when not is_nil(supervisor) <- whereis(ancestor),
+         true <- supervisor?(supervisor) do
+      supervisor
+    else
+      _not_a_supervisor -> nil
     end
   end
 
-  defp reconcile_shape(:empty, root, 0, config) do
-    with :ok <- start_group(root, topic_child_spec(config)), do: {:ok, 0, [0]}
-  end
+  defp whereis(name) when is_atom(name), do: Process.whereis(name)
+  defp whereis(pid) when is_pid(pid), do: pid
 
-  defp reconcile_shape(:empty, root, desired, config) do
-    with {:ok, added_groups} <- add_missing_partitions(root, desired, [], config) do
-      {:ok, desired, added_groups}
-    end
-  end
-
-  defp partition_width(partitions), do: Enum.max(partitions) + 1
-
-  defp add_missing_partitions(root, desired, existing, config) do
-    0..(desired - 1)
-    |> Enum.reject(&(&1 in existing))
-    |> Enum.sort(:desc)
-    |> Enum.reduce_while({:ok, []}, fn index, {:ok, added} ->
-      case start_group(root, partition_child_spec(index, config)) do
-        :ok -> {:cont, {:ok, [index | added]}}
-        {:error, reason} -> {:halt, {:error, {:partition_start_failed, index, reason}}}
-      end
-    end)
-  end
-
-  defp start_group(root, child_spec) do
-    case Supervisor.start_child(root, child_spec) do
-      {:ok, _pid} -> :ok
-      {:ok, _pid, _info} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # :topic is the topic a worker subscribes to and :base_topic the one the resource was
-  # configured with; they differ only for a partition. Workers carry both so a callback can
-  # tell which partition it handles without inspecting the tree it lives in.
-  defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
-    topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
-
-    group_child_spec({:topic, :non_partitioned}, worker, worker_count, topic_opts)
-  end
-
-  defp partition_child_spec(partition_index, %{worker: worker, worker_count: worker_count, opts: opts}) do
-    base_topic = Keyword.fetch!(opts, :topic)
-
-    partition_opts =
-      Keyword.merge(opts,
-        topic: Topic.partition(base_topic, partition_index),
-        base_topic: base_topic,
-        partition: partition_index,
-        name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
-      )
-
-    group_child_spec({:partition, partition_index}, worker, worker_count, partition_opts)
-  end
-
-  defp worker_count(:consumers, opts), do: Keyword.fetch!(opts, :consumer_count)
-  defp worker_count(:producers, _opts), do: 1
-
-  defp group_child_spec(id, worker, worker_count, opts) do
-    %{
-      id: id,
-      start: {Group, :start_link, [worker, worker_count, opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
+  defp supervisor?(pid) do
+    match?({:supervisor, _module, _args}, :proc_lib.initial_call(pid))
   end
 end

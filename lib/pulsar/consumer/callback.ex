@@ -219,7 +219,7 @@ defmodule Pulsar.Consumer.Callback do
         {:stop, :normal, state}
       end
 
-  Stopping is permanent. The worker is retired rather than restarted: its group is retired once
+  Stopping is permanent. The worker is stopped rather than restarted: its group is stopped once
   its last worker has gone, and the consumer once its last group has, so a non-partitioned
   consumer that stops here goes away entirely and leaves nothing registered. Stopping only some
   of a `:consumer_count` leaves the group running with fewer workers.

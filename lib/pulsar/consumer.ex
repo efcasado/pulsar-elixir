@@ -62,9 +62,10 @@ defmodule Pulsar.Consumer do
   alias Pulsar.Consumer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topology
+  alias Pulsar.Topology.Root
 
   @doc false
-  def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
+  def child_spec(opts), do: Root.child_spec(__MODULE__, id(opts), opts)
 
   @doc """
   Starts a consumer, linked to the calling process.
@@ -84,7 +85,7 @@ defmodule Pulsar.Consumer do
       end)
       |> Keyword.put(:companions, &DeadLetter.attach/2)
 
-    Topology.start_link(Worker, Client.registry(:consumers, client), :consumers, opts)
+    Root.start_link(Worker, Client.registry(:consumers, client), :consumers, opts)
   end
 
   @doc """
@@ -150,14 +151,16 @@ defmodule Pulsar.Consumer do
   rather than exiting it, so it stays stopped; its child spec remains in that tree as
   `:undefined` until the supervisor restarts. A consumer declared on a client is not a static
   child: stopping it removes it until the client restarts.
+
+  `:client` selects which client to resolve a name through, and is not needed for a pid: the
+  supervisor that owns a root is read from the root itself.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(consumer, opts \\ [])
 
-  def stop(consumer, opts) when is_pid(consumer) do
+  def stop(consumer, _opts) when is_pid(consumer) do
     if Topology.resource?(consumer, :consumers) do
-      client = Keyword.get(opts, :client, :default)
-      Topology.remove(consumer, Client.resource_supervisor(:consumers, client))
+      Topology.stop(consumer)
     else
       {:error, :not_found}
     end

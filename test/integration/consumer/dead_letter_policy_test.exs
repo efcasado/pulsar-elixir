@@ -4,6 +4,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
   alias Pulsar.Consumer.DeadLetter
   alias Pulsar.Protocol.Binary.Pulsar.Proto
   alias Pulsar.Test.Support.DummyConsumer
+  alias Pulsar.Topology
 
   @topic "persistent://public/default/dlq-test-topic"
   @messages Enum.map(1..3, &"Message #{&1}")
@@ -298,7 +299,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
     dead_letter_ref = Process.monitor(dead_letter_root)
 
     # Removed rather than stopped: the companion is :permanent, so an exit would be started over.
-    :ok = Topology.remove(dead_letter_root)
+    :ok = Topology.stop(dead_letter_root)
     assert_receive {:DOWN, ^dead_letter_ref, :process, ^dead_letter_root, _reason}
 
     assert DeadLetter.producer(consumer_group) == {:error, :no_dead_letter_producer}
@@ -311,7 +312,7 @@ defmodule Pulsar.Integration.Consumer.DeadLetterPolicyTest do
                     {{:badmatch, {:error, :no_dead_letter_producer}}, _stacktrace}},
                    15_000
 
-    # It is crashing on a loop by design now, so take it down before reading the subscription.
+    # It is crashing on a loop by design, so take it down before reading the subscription.
     :ok = Pulsar.Consumer.stop(consumer_group, client: @client)
 
     {:ok, replacement} =
