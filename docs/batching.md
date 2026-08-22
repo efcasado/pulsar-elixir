@@ -112,6 +112,9 @@ and can receive values that compaction has superseded.
 
 **This is the part that behaves differently, and the part worth reading twice.**
 
+For callback outcomes, manual ACK/NACK, cumulative scope, and redelivery outside batching, start
+with [Acknowledgement and Redelivery](acknowledgements.html).
+
 An ack names the entry a message arrived in. There is no way to say "message 3 of this entry"
 unless the broker is configured for it, so acking one message of a batch would acknowledge every
 message batched with it — and lose the ones not yet processed.

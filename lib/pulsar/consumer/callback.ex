@@ -5,6 +5,9 @@ defmodule Pulsar.Consumer.Callback do
   This module provides a `use` macro that sets up your module as a consumer callback
   with default implementations for optional callbacks.
 
+  See the [acknowledgement and redelivery guide](acknowledgements.html) for how callback
+  results become ACKs, NACKs, manual acknowledgement, and retries.
+
   ## Usage
 
   Use this module in your consumer callback:

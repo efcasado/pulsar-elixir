@@ -13,7 +13,8 @@ defmodule Pulsar.Consumer do
 
   `ack/2` and `nack/2` acknowledge manually, from a process other than the worker that
   delivered the message. `send_flow/3` grants permits to a worker or every worker behind
-  the consumer root.
+  the consumer root. See the [acknowledgement and redelivery guide](acknowledgements.html) for
+  callback outcomes, manual acknowledgement, ACK scope, and retries.
 
   ## Flow Control
 
@@ -211,15 +212,17 @@ defmodule Pulsar.Consumer do
   ## Cumulative acknowledgement
 
   `ack_type: :cumulative` acknowledges everything up to and including the message instead,
-  moving the subscription cursor in one command rather than one per message. Nothing is
-  counted off, and a message left unacked is acknowledged by the next ack that passes it.
+  moving the subscription cursor through it. When one call names several messages, only the
+  furthest target is sent. Nothing is counted off, and a message left unacked is acknowledged
+  by the next ack that passes it.
 
   A cumulative ack can stop part-way through a batch when `:batch_index_ack_enabled` is true:
   its ack set covers the prefix through the target and retains the suffix for redelivery. With
   the flag off, the cursor moves only to the previous entry and the batch is redelivered whole.
 
   It is only available on `:exclusive` and `:failover` subscriptions. See the `:ack_type`
-  option for what it covers.
+  option for what it covers. The [acknowledgement and redelivery guide](acknowledgements.html)
+  puts automatic and manual ACKs, NACKs, cumulative scope, batches, and retries together.
   """
   @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
   def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)

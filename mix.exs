@@ -25,6 +25,7 @@ defmodule Pulsar.MixProject do
           "README.md",
           "CHANGELOG.md",
           "docs/architecture.md",
+          "docs/acknowledgements.md",
           "docs/batching.md",
           "docs/chunking.md",
           "docs/dead_letter_policies.md",
