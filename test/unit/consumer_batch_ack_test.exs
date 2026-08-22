@@ -21,6 +21,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
         :ack -> {:ok, answers}
         :defer -> {:noreply, answers}
         :nack -> {:error, :rejected, answers}
+        {:stop, reason} -> {:stop, reason, answers}
+      end
+    end
+
+    def handle_invalid_message(message, answers) do
+      send(self(), {:delivered, message.payload})
+
+      case Map.get(answers, message.payload, :ack) do
+        {:stop, reason} -> {:stop, reason, answers}
+        _other -> {:ok, answers}
       end
     end
   end
@@ -55,6 +65,34 @@ defmodule Pulsar.Consumer.BatchAckTest do
   @entry 42
 
   describe "acking a batched message" do
+    test "a normal callback stop acknowledges its message and halts the rest of the batch" do
+      answers = %{"b" => {:stop, :normal}}
+      assert {:stop, :normal, state} = deliver_result(worker_state(answers), ["a", "b", "c"])
+
+      assert_received {:delivered, "a"}
+      assert_received {:delivered, "b"}
+      refute_received {:delivered, "c"}
+      assert state.callback_state == answers
+    end
+
+    test "a reasoned callback stop carries its reason" do
+      assert {:stop, {:shutdown, :complete}, _state} =
+               deliver_result(worker_state(%{"a" => {:stop, {:shutdown, :complete}}}), ["a"])
+
+      assert [_ack] = acks()
+    end
+
+    test "an invalid-message callback can acknowledge and stop" do
+      state = worker_state(%{"invalid" => {:stop, :normal}})
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: message_id()}
+      delivery = {:broker_message, {:invalid, command, "invalid", :checksum_mismatch}}
+
+      assert {:stop, :normal, _state} = Worker.handle_info(delivery, state)
+      assert_received {:delivered, "invalid"}
+      assert [ack] = acks()
+      assert ack.validation_error == :ChecksumMismatch
+    end
+
     test "acknowledges the entry once, after the last message in it is acked" do
       deliver(worker_state(%{}), ["a", "b", "c"])
 
@@ -323,23 +361,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   describe "diverting a batch to the dead letter topic" do
-    test "does not acknowledge the entry when one message of it fails to divert" do
+    test "acknowledges nothing when the dead letter topic refuses a message of the entry" do
       state = diverting_state(refuse: ["b"])
 
-      state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
+      assert_raise MatchError, fn -> deliver(state, ["a", "b", "c"], redelivery_count: 1) end
 
-      # "a" and "c" reached the dead letter topic, but "b" did not, so the entry is still owed.
-      assert diverted_payloads() == ["a", "c"]
-      assert [] == acks()
-
-      # It is asked for again, so its tally goes: the entry comes back whole and has to answer
-      # for "a" and "c" a second time before it can be acknowledged.
-      assert {[%{batch_index: -1}], _acks} = Ack.take_nacked(state.acks)
-      assert state.acks.acked == %{}
+      assert acks() == []
     end
 
     test "acknowledges the entry once every message of it has been diverted" do
-      state = diverting_state(refuse: [])
+      state = diverting_state()
 
       state = deliver(state, ["a", "b", "c"], redelivery_count: 1)
 
@@ -361,22 +392,12 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
 
     test "counts a delivery diverted in full, which reaches no callback at all" do
-      state = %{diverting_state(refuse: []) | flow_outstanding_permits: 100}
+      state = %{diverting_state() | flow_outstanding_permits: 100}
 
       deliver(state, ["a", "b", "c"], redelivery_count: 1)
 
       assert delivered_payloads() == []
       assert diverted_payloads() == ["a", "b", "c"]
-      assert permits_reported() == [%{consumed: 3, outstanding: 97}]
-    end
-
-    test "counts a delivery in full even when part of it fails to divert and is nacked" do
-      state = %{diverting_state(refuse: ["b"]) | flow_outstanding_permits: 100}
-
-      deliver(state, ["a", "b", "c"], redelivery_count: 1)
-
-      assert delivered_payloads() == []
-      assert diverted_payloads() == ["a", "c"]
       assert permits_reported() == [%{consumed: 3, outstanding: 97}]
     end
 
@@ -440,10 +461,10 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   # A consumer whose dead letter producer is the stub above, past its redelivery limit.
   # DeadLetter.producer/1 looks for a `{:dead_letter, topic}` child reported as a supervisor.
-  defp diverting_state(opts) do
+  defp diverting_state(opts \\ []) do
     child = %{
       id: {:dead_letter, "dlq"},
-      start: {DeadLetterProducer, :start_link, [{Keyword.fetch!(opts, :refuse), self()}]},
+      start: {DeadLetterProducer, :start_link, [{Keyword.get(opts, :refuse, []), self()}]},
       type: :supervisor
     }
 
@@ -493,6 +514,11 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   # Broker commands are casts, so they arrive in the test process mailbox.
   defp deliver(state, payloads, opts \\ []) do
+    {:noreply, new_state} = deliver_result(state, payloads, opts)
+    new_state
+  end
+
+  defp deliver_result(state, payloads, opts \\ []) do
     command = %Binary.CommandMessage{
       consumer_id: 1,
       message_id: message_id(),
@@ -516,8 +542,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       |> Enum.map(fn {payload, index} -> encode_single_message(payload, index in compacted_out) end)
       |> :erlang.iolist_to_binary()
 
-    {:noreply, new_state} = Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)
-    new_state
+    Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)
   end
 
   defp deliver_unbatched(state, payload, opts \\ []) do

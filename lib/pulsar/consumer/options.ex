@@ -38,7 +38,10 @@ defmodule Pulsar.Consumer.Options do
     consumer_count: [
       type: :pos_integer,
       default: 1,
-      doc: "Number of consumer processes to start for the topic, or for each partition."
+      doc: """
+      Number of consumer processes to start for the topic, or for each partition. Must be `1`
+      for an `:exclusive` subscription, which admits a single consumer.
+      """
     ],
     init_args: [
       type: :any,
@@ -201,8 +204,7 @@ defmodule Pulsar.Consumer.Options do
       default: 60_000,
       doc: """
       For a partitioned topic, how often to look for partitions added since startup.
-      `false` disables later metadata checks, but not initial topic discovery or local
-      recovery of groups that have stopped.
+      `false` disables later metadata checks, but not initial topic discovery.
       """
     ],
     startup_delay_ms: [
@@ -228,7 +230,23 @@ defmodule Pulsar.Consumer.Options do
   Validates consumer options.
   """
   @spec validate!(keyword()) :: keyword()
-  def validate!(opts), do: opts |> NimbleOptions.validate!(@schema) |> validate_flow!()
+  def validate!(opts) do
+    opts
+    |> NimbleOptions.validate!(@schema)
+    |> validate_flow!()
+    |> validate_consumer_count!()
+  end
+
+  defp validate_consumer_count!(opts) do
+    if Keyword.fetch!(opts, :subscription_type) == :exclusive and Keyword.fetch!(opts, :consumer_count) > 1 do
+      raise ArgumentError,
+            "subscription_type: :exclusive admits a single consumer, so the ones past the first " <>
+              "are refused the subscription and stop on arrival. Set consumer_count: 1, or use " <>
+              "subscription_type: :failover to keep the rest standing by."
+    end
+
+    opts
+  end
 
   defp validate_flow!(opts) do
     if Keyword.fetch!(opts, :flow_policy) == :auto and Keyword.fetch!(opts, :flow_initial) == 0 do

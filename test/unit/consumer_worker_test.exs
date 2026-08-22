@@ -33,13 +33,32 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
   end
 
-  defmodule StoppingCallback do
+  defmodule EndOfTopicCallback do
     @moduledoc false
     use Pulsar.Consumer.Callback
 
     def handle_message(_message, state), do: {:ok, state}
 
-    def reached_end_of_topic(state), do: {:stop, :normal, state}
+    def reached_end_of_topic(:started), do: {:noreply, :drained}
+  end
+
+  defmodule LifecycleCallback do
+    @moduledoc false
+    use Pulsar.Consumer.Callback
+
+    def init(:nil_state, _context), do: {:ok, nil}
+
+    def handle_message(_message, state), do: {:ok, state}
+
+    def handle_call(:callback_state, _from, state), do: {:reply, state, state}
+    def handle_call(:stop, _from, _state), do: {:stop, :normal, :stopped, :call_state}
+
+    def handle_cast(:stop, _state), do: {:stop, :shutdown, :cast_state}
+    def handle_info(:stop, _state), do: {:stop, {:shutdown, :finished}, :info_state}
+
+    def became_active(_state), do: {:stop, :normal, :active_state}
+    def became_passive(_state), do: {:stop, :shutdown, :passive_state}
+    def reached_end_of_topic(_state), do: {:stop, {:shutdown, :drained}, :end_state}
   end
 
   @topic "persistent://public/default/orders"
@@ -66,6 +85,7 @@ defmodule Pulsar.Consumer.WorkerTest do
       callback_state: self(),
       consumer_id: 1,
       broker_pid: self(),
+      ready: true,
       acks: Ack.new(),
       flow_policy: :auto,
       flow_outstanding_permits: 100,
@@ -112,8 +132,56 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert state.ready
     end
 
-    test "stops without a state when the callback refuses to initialize" do
-      assert {:stop, :init_refused, nil} = Worker.handle_continue({:init_callback, :refuse}, worker_state())
+    # After the worker is running, so a callback that refuses spends a restart rather than
+    # failing Supervisor.start_child and leaving the controller retrying discovery forever.
+    test "stops the worker when the callback refuses to initialize" do
+      assert {:stop, :init_refused, _state} = Worker.handle_continue({:init_callback, :refuse}, worker_state())
+    end
+
+    test "a nil callback state remains initialized and receives delegated calls" do
+      state = %{worker_state() | callback_module: LifecycleCallback}
+
+      assert {:noreply, initialized} = Worker.handle_continue({:init_callback, :nil_state}, state)
+      assert initialized.ready
+      assert initialized.callback_state == nil
+
+      assert {:reply, nil, carried} = Worker.handle_call(:callback_state, self(), initialized)
+      assert carried.callback_state == nil
+    end
+  end
+
+  describe "callback completion" do
+    setup do
+      {:ok, state: %{worker_state() | callback_module: LifecycleCallback, callback_state: :started, ready: true}}
+    end
+
+    test "carries standard stop results from calls, casts and info", %{state: state} do
+      assert {:stop, :normal, :stopped, called} = Worker.handle_call(:stop, self(), state)
+      assert called.callback_state == :call_state
+
+      assert {:stop, :shutdown, casted} = Worker.handle_cast(:stop, state)
+      assert casted.callback_state == :cast_state
+
+      assert {:stop, {:shutdown, :finished}, informed} = Worker.handle_info(:stop, state)
+      assert informed.callback_state == :info_state
+    end
+
+    test "lets active, passive and end-of-topic notifications stop the worker", %{state: state} do
+      events = [
+        {%Binary.CommandActiveConsumerChange{is_active: true}, :normal, :active_state},
+        {%Binary.CommandActiveConsumerChange{is_active: false}, :shutdown, :passive_state},
+        {%Binary.CommandReachedEndOfTopic{}, {:shutdown, :drained}, :end_state}
+      ]
+
+      for {event, reason, callback_state} <- events do
+        assert {:stop, ^reason, stopped} = Worker.handle_info({:broker_message, event}, state)
+        assert stopped.callback_state == callback_state
+      end
+    end
+
+    test "ignores a linked process's normal exit but preserves abnormal failure", %{state: state} do
+      assert {:noreply, ^state} = Worker.handle_info({:EXIT, self(), :normal}, state)
+      assert {:stop, :linked_process_exited, ^state} = Worker.handle_info({:EXIT, self(), :boom}, state)
     end
   end
 
@@ -424,16 +492,26 @@ defmodule Pulsar.Consumer.WorkerTest do
 
   describe "reaching the end of a terminated topic" do
     test "keeps consuming by default" do
-      state = %{worker_state() | callback_state: :unchanged}
+      state = %{worker_state() | callback_state: :unchanged, ready: true}
 
       assert {:noreply, ^state} = Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
     end
 
-    test "lets the callback stop the worker" do
-      state = %{worker_state() | callback_module: StoppingCallback}
+    test "waits out its startup delay by timer rather than sleeping through it" do
+      state = worker_state()
 
-      assert {:stop, :normal, ^state} =
+      # Returning leaves it reading its mailbox, which is what lets it be shut down at all.
+      assert {:noreply, ^state} = Worker.handle_continue({:startup_delay, 30, 0, []}, state)
+      assert_receive {:subscribe_now, []}, 500
+    end
+
+    test "tells the callback, carries its state on, and keeps running" do
+      state = %{worker_state() | callback_module: EndOfTopicCallback, callback_state: :started, ready: true}
+
+      assert {:noreply, carried} =
                Worker.handle_info({:broker_message, %Binary.CommandReachedEndOfTopic{}}, state)
+
+      assert carried.callback_state == :drained
     end
   end
 

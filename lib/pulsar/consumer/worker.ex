@@ -22,17 +22,6 @@ defmodule Pulsar.Consumer.Worker do
   @zstd_min_buffer_size 64 * 1024
   @zstd_max_buffer_size 1024 * 1024
 
-  @terminal_errors [
-    :AuthenticationError,
-    :AuthorizationError,
-    :ConsumerBusy,
-    :IncompatibleSchema,
-    :InvalidTopicName,
-    :NotAllowedError,
-    :TopicNotFound,
-    :UnsupportedVersionError
-  ]
-
   defstruct [
     :client,
     :topic,
@@ -109,6 +98,16 @@ defmodule Pulsar.Consumer.Worker do
 
   ## Public API
 
+  @doc false
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :transient,
+      type: :worker
+    }
+  end
+
   @doc """
   Starts one consumer process.
 
@@ -116,14 +115,6 @@ defmodule Pulsar.Consumer.Worker do
   and given the `:name` of this worker within its group.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
-
-  @doc """
-  Gracefully stops a consumer process.
-  """
-  @spec stop(GenServer.server(), term(), timeout()) :: :ok
-  def stop(consumer, reason \\ :normal, timeout \\ :infinity) do
-    GenServer.stop(consumer, reason, timeout)
-  end
 
   @doc false
   @spec ready?(pid(), timeout()) :: boolean()
@@ -179,6 +170,10 @@ defmodule Pulsar.Consumer.Worker do
 
   @impl true
   def init(opts) do
+    # A worker is taken out of the tree by its parent rather than by exiting, and an untrapped
+    # child is killed outright by that - skipping terminate/2, and with it the callback's.
+    Process.flag(:trap_exit, true)
+
     # Option names and struct field names are the same, so struct/2 carries them across
     # and ignores the group-level options that are not part of a consumer's state. That
     # includes :dead_letter_root, resolved once for the whole consumer by Pulsar.Topology.
@@ -193,10 +188,10 @@ defmodule Pulsar.Consumer.Worker do
 
     Logger.debug("Starting consumer for topic #{state.topic}")
 
-    init_args = Keyword.fetch!(opts, :init_args)
-
     startup_delay_ms = Keyword.fetch!(opts, :startup_delay_ms)
     startup_jitter_ms = Keyword.fetch!(opts, :startup_jitter_ms)
+
+    init_args = Keyword.fetch!(opts, :init_args)
 
     if startup_delay_ms + startup_jitter_ms > 0 do
       {:ok, state, {:continue, {:startup_delay, startup_delay_ms, startup_jitter_ms, init_args}}}
@@ -205,30 +200,21 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
+  # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
+  # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout -
+  # skipping the terminate/2 that trapping exists to guarantee.
   @impl true
   def handle_continue({:startup_delay, base_delay_ms, jitter_ms, init_args}, state) do
     jitter = if jitter_ms > 0, do: :rand.uniform(jitter_ms), else: 0
-    total_sleep_ms = base_delay_ms + jitter
-    Logger.debug("Consumer sleeping for #{total_sleep_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
-    Process.sleep(total_sleep_ms)
-    {:noreply, state, {:continue, {:subscribe, init_args}}}
+    total_delay_ms = base_delay_ms + jitter
+    Logger.debug("Consumer waiting #{total_delay_ms}ms (base: #{base_delay_ms}ms, jitter: #{jitter}ms)")
+    Process.send_after(self(), {:subscribe_now, init_args}, total_delay_ms)
+
+    {:noreply, state}
   end
 
   def handle_continue({:subscribe, init_args}, state) do
-    case Backoff.run(fn -> subscribe(state) end) do
-      {:ok, broker_pid} ->
-        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
-
-      # Errors a second attempt cannot change: bad credentials stay bad, a malformed topic
-      # stays malformed, and an :exclusive subscription already taken stays taken. Stopping
-      # with :shutdown leaves the worker down instead of restarting it into the same answer,
-      # and the group follows once its last worker has gone.
-      {:error, {code, _message} = reason} when code in @terminal_errors ->
-        {:stop, {:shutdown, reason}, state}
-
-      {:error, reason} ->
-        {:stop, reason, state}
-    end
+    attempt_subscribe(state, init_args, 0, Backoff.deadline())
   end
 
   def handle_continue({:seek_subscription, init_args}, state) do
@@ -314,7 +300,7 @@ defmodule Pulsar.Consumer.Worker do
         {:noreply, %{state | callback_state: callback_state, ready: true}}
 
       {:error, reason} ->
-        {:stop, reason, nil}
+        {:stop, reason, state}
     end
   end
 
@@ -413,13 +399,16 @@ defmodule Pulsar.Consumer.Worker do
       |> ack_message_ids(skipped_ids)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
-    new_state =
+    result =
       case divert(new_state, messages) do
-        {:divert, redelivery_count} -> send_batch_to_dead_letter(new_state, messages, redelivery_count)
+        {:divert, redelivery_count} -> {:continue, send_batch_to_dead_letter(new_state, messages, redelivery_count)}
         :deliver -> process_messages_normally(new_state, messages)
       end
 
-    {:noreply, apply_flow_policy(new_state, permits_consumed)}
+    case result do
+      {:continue, new_state} -> {:noreply, apply_flow_policy(new_state, permits_consumed)}
+      {:stop, reason, new_state} -> {:stop, reason, new_state}
+    end
   end
 
   @impl true
@@ -456,6 +445,29 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
+  def handle_info({:subscribe_now, init_args}, state) do
+    {:noreply, state, {:continue, {:subscribe, init_args}}}
+  end
+
+  def handle_info({:retry_subscribe, init_args, backoff, deadline}, state) do
+    attempt_subscribe(state, init_args, backoff, deadline)
+  end
+
+  # An untrapped process ignores a linked process's normal exit, so trapping solely to run
+  # terminate/2 must preserve that behaviour. Every abnormal linked exit remains fatal.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+
+  def handle_info({:EXIT, pid, reason}, state) do
+    Logger.info("#{inspect(pid)} exited: #{inspect(reason)}, consumer will restart")
+
+    {:stop, :linked_process_exited, state}
+  end
+
+  # Nothing is handed to a callback before its init/2 has run, and the startup delay and the
+  # gaps between subscribe retries both leave the worker reading its mailbox.
+  def handle_info(_message, %__MODULE__{ready: false} = state), do: {:noreply, state}
+
+  @impl true
   def handle_info(message, state) do
     case state.callback_module.handle_info(message, state.callback_state) do
       {:noreply, new_callback_state} ->
@@ -469,16 +481,23 @@ defmodule Pulsar.Consumer.Worker do
     end
   end
 
+  defp dispatch_event(%__MODULE__{ready: false} = state, _callback_fun), do: {:noreply, state}
+
   defp dispatch_event(state, callback_fun) do
     case apply(state.callback_module, callback_fun, [state.callback_state]) do
-      {:noreply, new_callback_state} ->
-        {:noreply, %{state | callback_state: new_callback_state}}
+      {:ok, callback_state} ->
+        {:noreply, %{state | callback_state: callback_state}}
 
-      {:noreply, new_callback_state, timeout_or_hibernate} ->
-        {:noreply, %{state | callback_state: new_callback_state}, timeout_or_hibernate}
+      # Kept for callback compatibility: these notifications used the GenServer-style result
+      # before {:ok, state} made their notification-only role explicit.
+      {:noreply, callback_state} ->
+        {:noreply, %{state | callback_state: callback_state}}
 
-      {:stop, reason, new_callback_state} ->
-        {:stop, reason, %{state | callback_state: new_callback_state}}
+      {:noreply, callback_state, timeout_or_hibernate} ->
+        {:noreply, %{state | callback_state: callback_state}, timeout_or_hibernate}
+
+      {:stop, reason, callback_state} ->
+        {:stop, reason, %{state | callback_state: callback_state}}
     end
   end
 
@@ -507,48 +526,22 @@ defmodule Pulsar.Consumer.Worker do
         "#{state.max_redelivery}, diverting to the dead letter topic"
     )
 
-    # Resolved once for the delivery: this is a call into the topology root, which is also the
-    # supervisor discovery adds partitions to.
-    producer = DeadLetter.producer(state.dead_letter_root)
+    {:ok, producer} = DeadLetter.producer(state.dead_letter_root)
 
-    {state, diverted, nacked_ids, reason} =
-      Enum.reduce(messages, {state, 0, [], nil}, fn %Pulsar.Message{} = message,
-                                                    {acc_state, diverted, nacked_acc, reason} ->
-        message_ids_list = List.wrap(message.message_id)
-
-        case publish_to_dead_letter(producer, message, acc_state.topic) do
-          :ok ->
-            acked_state = ack_message_ids(acc_state, message_ids_list, validation_error(message))
-            {acked_state, diverted + 1, nacked_acc, reason}
-
-          {:error, dlq_reason} ->
-            Logger.error("Failed to send message to dead letter topic: #{inspect(dlq_reason)}, leaving as nacked")
-            {acc_state, diverted, message_ids_list ++ nacked_acc, reason || dlq_reason}
-        end
+    state =
+      Enum.reduce(messages, state, fn %Pulsar.Message{} = message, acc_state ->
+        :ok = DeadLetter.divert(producer, message, acc_state.topic)
+        ack_message_ids(acc_state, List.wrap(message.message_id), validation_error(message))
       end)
 
-    metadata = dead_letter_metadata(state, redelivery_count)
+    :telemetry.execute(
+      [:pulsar, :consumer, :dead_letter, :diverted],
+      %{count: length(messages)},
+      dead_letter_metadata(state, redelivery_count)
+    )
 
-    if diverted > 0 do
-      :telemetry.execute([:pulsar, :consumer, :dead_letter, :diverted], %{count: diverted}, metadata)
-    end
-
-    if nacked_ids != [] do
-      :telemetry.execute(
-        [:pulsar, :consumer, :dead_letter, :failed],
-        %{count: length(nacked_ids)},
-        Map.put(metadata, :reason, reason)
-      )
-    end
-
-    track_nacked(state, nacked_ids)
+    state
   end
-
-  defp publish_to_dead_letter({:ok, producer}, message, origin_topic) do
-    DeadLetter.divert(producer, message, origin_topic)
-  end
-
-  defp publish_to_dead_letter({:error, _reason} = error, _message, _origin_topic), do: error
 
   defp dead_letter_metadata(state, redelivery_count) do
     state
@@ -568,10 +561,19 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp process_messages_normally(state, messages) when is_list(messages) do
-    {new_state, nacked_ids} =
-      Enum.reduce(messages, {state, []}, fn message, {acc_state, nacked_acc} ->
-        process_single_message(acc_state, message, nacked_acc)
+    result =
+      Enum.reduce_while(messages, {:continue, state, []}, fn message, {:continue, acc_state, nacked_acc} ->
+        case process_single_message(acc_state, message, nacked_acc) do
+          {:continue, _state, _nacked_ids} = result -> {:cont, result}
+          {:stop, _reason, _state, _nacked_ids} = result -> {:halt, result}
+        end
       end)
+
+    {outcome, new_state, nacked_ids} =
+      case result do
+        {:continue, new_state, nacked_ids} -> {:continue, new_state, nacked_ids}
+        {:stop, reason, new_state, nacked_ids} -> {{:stop, reason}, new_state, nacked_ids}
+      end
 
     if nacked_ids != [] do
       :telemetry.execute(
@@ -581,7 +583,12 @@ defmodule Pulsar.Consumer.Worker do
       )
     end
 
-    track_nacked(new_state, nacked_ids)
+    new_state = track_nacked(new_state, nacked_ids)
+
+    case outcome do
+      :continue -> {:continue, new_state}
+      {:stop, reason} -> {:stop, reason, new_state}
+    end
   end
 
   defp request_redelivery(state, entry_ids) do
@@ -649,10 +656,10 @@ defmodule Pulsar.Consumer.Worker do
     case result do
       {:ok, new_callback_state} ->
         state = ack_message_ids(state, message_ids_list, validation_error(message))
-        {%{state | callback_state: new_callback_state}, nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, nacked_acc}
 
       {:noreply, new_callback_state} ->
-        {%{state | callback_state: new_callback_state}, nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, nacked_acc}
 
       {:error, reason, new_callback_state} ->
         redelivery_count = Pulsar.Message.redelivery_count(message)
@@ -661,18 +668,16 @@ defmodule Pulsar.Consumer.Worker do
           "Message processing failed: #{inspect(reason)}, tracking for redelivery (count: #{redelivery_count})"
         )
 
-        {%{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
+        {:continue, %{state | callback_state: new_callback_state}, message_ids_list ++ nacked_acc}
 
-      unexpected_result ->
-        Logger.warning("Unexpected callback result: #{inspect(unexpected_result)}, not acknowledging")
-        {state, nacked_acc}
+      {:stop, reason, new_callback_state} ->
+        state = ack_message_ids(state, message_ids_list, validation_error(message))
+        {:stop, reason, %{state | callback_state: new_callback_state}, nacked_acc}
     end
   end
 
   @impl true
-  def terminate(_reason, nil) do
-    :ok
-  end
+  def terminate(_reason, %__MODULE__{ready: false}), do: :ok
 
   def terminate(reason, state) do
     try do
@@ -690,6 +695,11 @@ defmodule Pulsar.Consumer.Worker do
 
   def handle_call(:topic, _from, state) do
     {:reply, state.topic, state}
+  end
+
+  def handle_call(request, _from, %__MODULE__{broker_pid: nil} = state)
+      when elem(request, 0) in [:send_flow, :ack, :nack] do
+    {:reply, {:error, :not_ready}, state}
   end
 
   def handle_call({:send_flow, permits}, _from, state) do
@@ -725,6 +735,10 @@ defmodule Pulsar.Consumer.Worker do
     {:reply, :ok, track_nacked(state, message_ids)}
   end
 
+  def handle_call(_request, _from, %__MODULE__{ready: false} = state) do
+    {:reply, {:error, :not_ready}, state}
+  end
+
   def handle_call(request, from, state) do
     case state.callback_module.handle_call(request, from, state.callback_state) do
       {:reply, reply, new_callback_state} ->
@@ -748,6 +762,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   @impl true
+  def handle_cast(_request, %__MODULE__{ready: false} = state), do: {:noreply, state}
+
   def handle_cast(request, state) do
     case state.callback_module.handle_cast(request, state.callback_state) do
       {:noreply, new_callback_state} ->
@@ -762,6 +778,24 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   ## Private Functions
+
+  defp attempt_subscribe(state, init_args, backoff, deadline) do
+    case subscribe(state) do
+      {:ok, broker_pid} ->
+        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
+
+      {:error, reason} ->
+        case Backoff.retry_in(reason, backoff, deadline) do
+          {:retry, wait, next} ->
+            Process.send_after(self(), {:retry_subscribe, init_args, next, deadline}, wait)
+            {:noreply, state}
+
+          :give_up ->
+            Logger.error("Consumer for #{state.topic} cannot subscribe: #{inspect(reason)}")
+            {:stop, reason, state}
+        end
+    end
+  end
 
   defp initial_position(:latest), do: :Latest
   defp initial_position(:earliest), do: :Earliest

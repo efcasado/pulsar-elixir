@@ -36,7 +36,9 @@ defmodule Pulsar.Integration.AccessModesTest do
   end
 
   @tag telemetry_listen: [@opened]
-  test ":exclusive fences a second producer until the first releases the topic" do
+  test ":exclusive fences a second producer until the first releases the topic", %{broker: broker} do
+    contender = Utils.start_isolated_client(:access_modes_contender, broker)
+
     assert {:ok, group_pid_1} =
              Pulsar.Producer.start(@exclusive_topic, access_mode: :exclusive, client: @client)
 
@@ -49,19 +51,10 @@ defmodule Pulsar.Integration.AccessModesTest do
              Pulsar.Producer.start(@exclusive_topic,
                access_mode: :exclusive,
                name: "exclusive-2",
-               client: @client
+               client: contender
              )
 
-    :ok = Topology.await_ready(group_pid_2, 1_000)
-
-    # Fenced by the producer already holding the topic, so it gives up rather than ever
-    # becoming ready.
-    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(group_pid_2) == []
-
-    assert Process.alive?(group_pid_2)
-    assert group_pid_2 in Pulsar.Client.producers(@client)
-    assert {:error, :no_producers_available} = Pulsar.Producer.send(group_pid_2, "Rejected message")
+    ref = Process.monitor(group_pid_2)
 
     assert_receive {:telemetry_event,
                     %{
@@ -69,10 +62,14 @@ defmodule Pulsar.Integration.AccessModesTest do
                       metadata: %{success: false, error: :producer_fenced, producer_name: "exclusive-2" <> _}
                     }}
 
-    ref = Process.monitor(group_pid_2)
-    assert :ok = Pulsar.Producer.stop(group_pid_2, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, _reason}
-    refute group_pid_2 in Pulsar.Client.producers(@client)
+    assert_receive {:DOWN, ^ref, :process, ^group_pid_2, :shutdown}, 10_000
+
+    assert Pulsar.Producer.await_ready(group_pid_2, timeout: 1_000) == {:error, :not_found}
+    refute group_pid_2 in Pulsar.Client.producers(contender)
+
+    # Its client keeps starting it over while its own budget lasts, so it is still contending for
+    # the topic. Take that client down before releasing it, or which producer wins is a race.
+    stop_supervised!(:access_modes_contender)
 
     ref = Process.monitor(producer_1)
     Pulsar.Producer.stop(group_pid_1)
@@ -124,7 +121,7 @@ defmodule Pulsar.Integration.AccessModesTest do
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from first producer", client: @client)
 
-    assert {:error, :producer_waiting} =
+    assert {:error, :not_ready} =
              Pulsar.Producer.send(group_pid_2, "Message from second producer while waiting", client: @client)
 
     ref = Process.monitor(producer_1)

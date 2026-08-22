@@ -33,7 +33,7 @@ defmodule Pulsar.Integration.Reader.CommonTest do
   test "ends once the topic is drained, given a timeout to end on" do
     payloads =
       @topic
-      |> Pulsar.Reader.stream(client: @client, timeout: 100)
+      |> Pulsar.Reader.stream(client: @client, timeout: 2_000)
       |> Enum.map(& &1.payload)
 
     assert payloads == Enum.map(1..@num_messages, &"Message #{&1}")
@@ -41,12 +41,24 @@ defmodule Pulsar.Integration.Reader.CommonTest do
 
   test "closes the consumer it opened once the stream is done with it" do
     assert @topic
-           |> Pulsar.Reader.stream(client: @client, timeout: 100)
+           |> Pulsar.Reader.stream(client: @client)
+           |> Enum.take(@num_messages)
            |> Enum.count() == @num_messages
 
-    Utils.wait_for(fn -> Pulsar.Client.consumers(@client) == [] end,
-      description: "the reader's consumer to be removed from the client"
-    )
+    assert Pulsar.Client.consumers(@client) == []
+  end
+
+  # Each reader needs a subscription of its own. This cannot reproduce the cross-node collision
+  # a per-VM counter causes, only the guarantee that readers do not interfere.
+  test "two readers on one topic each read all of it" do
+    # A longer idle timeout than the tests above: two readers sharing the topic take turns, so
+    # 100ms of quiet is not evidence that the topic is drained.
+    read = fn -> @topic |> Pulsar.Reader.stream(client: @client, timeout: 2_000) |> Enum.count() end
+
+    [first, second] = [read, read] |> Enum.map(&Task.async/1) |> Task.await_many(30_000)
+
+    assert first == @num_messages
+    assert second == @num_messages
   end
 
   test "reading from :latest yields nothing published before it" do

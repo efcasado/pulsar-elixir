@@ -45,6 +45,14 @@ defmodule Pulsar.Producer.SendAsyncTest do
     %{state: ProducerState.new(broker)}
   end
 
+  test "ignores normal linked exits and preserves abnormal linked failure", ctx do
+    assert {:noreply, state} = Worker.handle_info({:EXIT, self(), :normal}, ctx.state)
+    assert state == ctx.state
+
+    assert {:stop, :linked_process_exited, state} = Worker.handle_info({:EXIT, self(), :boom}, ctx.state)
+    assert state == ctx.state
+  end
+
   describe "taking a send by cast" do
     test "publishes it and parks its caller", ctx do
       {:noreply, state} = cast(ctx.state, "a")
@@ -67,7 +75,7 @@ defmodule Pulsar.Producer.SendAsyncTest do
     test "refuses while the producer is still registering", ctx do
       {ref, {:noreply, state}} = cast_with_ref(%{ctx.state | ready: false}, "a")
 
-      assert_received {^ref, {:error, :producer_waiting}}
+      assert_received {^ref, {:error, :not_ready}}
       assert [] == published()
       assert state.pending_messages == 0
     end

@@ -33,7 +33,31 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     drain()
   end
 
-  test "lets the callback stop the worker" do
+  test "lets a callback finish its transient worker without stopping the resource" do
+    topic = @topic <> "-worker-finished"
+
+    consumer =
+      start_consumer(topic, "worker-finished-sub", init_args: [finish_at_end_of_topic: true])
+
+    [worker] = Topology.workers(consumer)
+    assert_receive {:consumer_started, ^worker, _context}
+    worker_ref = Process.monitor(worker)
+
+    drain()
+    :ok = System.terminate_topic(topic)
+
+    assert_receive {:consumer_end_of_topic, ^worker}, 10_000
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, :normal}, 5_000
+    assert_receive {:consumer_terminated, ^worker, :normal}, 5_000
+
+    assert Process.alive?(consumer)
+    assert Topology.workers(consumer) == []
+    refute_receive {:consumer_started, _replacement, _context}, 500
+  end
+
+  # A callback stop finishes only its worker, so this one tells Pulsar.Consumer.stop/2 instead -
+  # which is what the whole consumer coming down proves, and terminate/2 running with it.
+  test "lets a callback have its consumer stopped once the topic is done" do
     topic = @topic <> "-stopping"
     consumer = start_consumer(topic, "stopping-sub", init_args: [stop_at_end_of_topic: true])
     [worker] = Topology.workers(consumer)
@@ -44,7 +68,52 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     :ok = System.terminate_topic(topic)
 
     assert_receive {:consumer_end_of_topic, ^worker}, 10_000
-    assert_receive {:DOWN, ^ref, :process, ^worker, :normal}, 5_000
+    assert_receive {:DOWN, ^ref, :process, ^worker, :shutdown}, 5_000
+    assert_receive {:consumer_terminated, ^worker, :shutdown}, 5_000
+  end
+
+  # Regression for #198: what is stopped stays stopped, and leaves nothing registered behind.
+  test "leaves a consumer that was stopped at the end of the topic stopped" do
+    topic = @topic <> "-stays-stopped"
+    consumer = start_consumer(topic, "stays-stopped-sub", init_args: [stop_at_end_of_topic: true])
+    [worker] = Topology.workers(consumer)
+
+    drain()
+
+    ref = Process.monitor(consumer)
+    :ok = System.terminate_topic(topic)
+
+    assert_receive {:consumer_end_of_topic, ^worker}, 10_000
+
+    assert_receive {:DOWN, ^ref, :process, ^consumer, :shutdown}, 10_000
+    refute consumer in Pulsar.Client.consumers(@client)
+  end
+
+  # One partition reaching its end is that partition's news. The consumer goes on serving the
+  # others until something decides it is finished, which is the caller's decision to make.
+  test "keeps draining the other partitions when one of them reaches its end" do
+    topic = @topic <> "-partitioned-stopping"
+    :ok = System.create_topic(topic, 2)
+
+    consumer = start_consumer(topic, "partitioned-stopping-sub", create_topic?: false)
+
+    groups = Map.new(Topology.groups(consumer))
+    [ending] = partition_workers(groups, 0)
+    [surviving] = partition_workers(groups, 1)
+
+    drain()
+
+    :ok = System.terminate_topic(topic <> "-partition-0")
+    assert_receive {:consumer_end_of_topic, ^ending}, 10_000
+
+    assert Process.alive?(consumer)
+    Utils.seed_topic(topic <> "-partition-1", ["after-the-other-ended"], client: @client)
+    assert_receive {:consumer, ^surviving, %Pulsar.Message{payload: "after-the-other-ended"}}, 10_000
+
+    consumer_ref = Process.monitor(consumer)
+    :ok = Pulsar.Consumer.stop(consumer, client: @client)
+
+    assert_receive {:DOWN, ^consumer_ref, :process, ^consumer, _reason}, 10_000
   end
 
   test "tells every consumer on a shared subscription" do
@@ -100,6 +169,10 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     :ok = Pulsar.Consumer.await_ready(consumer, client: @client)
 
     consumer
+  end
+
+  defp partition_workers(groups, index) do
+    for {_id, worker, :worker, _modules} <- Supervisor.which_children(Map.fetch!(groups, index)), do: worker
   end
 
   defp drain do

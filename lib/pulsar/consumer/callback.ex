@@ -38,9 +38,9 @@ defmodule Pulsar.Consumer.Callback do
   - `handle_call/3` - Handle synchronous calls (default: `{:reply, {:error, :not_implemented}, state}`)
   - `handle_cast/2` - Handle asynchronous casts (default: `{:noreply, state}`)
   - `handle_info/2` - Handle other messages (default: `{:noreply, state}`)
-  - `became_active/1` - Called when this consumer becomes the active consumer of a `:failover` subscription (default: `{:noreply, state}`)
-  - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:failover` subscription (default: `{:noreply, state}`)
-  - `reached_end_of_topic/1` - Called when this consumer has drained a terminated topic (default: `{:noreply, state}`)
+  - `became_active/1` - Called when this consumer becomes the active consumer of a `:failover` subscription (default: `{:ok, state}`)
+  - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:failover` subscription (default: `{:ok, state}`)
+  - `reached_end_of_topic/1` - Called when this consumer has drained a terminated topic (default: `{:ok, state}`)
   - `handle_invalid_message/2` - Called instead of `handle_message/2` for a message whose
     bytes could not be trusted (default: log a warning and acknowledge it, so it is not
     redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
@@ -72,9 +72,8 @@ defmodule Pulsar.Consumer.Callback do
       defmodule MyApp.MessageCounter do
         use Pulsar.Consumer.Callback
 
-        def init(opts, _context) do
-          max_messages = Keyword.get(opts, :max_messages, 1000)
-          {:ok, %{count: 0, max_messages: max_messages, messages: []}}
+        def init(_opts, _context) do
+          {:ok, %{count: 0, messages: []}}
         end
 
         def handle_message(%Pulsar.Message{payload: payload}, callback_state) do
@@ -84,12 +83,7 @@ defmodule Pulsar.Consumer.Callback do
               messages: [payload | callback_state.messages]
           }
 
-          # Stop processing if we've reached the limit
-          if new_state.count >= new_state.max_messages do
-            {:stop, new_state}
-          else
-            {:ok, new_state}
-          end
+          {:ok, new_state}
         end
 
 
@@ -135,7 +129,22 @@ defmodule Pulsar.Consumer.Callback do
   - `{:ok, new_state}` - Message processed successfully, acknowledge message automatically
   - `{:error, reason, new_state}` - Processing failed, track for redelivery
   - `{:noreply, new_state}` - Message processed, but don't automatically ACK/NACK. Use `Pulsar.Consumer.ack/2` or `Pulsar.Consumer.nack/2` for manual acknowledgment
-  - `{:stop, new_state}` - Message processed successfully, acknowledge, then stop consumer
+  - `{:stop, reason, new_state}` - Message processed successfully, acknowledge it, then finish
+    this worker with `reason`
+
+  A worker is transient: `:normal`, `:shutdown`, and `{:shutdown, term}` finish it without a
+  restart. Any other stop reason is a failure and supervision restarts it. Stopping one worker
+  does not stop the logical consumer; use `Pulsar.Consumer.stop/2` to remove the whole resource.
+
+  `handle_invalid_message/2` accepts the same results. Its `{:ok, ...}` and `{:stop, ...}`
+  results acknowledge the invalid message with its validation error; `{:noreply, ...}` leaves
+  acknowledgement to the callback, and `{:error, ...}` tracks it for redelivery.
+
+  ### Notification callbacks
+
+  `became_active/1`, `became_passive/1`, and `reached_end_of_topic/1` return `{:ok, state}` to
+  carry on or `{:stop, reason, state}` to finish the worker. The former `{:noreply, state}` and
+  `{:noreply, state, timeout}` forms remain accepted for compatibility.
 
   ### `terminate/2` (Optional)
 
@@ -212,22 +221,16 @@ defmodule Pulsar.Consumer.Callback do
   reported rather than counting notifications, and keep whatever the callback does here
   idempotent.
 
-  This says the topic is finished, not the subscription. Answer `{:stop, reason, state}` to
-  shut this worker down once it has nothing left to read:
+  This says the topic is finished, not the subscription. A callback that only needs this worker
+  can finish it directly:
 
       def reached_end_of_topic(state) do
         {:stop, :normal, state}
       end
 
-  > #### Stopping here is not yet permanent {: .warning}
-  >
-  > A stopped worker is not restarted, but neither outcome of stopping one is what you want.
-  > Stop the last worker of a group and the group shuts down with it, and topology
-  > reconciliation revives it about a minute later: it subscribes again, reaches the end
-  > again, and stops again, on a loop. Stop only some of a `:consumer_count` and the group
-  > keeps running short of workers, since reconciliation only revives whole groups, never
-  > refills one. Use `Pulsar.Consumer.stop/2` from another process to take a consumer down
-  > for good.
+  That leaves the worker absent and the logical consumer running, possibly with fewer workers.
+  To remove the whole consumer, tell a coordinator and have it call `Pulsar.Consumer.stop/2`
+  once it has heard from every worker it expects - one per partition and `:consumer_count`.
 
   ## Manual Acknowledgment
 
@@ -261,6 +264,12 @@ defmodule Pulsar.Consumer.Callback do
   @type init_arg :: term()
   @type state :: term()
   @type reason :: term()
+  @type stop_result :: {:stop, reason, state}
+  @type event_result ::
+          {:ok, state}
+          | {:noreply, state}
+          | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
+          | stop_result
 
   @typedoc """
   The consumer's resolved identity, passed to `c:init/2`.
@@ -289,7 +298,7 @@ defmodule Pulsar.Consumer.Callback do
               {:ok, state}
               | {:error, reason, state}
               | {:noreply, state}
-              | {:stop, state}
+              | stop_result
 
   @optional_callbacks init: 2,
                       terminate: 2,
@@ -306,32 +315,24 @@ defmodule Pulsar.Consumer.Callback do
               | {:reply, term(), state, timeout() | :hibernate | {:continue, term()}}
               | {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), term(), state}
-              | {:stop, term(), state}
+              | {:stop, reason, term(), state}
+              | stop_result
   @callback handle_cast(term(), state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
+              | stop_result
   @callback handle_info(term(), state) ::
               {:noreply, state}
               | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback became_active(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback became_passive(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
-  @callback reached_end_of_topic(state) ::
-              {:noreply, state}
-              | {:noreply, state, timeout() | :hibernate | {:continue, term()}}
-              | {:stop, term(), state}
+              | stop_result
+  @callback became_active(state) :: event_result
+  @callback became_passive(state) :: event_result
+  @callback reached_end_of_topic(state) :: event_result
   @callback handle_invalid_message(message_args, state) ::
               {:ok, state}
               | {:error, reason, state}
               | {:noreply, state}
+              | stop_result
 
   defmacro __using__(_opts) do
     quote do
@@ -356,15 +357,15 @@ defmodule Pulsar.Consumer.Callback do
       end
 
       def became_active(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def became_passive(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def reached_end_of_topic(state) do
-        {:noreply, state}
+        {:ok, state}
       end
 
       def handle_invalid_message(message, state) do

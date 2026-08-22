@@ -36,7 +36,19 @@ defmodule Pulsar.BackoffTest do
 
   describe "run/1" do
     test "retries the standard transient broker errors" do
-      for reason <- [:disconnected, {:ServiceNotReady, "try again"}] do
+      # The last two are how Pulsar.Topology.Resolver reports a failed lookup: the reason that
+      # decides this is wrapped, and a bundle unload answers :ServiceNotReady through it.
+      reasons = [
+        :disconnected,
+        :no_broker_available,
+        {:ServiceNotReady, "try again"},
+        # The broker leaves the message unset sometimes, which must not read as a wrapper.
+        {:ServiceNotReady, nil},
+        {:lookup_failed, :ServiceNotReady},
+        {:partition_metadata_check_failed, :ServiceNotReady}
+      ]
+
+      for reason <- reasons do
         counter = :counters.new(1, [])
 
         assert Backoff.run(fn ->
@@ -60,6 +72,16 @@ defmodule Pulsar.BackoffTest do
              end) == error
 
       assert :counters.get(counter, 1) == 1
+    end
+
+    test "only retries resolver exits caused by a disappearing server call" do
+      call = {:gen_statem, :call, [self(), :metadata, 5_000]}
+
+      assert Backoff.retryable?({:resolver_failed, :exit, {:noproc, call}})
+      assert Backoff.retryable?({:resolver_failed, :exit, {:timeout, call}})
+
+      refute Backoff.retryable?({:resolver_failed, :exit, :noproc})
+      refute Backoff.retryable?({:resolver_failed, :error, %RuntimeError{message: "bug"}})
     end
   end
 

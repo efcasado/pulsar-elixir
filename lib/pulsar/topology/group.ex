@@ -3,7 +3,7 @@ defmodule Pulsar.Topology.Group do
 
   @behaviour Supervisor
 
-  alias Pulsar.Topology
+  alias Pulsar.Client
 
   require Logger
 
@@ -15,6 +15,7 @@ defmodule Pulsar.Topology.Group do
   @impl true
   def init({worker, count, opts}) do
     name = Keyword.fetch!(opts, :name)
+    client = Keyword.fetch!(opts, :client)
 
     Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
@@ -28,15 +29,35 @@ defmodule Pulsar.Topology.Group do
         %{
           id: worker_name,
           start: {worker, :start_link, [Keyword.put(opts, :name, worker_name)]},
-          restart: :transient,
-          significant: true,
+          restart: worker_restart(worker, opts),
           type: :worker
         }
       end
 
-    # A worker that stops cleanly hit something retrying cannot fix, so it is not brought back.
-    # :all_significant then keeps the group running while any sibling still has the topic, and
-    # shuts it down once the last one is gone rather than leaving a group with nothing in it.
-    Supervisor.init(children, [strategy: :one_for_one, auto_shutdown: :all_significant] ++ Topology.restart_intensity())
+    # Consumer workers are transient, so a callback can finish one normally without spending a
+    # restart. Groups and every boundary above them remain permanent, which lets abnormal worker
+    # failures exhaust their way upward.
+    Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity(client, count))
+  end
+
+  # Honour the worker module's lifecycle while retaining the explicit ids and names a group owns.
+  # A module without child_spec/1 keeps the historical permanent default used by test and custom
+  # workers.
+  defp worker_restart(worker, opts) do
+    if Code.ensure_loaded?(worker) and function_exported?(worker, :child_spec, 1) do
+      {worker, opts} |> Supervisor.child_spec([]) |> Map.get(:restart, :permanent)
+    else
+      :permanent
+    end
+  end
+
+  # A broker dropping its connection exits every worker at once, so a group of `count` sees
+  # `count` restarts for one failure. See docs/architecture.md for what scaling trades.
+  @doc false
+  @spec restart_intensity(atom(), pos_integer()) :: keyword()
+  def restart_intensity(client, count) do
+    client
+    |> Client.restart_intensity(:worker)
+    |> Keyword.update!(:max_restarts, &(&1 * count))
   end
 end

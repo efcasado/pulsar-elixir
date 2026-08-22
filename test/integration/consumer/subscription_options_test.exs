@@ -228,32 +228,24 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     refute "non-durable" in subscriptions
   end
 
-  test "force_create_topic: false leaves the consumer running with no workers" do
+  test "force_create_topic: false gives the consumer up instead of leaving it running", %{broker: broker} do
     non_existent_topic = "persistent://public/default/subscription-options-non-existent"
+    no_force_create_client = Utils.start_isolated_client(:no_force_create, broker)
 
     {:ok, no_force_create_group} =
       Pulsar.Consumer.start(
         non_existent_topic,
         "no-force-create",
         @consumer_callback,
-        subscription_options(:earliest, force_create_topic: false)
+        Keyword.put(subscription_options(:earliest, force_create_topic: false), :client, no_force_create_client)
       )
 
-    :ok = Topology.await_ready(no_force_create_group, 1_000)
-
-    # The topic does not exist and this consumer will not create one, so its worker gives up
-    # rather than ever becoming ready.
-    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 2_000) == {:error, :timeout}
-    assert Topology.workers(no_force_create_group) == []
-
-    assert Process.alive?(no_force_create_group)
-    assert no_force_create_group in Pulsar.Client.consumers(@client)
-    assert {:error, :no_consumers_available} = Pulsar.Consumer.send_flow(no_force_create_group, 1)
-
     ref = Process.monitor(no_force_create_group)
-    assert :ok = Pulsar.Consumer.stop(no_force_create_group, client: @client)
-    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, _reason}
-    refute no_force_create_group in Pulsar.Client.consumers(@client)
+
+    assert_receive {:DOWN, ^ref, :process, ^no_force_create_group, :shutdown}, 5_000
+
+    assert Pulsar.Consumer.await_ready(no_force_create_group, timeout: 1_000) == {:error, :not_found}
+    refute no_force_create_group in Pulsar.Client.consumers(no_force_create_client)
   end
 
   test "read_compacted reads the last message per key, not every message", %{expected_count: expected_count} do

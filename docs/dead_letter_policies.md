@@ -79,7 +79,7 @@ Publishing needs a producer, and the consumer owns it:
 
 - **`max_redelivery`**: Required, a positive integer. How many times the callback sees a message before the
   next delivery is diverted. It is the point at which diverting starts, not a cap on how many times a message
-  can be delivered — see [When the Dead Letter Topic Is Unavailable](#when-the-dead-letter-topic-is-unavailable).
+  can be delivered.
 
 - **`topic`**: Where to divert to. Defaults to `"<topic>-<subscription>-DLQ"`, so two subscriptions on the
   same topic get their own dead letter topics. Point several subscriptions at one topic by setting it
@@ -153,16 +153,24 @@ routed across its partitions honouring the key carried over from the origin.
 ## When the Dead Letter Topic Is Unavailable
 
 A dead letter topic that cannot be published to — it does not exist and auto-creation is off, the broker is
-unreachable, the payload exceeds its maximum message size — does not disturb the subscription:
+unreachable, the payload exceeds its maximum message size — takes the consumer worker down:
 
-- The message is left negatively acknowledged and retried on the next redelivery
-- The consumer stays subscribed; a failed publish is logged, not fatal
-- Its redelivery count keeps climbing past `:max_redelivery`, since the threshold decides when diverting
-  starts and nothing acknowledges the message until it lands
+- The refused message is not acknowledged, so the subscription still owes it
+- The worker crashes, and its group restarts it and retries the whole delivery
+- A dead letter topic that stays unavailable exhausts the restart budget, and the failure reaches whatever
+  supervises the client
 
-This is deliberate. Dropping the message or acknowledging it without it arriving anywhere both lose data, so
-the consumer keeps trying. Watch for `Failed to send message to dead letter topic` in the logs; a message
-whose redelivery count climbs without bound is the symptom.
+This is deliberate. Dropping the message or acknowledging it without it arriving anywhere both lose data, and
+parking it quietly means a subscription that never drains and a problem nobody sees. Failing outright gets
+past the transient case — a dead letter producer that is still starting up — on the retry, and surfaces the
+persistent one instead of hiding it. `:worker_restart_intensity` is the first gate and
+`:resource_restart_intensity` the second, both on `Pulsar.Client`.
+
+What is redelivered depends on how the messages arrived. A batched entry is acknowledged only once all of
+it lands, so the messages that *did* reach the dead letter topic are published again on every retry. Messages
+that arrived on their own are acknowledged as each one is diverted, so only the refused one and those after
+it come back. Either way dead lettering is at-least-once and a consumer of the dead letter topic has to
+tolerate duplicates; the restart budgets bound how many.
 
 ## Example: Complete Dead Letter Flow
 
@@ -247,21 +255,20 @@ per delivery rather than per message — and `%{topic:, subscription_name:, cons
 | `[:pulsar, :consumer, :message, :nacked]` | A callback returned `{:error, …}`, or `Pulsar.Consumer.nack/2` was called |
 | `[:pulsar, :consumer, :redelivery, :requested]` | The redelivery interval asked the broker for the nacked messages back |
 | `[:pulsar, :consumer, :dead_letter, :diverted]` | Messages reached the threshold and were published to the dead letter topic |
-| `[:pulsar, :consumer, :dead_letter, :failed]` | Publishing to the dead letter topic failed, so the messages stay nacked |
 
-The two dead letter events add `:dead_letter_topic` and `:redelivery_count`; `:failed` also carries
-`:reason`.
+`:diverted` adds `:dead_letter_topic` and `:redelivery_count`.
 
-`:requested` counts entries, where the other three count messages. Against a batching producer three
+`:requested` counts entries, where the others count messages. Against a batching producer three
 nacked messages of one batch are one entry to ask for again, so the two counts do not line up.
 
 `:nacked` reports that a callback rejected a message, whether or not anything will redeliver it. With no
 `:redelivery_interval` configured you will see it with no `:redelivery, :requested` behind it and nothing
 ever reaching the dead letter topic, which is the shape of the mistake the warning above describes.
 
-`:failed` is the one to alert on. It means messages are neither being processed nor parked, and their
-redelivery counts are climbing with nothing to stop them. A steady `:diverted` rate is the ordinary
-signal that a policy is doing its job; a rising one means something upstream changed.
+A steady `:diverted` rate is the ordinary signal that a policy is doing its job; a rising one means
+something upstream changed. A dead letter topic that cannot be published to has no event of its own,
+because the worker does not survive it: the signal there is the consumer going down, with the
+`[:pulsar, :producer, ...]` events below it explaining why.
 
 The dead letter producer is otherwise an ordinary producer, so the `[:pulsar, :producer, …]` events
 fire for it too, with `producer_name` set to `"<consumer name>-dead-letter-producer"`.

@@ -16,7 +16,9 @@ defmodule Pulsar.Test.Support.DummyConsumer do
 
   The only thing it decides for itself is what to answer with: `fail_all: true` rejects every
   message, so redelivery and dead lettering have something to act on, and
-  `stop_at_end_of_topic: true` shuts the worker down once it reaches the end of one.
+  `finish_at_end_of_topic: true` finishes only the worker that receives the notification.
+  `stop_at_end_of_topic: true` stops the whole consumer once a worker reaches the end of one,
+  through `Pulsar.Consumer.stop/2`, the way a coordinator would.
 
   A consumer started in `setup_all` cannot forward to the test that asserts on it, since that
   callback runs in its own process. Either start it in the test, or point it at the right one
@@ -32,6 +34,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
      %{
        forward_to: forward_to,
        fail_all: Keyword.get(opts, :fail_all, false),
+       finish_at_end_of_topic: Keyword.get(opts, :finish_at_end_of_topic, false),
        stop_at_end_of_topic: Keyword.get(opts, :stop_at_end_of_topic, false)
      }}
   end
@@ -65,19 +68,34 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   def became_active(state) do
     notify(state.forward_to, {:consumer_active, self(), true})
 
-    {:noreply, state}
+    {:ok, state}
   end
 
   def became_passive(state) do
     notify(state.forward_to, {:consumer_active, self(), false})
 
-    {:noreply, state}
+    {:ok, state}
   end
 
   def reached_end_of_topic(state) do
     notify(state.forward_to, {:consumer_end_of_topic, self()})
 
-    if state.stop_at_end_of_topic, do: {:stop, :normal, state}, else: {:noreply, state}
+    cond do
+      state.finish_at_end_of_topic ->
+        {:stop, :normal, state}
+
+      state.stop_at_end_of_topic ->
+        root = self() |> Pulsar.Topology.owning_supervisor() |> Pulsar.Topology.owning_supervisor()
+        Task.start(fn -> Pulsar.Consumer.stop(root) end)
+        {:ok, state}
+
+      true ->
+        {:ok, state}
+    end
+  end
+
+  def terminate(reason, state) do
+    notify(state.forward_to, {:consumer_terminated, self(), reason})
   end
 
   def handle_call({:forward_to, pid}, _from, state) do

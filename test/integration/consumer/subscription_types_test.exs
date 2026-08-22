@@ -120,24 +120,34 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     refute_receive {:consumer, ^consumer, _message}
   end
 
-  # An :exclusive subscription admits one consumer, so the workers past the first are refused
-  # and stop instead of restarting against a slot that will not free up. The one that got the
-  # subscription keeps running. Use :failover if the others should stand by.
-  test "exclusive subscription keeps only the consumer that got the subscription" do
-    {:ok, exclusive_multi_group} =
+  test "exclusive subscription refuses a consumer count above one" do
+    assert_raise ArgumentError, ~r/admits a single consumer/, fn ->
+      Pulsar.Consumer.start(@topic, "exclusive-multi", @consumer_callback, subscription_options(:exclusive, 2))
+    end
+  end
+
+  test "a second consumer of an exclusive subscription stops rather than waiting for it", %{broker: broker} do
+    subscription = "exclusive-contended"
+    contender_client = Utils.start_isolated_client(:exclusive_contender, broker)
+
+    {:ok, holder} = Pulsar.Consumer.start(@topic, subscription, @consumer_callback, subscription_options(:exclusive, 1))
+    :ok = Pulsar.Consumer.await_ready(holder, client: @client)
+
+    {:ok, contender} =
       Pulsar.Consumer.start(
         @topic,
-        "exclusive-multi",
+        subscription,
         @consumer_callback,
-        subscription_options(:exclusive, 2)
+        [name: "exclusive-contender"] ++
+          Keyword.put(subscription_options(:exclusive, 1), :client, contender_client)
       )
 
-    assert Process.alive?(exclusive_multi_group)
+    ref = Process.monitor(contender)
 
-    assert [_worker] =
-             Utils.wait_for(fn -> Topology.workers(exclusive_multi_group) end,
-               until: &match?([_worker], &1)
-             )
+    assert_receive {:DOWN, ^ref, :process, ^contender, :shutdown}, 10_000
+    refute contender in Pulsar.Client.consumers(contender_client)
+
+    assert Process.alive?(holder)
   end
 
   # Deliveries from the consumers of one subscription arrive interleaved, so they are grouped

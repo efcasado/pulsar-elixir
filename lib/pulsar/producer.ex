@@ -28,6 +28,7 @@ defmodule Pulsar.Producer do
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto.MessageIdData
   alias Pulsar.Topology
+  alias Pulsar.Topology.Root
 
   @typedoc """
   What a chunked send is answered with, since its message spans several broker messages.
@@ -46,7 +47,7 @@ defmodule Pulsar.Producer do
   @type send_result :: MessageIdData.t() | chunked_message_id() | :deduplicated
 
   @doc false
-  def child_spec(opts), do: Topology.child_spec(__MODULE__, id(opts), opts)
+  def child_spec(opts), do: Root.child_spec(__MODULE__, id(opts), opts)
 
   @doc """
   Starts a producer, linked to the calling process.
@@ -71,7 +72,7 @@ defmodule Pulsar.Producer do
     topic = Keyword.fetch!(opts, :topic)
     opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
 
-    Topology.start_link(Worker, registry, :producers, opts)
+    Root.start_link(Worker, registry, :producers, opts)
   end
 
   @doc """
@@ -123,7 +124,9 @@ defmodule Pulsar.Producer do
   @doc """
   Publishes a message, given a producer's pid or name.
 
-  Returns `{:error, :not_ready}` while its topic topology is being discovered.
+  Returns `{:error, :not_ready}` until it can publish: while its topic topology is being
+  discovered, while the partition it routed to is between lives, and while the worker it
+  reached is still registering with its broker.
 
   A message too large for the broker is refused here rather than sent, since the broker would
   answer it by closing a connection shared with every other producer and consumer:
@@ -256,16 +259,19 @@ defmodule Pulsar.Producer do
   A pid must be the stable root returned by `start/1` or `start_link/1`. Group and worker pids
   are not producer roots and return `{:error, :not_found}` here.
 
-  A root started as a static child will be restarted by its supervisor; remove that child
-  from the supervision tree instead.
+  A root started as a static child is `:permanent`, but stopping it goes through its supervisor
+  rather than exiting it, so it stays stopped; its child spec remains in that tree as
+  `:undefined` until the supervisor restarts.
+
+  `:client` selects which client to resolve a name through, and is not needed for a pid: the
+  supervisor that owns a root is read from the root itself.
   """
   @spec stop(pid() | String.t() | atom(), keyword()) :: :ok | {:error, :not_found}
   def stop(producer, opts \\ [])
 
-  def stop(producer, opts) when is_pid(producer) do
+  def stop(producer, _opts) when is_pid(producer) do
     if Topology.resource?(producer, :producers) do
-      client = Keyword.get(opts, :client, :default)
-      Topology.remove(producer, Client.resource_supervisor(:producers, client))
+      Topology.stop(producer)
     else
       {:error, :not_found}
     end
@@ -309,7 +315,7 @@ defmodule Pulsar.Producer do
       :group ->
         {:error, :not_found}
 
-      :topology ->
+      :root ->
         {groups, hashing_scheme} = Topology.routing(producer)
         route(groups, hashing_scheme, opts)
     end
@@ -330,7 +336,7 @@ defmodule Pulsar.Producer do
 
         case List.keyfind(groups, index, 0) do
           {_index, group} when is_pid(group) -> pick_worker(Topology.workers(group))
-          {_index, _restarting} -> {:error, :no_producers_available}
+          {_index, _restarting} -> {:error, :not_ready}
           nil -> {:error, {:partition_not_found, index}}
         end
     end
@@ -352,7 +358,7 @@ defmodule Pulsar.Producer do
     end
   end
 
-  defp pick_worker([]), do: {:error, :no_producers_available}
+  defp pick_worker([]), do: {:error, :not_ready}
   defp pick_worker([worker | _rest]), do: {:ok, worker}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows

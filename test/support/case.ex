@@ -33,6 +33,7 @@ defmodule Pulsar.Test.Case do
   setup_all context do
     broker = System.broker()
     {:ok, _client} = Pulsar.Client.start_link(name: context.module, host: broker.service_url)
+
     on_exit(fn -> Pulsar.Client.stop(context.module) end)
 
     {:ok, client: context.module, broker: broker}
