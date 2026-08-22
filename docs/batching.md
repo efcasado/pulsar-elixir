@@ -160,8 +160,34 @@ redelivery brings back only the rest:
 > batched alongside the acked one. Nothing in the protocol reports the setting, so the client
 > cannot check: Pulsar's shipped `broker.conf` enables it, `standalone.conf` does not.
 
-It costs one ack command per message rather than one per entry, so it only pays for itself when
-messages in a batch meet different fates.
+For individual acknowledgements it costs one ack command per message rather than one per entry,
+so it only pays for itself when messages in a batch meet different fates.
+
+### Cumulative acknowledgements and batches
+
+`ack_type: :cumulative` and `batch_index_ack_enabled: true` are independent settings. The first
+chooses whether an ack covers one message or everything through it; the second chooses whether
+that ack can identify a position within a batch.
+
+```elixir
+{:ok, consumer} = Pulsar.Consumer.start(
+  "orders", "billing", MyConsumer,
+  subscription_type: :exclusive,
+  ack_type: :cumulative,
+  batch_index_ack_enabled: true
+)
+```
+
+When a cumulative ack targets part of a batch:
+
+- With batch-index acknowledgement enabled, the ack set clears the prefix through the target.
+  Redelivery returns only the suffix that is still outstanding.
+- With it disabled, the cursor stops at the previous entry. The current batch remains outstanding
+  in full, avoiding acknowledgement of messages after the target.
+
+Cumulative acknowledgement is available only for `:exclusive` and `:failover` subscriptions,
+which have a single cursor to move. The broker-support warning above applies to cumulative and
+individual batch-index acknowledgements alike.
 
 ## Keys and `Key_Shared`
 
@@ -253,7 +279,8 @@ accepted before it, then publishes it as its own entry. This is what the Java an
     subscription_name: "billing",
     callback_module: MyConsumer,
 
-    batch_index_ack_enabled: false,  # Ask the broker to track per-message acks (default: false)
+    ack_type: :individual,           # :individual or :cumulative (default: :individual)
+    batch_index_ack_enabled: false,  # Track positions within batches (default: false)
     redelivery_interval: 5_000       # Needed for a nack to bring anything back
    ]
  ]}
@@ -280,6 +307,10 @@ accepted before it, then publishes it as its own entry. This is what the Java an
 
 - **`batch_index_ack_enabled`**: Whether acks name individual messages of an entry. Requires
   broker support, as described above.
+
+- **`ack_type`**: Whether an acknowledgement covers the named message (`:individual`) or every
+  message through it (`:cumulative`). Cumulative acknowledgement requires an `:exclusive` or
+  `:failover` subscription and combines with `batch_index_ack_enabled` as described above.
 
 ## Example: Batched Orders with Per-Key Ordering
 
