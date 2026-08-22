@@ -1,68 +1,43 @@
 # Upgrading to 3.0
 
-3.0 makes `Pulsar.Client`, `Pulsar.Consumer` and `Pulsar.Producer` the API, moves configuration
-out of `config :pulsar` and into the supervision tree, and changes partition key routing and
-compressed chunk framing.
+This guide is a code-migration checklist for applications upgrading from 2.x. For details about
+new features and internal design, follow the links in [Where to look next](#where-to-look-next).
 
-Most of it is caught by the compiler or at boot. Four changes are not, and they are the ones to
-read first:
-
-- [Application configuration](#application-configuration) is ignored rather than rejected, so
-  an upgraded application starts with no client, no consumers and no producers.
-- [`init/1` became `init/2`](#callback-initialization), and a stale `init/1` is never called.
-- [Partition keys hash differently](#partition-key-routing), so a key moves to another
-  partition of a partitioned topic.
-- [Compressed chunk framing changed](#chunking) to match other Pulsar SDKs; drain messages
-  produced by 2.x before upgrading when both chunking and compression are enabled.
-
-Bump the dependency:
+First, update the dependency:
 
 ```elixir
 {:pulsar, "~> 3.0", hex: :pulsar_elixir}
 ```
 
-## At a glance
+Most required changes produce a compiler warning or a startup error. Four do not:
 
-| 2.x | 3.0 | Where |
-| --- | --- | --- |
-| `config :pulsar, host: …` | `{Pulsar.Client, host: …}` in your tree | [Application configuration](#application-configuration) |
-| `Pulsar.start_consumer/4`, `Pulsar.send/3`, … | `Pulsar.Consumer.start/4`, `Pulsar.Producer.send/3` | [The module surface](#the-module-surface) |
-| `subscription_type: :Shared` | `subscription_type: :shared` | [Option atoms](#option-atoms) |
-| `message.metadata.producer_name` | `Pulsar.Message.producer_name(message)` | [The message struct](#the-message-struct) |
-| `def init(args)` | `def init(args, context)` | [Callback initialization](#callback-initialization) |
-| `flow_initial: 0` | `flow_policy: {m, f, a}` | [Manual flow control](#manual-flow-control) |
-| `:erlang.phash2` key routing | `:murmur3_32` | [Partition key routing](#partition-key-routing) |
-| `producer_count: 4` | Removed | [Removed options](#removed-options) |
-| `Pulsar.Reader.stream(topic, host: …)` | Start a client first | [Removed options](#removed-options) |
+- `config :pulsar` is no longer read. Move it into your supervision tree.
+- Consumer callback `init/1` became `init/2`. A stale `init/1` compiles but is never called.
+- Partition keys use a different hash by default. Plan the routing change before deployment.
+- Compressed chunk framing changed. Drain compressed chunked messages produced by 2.x before
+  upgrading.
 
-## Application configuration
+## 1. Move configuration into your supervision tree
 
-2.x shipped an `Application` callback that read `config :pulsar` at boot and started everything
-it found there. 3.0 has none: the library starts nothing on its own, and nothing reads
-`Application.get_env(:pulsar, …)` any more.
-
-Configuration left in `config.exs` is therefore not rejected — it is not read. The application
-boots, and the first `Pulsar.Producer.send/3` answers `{:error, :not_found}` because no producer
-was ever started.
-
-Move the client into your own supervision tree, and declare consumers and producers on it:
+3.0 does not start a client, consumer, or producer from application configuration. Replace
+`config :pulsar` with a `Pulsar.Client` child in your application supervisor:
 
 ```elixir
-# 2.x
+# 2.x - config/config.exs
 config :pulsar,
   host: "pulsar://localhost:6650",
   consumers: [
-    my_consumer: [
+    orders: [
       topic: "persistent://public/default/orders",
       subscription_name: "order-service",
       callback_module: MyApp.OrderHandler
     ]
   ],
   producers: [
-    my_producer: [topic: "persistent://public/default/audit"]
+    audit: [topic: "persistent://public/default/audit"]
   ]
 
-# 3.0
+# 3.x - your application supervisor
 children = [
   {Pulsar.Client,
    host: "pulsar://localhost:6650",
@@ -70,141 +45,96 @@ children = [
      [topic: "persistent://public/default/orders",
       subscription_name: "order-service",
       callback_module: MyApp.OrderHandler,
-      name: "my_consumer"]
+      name: :orders]
    ],
    producers: [
-     [topic: "persistent://public/default/audit", name: :my_producer]
+     [topic: "persistent://public/default/audit", name: :audit]
    ]}
 ]
 
 Supervisor.start_link(children, strategy: :one_for_one)
 ```
 
-`:consumers` and `:producers` are now lists of keyword lists rather than a keyword list keyed by
-name, and the name each was keyed by moves into a `:name` option. Options are validated, so a
-misspelled key raises at boot instead of being ignored.
+`:consumers` and `:producers` are now lists of keyword lists. Move the old keyword-list key into
+each resource's `:name` option.
 
-> #### Names are registry keys, not strings to be normalized {: .warning}
->
-> 2.x registered a configured consumer under `Atom.to_string(name)` and a configured producer
-> under the atom itself. 3.0 registers whatever you pass. `name: :my_consumer` and
-> `name: "my_consumer"` are two different keys, and only the one you registered resolves. If
-> anything looks a consumer up by string, keep the string.
+Names are exact registry keys in 3.0. If existing code looks up `"orders"`, configure
+`name: "orders"`; `name: :orders` is a different key. An unnamed client is registered as
+`:default`, which is also the default `:client` used by consumers and producers.
 
-Multiple clusters work the same way, one client each:
+For multiple clusters, add one named client child per cluster:
 
 ```elixir
-# 2.x
-config :pulsar,
-  clients: [
-    client_1: [host: "pulsar://host.cluster1.com:6650"],
-    client_2: [host: "pulsar://host.cluster2.com:6650"]
-  ]
-
-# 3.0
 children = [
-  {Pulsar.Client, name: :client_1, host: "pulsar://host.cluster1.com:6650"},
-  {Pulsar.Client, name: :client_2, host: "pulsar://host.cluster2.com:6650"}
+  {Pulsar.Client, name: :east, host: "pulsar://east.example.com:6650"},
+  {Pulsar.Client, name: :west, host: "pulsar://west.example.com:6650"}
 ]
 ```
 
-An unnamed client registers as `:default`, which is also the default `:client` of every consumer
-and producer, so a single-cluster application needs no names at all.
+Move the remaining application settings to the resource they configure:
 
-### Global tunables
-
-The rest of `config :pulsar` was a set of process-wide tunables. Each is now an option on the
-thing it configures, which means two clients can differ:
-
-| 2.x application env | 3.0 |
+| 2.x application setting | 3.0 option |
 | --- | --- |
-| `:ping_interval` | `Pulsar.Client` option |
-| `:cleanup_interval` | `Pulsar.Client` option |
-| `:request_timeout` | `Pulsar.Client` option |
-| `:partition_discovery_interval_ms` | `Pulsar.Consumer` / `Pulsar.Producer` option |
-| `:startup_delay_ms`, `:startup_jitter_ms` | `Pulsar.Consumer` / `Pulsar.Producer` option |
-| `:max_backoff` | Not configurable; reconnect backoff is capped at 30s |
-| `:client_version`, `:protocol_version` | Not configurable |
+| `:ping_interval`, `:cleanup_interval`, `:request_timeout` | `Pulsar.Client` |
+| `:partition_discovery_interval_ms` | `Pulsar.Consumer` or `Pulsar.Producer` |
+| `:startup_delay_ms`, `:startup_jitter_ms` | `Pulsar.Consumer` or `Pulsar.Producer` |
+| `:max_backoff` | Removed; reconnect backoff is capped at 30 seconds |
+| `:client_version`, `:protocol_version` | Removed |
 
-## The module surface
+## 2. Replace calls to the `Pulsar` module
 
-2.x put everything on `Pulsar`, which delegated to internal group and partition modules. 3.0
-moves each function to the module that owns the thing it acts on, and `Pulsar` itself is
-documentation only.
+The public API is split between `Pulsar.Client`, `Pulsar.Consumer`, and `Pulsar.Producer`:
 
 | 2.x | 3.0 |
 | --- | --- |
 | `Pulsar.start_client/1` | `Pulsar.Client.start_link/1` |
 | `Pulsar.start/1`, `Pulsar.stop/1` | `Pulsar.Client.start_link/1`, `Pulsar.Client.stop/2` |
-| `Pulsar.start_broker/2`, `lookup_broker/2`, `stop_broker/2` | `Pulsar.Client.start_broker/2`, `lookup_broker/2`, `stop_broker/2` |
-| `Pulsar.start_consumer/4` | `Pulsar.Consumer.start/4` (or `start/1` with all options) |
+| `Pulsar.start_broker/2`, `lookup_broker/2`, `stop_broker/2` | Corresponding `Pulsar.Client` functions |
+| `Pulsar.start_consumer/4` | `Pulsar.Consumer.start/4` or `start/1` |
 | `Pulsar.stop_consumer/2` | `Pulsar.Consumer.stop/2` |
 | `Pulsar.get_consumers/2`, `lookup_consumer/2` | `Pulsar.Client.consumers/1` |
 | `Pulsar.ack/3`, `Pulsar.nack/3` | `Pulsar.Consumer.ack/2`, `Pulsar.Consumer.nack/2` |
 | `Pulsar.send_flow/2,3` | `Pulsar.Consumer.send_flow/3` |
-| `Pulsar.start_producer/2` | `Pulsar.Producer.start/2` (or `start/1` with all options) |
+| `Pulsar.start_producer/2` | `Pulsar.Producer.start/2` or `start/1` |
 | `Pulsar.stop_producer/2` | `Pulsar.Producer.stop/2` |
 | `Pulsar.get_producers/2`, `lookup_producer/2` | `Pulsar.Client.producers/1` |
 | `Pulsar.send/3` | `Pulsar.Producer.send/3` |
 
-These are calls to functions that no longer exist, so the compiler warns on every one.
+For example:
 
 ```elixir
 # 2.x
-{:ok, _pid} =
-  Pulsar.start_consumer(
-    "persistent://public/default/orders",
-    "order-service",
-    MyApp.OrderHandler,
-    subscription_type: :Key_Shared,
-    consumer_count: 3
-  )
+Pulsar.start_consumer(topic, subscription, MyApp.Handler, subscription_type: :Shared)
+Pulsar.send(:audit, payload)
 
-Pulsar.send(:my_producer, "payload")
-
-# 3.0
-{:ok, _pid} =
-  Pulsar.Consumer.start(
-    "persistent://public/default/orders",
-    "order-service",
-    MyApp.OrderHandler,
-    subscription_type: :key_shared,
-    consumer_count: 3
-  )
-
-Pulsar.Producer.send(:my_producer, "payload")
+# 3.x
+Pulsar.Consumer.start(topic, subscription, MyApp.Handler, subscription_type: :shared)
+Pulsar.Producer.send(:audit, payload)
 ```
 
-Three details behind the rename:
-
-**`ack/2` and `nack/2` take a pid, not a name.** They target the worker that delivered the
-message, which a name cannot identify: a consumer with several partitions or several
-`:consumer_count` workers is many processes, and only one of them holds the message. Capture
-`self()` in `handle_message/2` and hand it along with the message id:
+`ack/2` and `nack/2` take the worker pid that delivered the message, not the logical consumer
+name. If acknowledgement happens elsewhere, pass `self()` and `message.message_id` out of the
+callback:
 
 ```elixir
 def handle_message(message, state) do
   MyApp.Jobs.enqueue(message.payload, ack: {self(), message.message_id})
   {:noreply, state}
 end
+
+# In another process:
+Pulsar.Consumer.ack(worker, message_id)
 ```
 
-The job then calls `Pulsar.Consumer.ack(consumer, message_id)`. It must be another process:
-every callback runs inside its worker, so `ack(self(), …)` from the callback is a `GenServer`
-call to itself, which exits with `:calling_self` and takes the consumer down.
+Do not call `ack(self(), ...)` synchronously from the callback: the callback runs in the worker,
+so that would be a `GenServer.call` to itself.
 
-**There is no separate lookup step.** `stop/2`, `send_flow/3`, `await_ready/2`,
-`Pulsar.Producer.send/3` and `send_async/3` all take a pid or a registered name directly, with
-`:client` selecting the client a name is resolved against.
+`Pulsar.Client.consumers/1` and `producers/1` return one topology root per logical resource,
+rather than listing its individual workers.
 
-**`Pulsar.Client.consumers/1` lists roots, not workers.** 2.x `get_consumers/2` returned the
-individual consumer processes in a group. 3.0 returns one stable pid per logical consumer,
-however many partitions and workers sit under it.
+## 3. Update option values
 
-## Option atoms
-
-Every enum option value is lowercase and snake_case now. Values are validated, so a stale one
-raises when the consumer or producer starts rather than being silently accepted.
+Enum option values are lowercase and snake_case in 3.0:
 
 | Option | 2.x | 3.0 |
 | --- | --- | --- |
@@ -212,364 +142,184 @@ raises when the consumer or producer starts rather than being silently accepted.
 | `:access_mode` | `:Shared`, `:Exclusive`, `:WaitForExclusive`, `:ExclusiveWithFencing` | `:shared`, `:exclusive`, `:wait_for_exclusive`, `:exclusive_with_fencing` |
 | `:compression` | `:NONE`, `:LZ4`, `:ZLIB`, `:SNAPPY`, `:ZSTD` | `:none`, `:lz4`, `:zlib`, `:snappy`, `:zstd` |
 
-`:initial_position` was already `:earliest` / `:latest` and is unchanged. `:shared` remains the
-default subscription type, and `:none` the default compression.
+Options are validated at startup, so old or misspelled values now raise.
 
-## The message struct
+### Changes used by some applications
 
-2.x exposed the wire protocol structs directly, and their shape depended on how the message was
-delivered: a batched message carried its key in `single_metadata`, a non-batched one in
-`metadata`, and a chunked one carried a list of both. 3.0 keeps the protocol structs under
-`:raw` and answers the common questions with accessors that work the same way regardless of
-delivery.
+- Remove `:producer_count`. A producer now has one worker per partition. `:consumer_count`
+  remains supported.
+- Remove `:host` from `Pulsar.Reader.stream/2`. Start a client first and use `:client` to select
+  it when necessary:
 
-The struct went from seven fields to five:
+  ```elixir
+  {:ok, _client} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
+  Pulsar.Reader.stream(topic, start_position: :earliest)
+  ```
 
-| 2.x field | 3.0 |
-| --- | --- |
-| `:payload` | `:payload`, unchanged |
-| `:message_id_to_ack` | `:message_id` |
-| `:chunk_metadata` | `:chunk_metadata`, unchanged |
-| `:command` | `raw.command` |
-| `:metadata` | `raw.metadata` |
-| `:single_metadata` | `raw.single_metadata` |
-| `:broker_metadata` | `raw.broker_metadata` |
-| — | `:validation_error`, new |
+- If you used `flow_initial: 0` for fully manual flow control, add a custom `:flow_policy`.
+  `flow_initial: 0` with the default `:auto` policy is rejected:
 
-```elixir
-# 2.x
-def handle_message(%Pulsar.Message{} = message, state) do
-  key = message.single_metadata && message.single_metadata.partition_key
-  producer = message.metadata.producer_name
-  Pulsar.Consumer.ack(consumer, message.message_id_to_ack)
-  {:noreply, state}
-end
+  ```elixir
+  Pulsar.Consumer.start(topic, subscription, MyApp.Handler,
+    flow_initial: 0,
+    flow_policy: {MyApp.Flow, :decide, []}
+  )
 
-# 3.0
-def handle_message(%Pulsar.Message{} = message, state) do
-  key = Pulsar.Message.key(message)
-  producer = Pulsar.Message.producer_name(message)
-  Pulsar.Consumer.ack(consumer, message.message_id)
-  {:noreply, state}
-end
-```
+  defmodule MyApp.Flow do
+    def decide(_flow), do: :ok
+  end
+  ```
 
-The accessors are `producer_name/1`, `publish_time/1`, `event_time/1`, `key/1`,
-`ordering_key/1`, `properties/1`, `redelivery_count/1` and `message_id_string/1`, plus
-`chunked?/1`, `complete?/1`, `valid?/1` and `num_broker_messages/1`. Prefer them over `:raw`,
-whose shape follows the wire protocol and is explicitly unstable.
+  Grant permits from another process with `Pulsar.Consumer.send_flow/3`. See
+  `Pulsar.Consumer` for custom policy details.
 
-`:message_id` is opaque: it carries a batch index for a batched message, and for a chunked one
-it stands for every chunk, so it is a list there. Pass it to `ack/2` and `nack/2` rather than
-matching on it.
+## 4. Update consumer callbacks
 
-### Invalid messages
-
-`:validation_error` and `c:Pulsar.Consumer.Callback.handle_invalid_message/2` are new. A message
-whose bytes could not be turned into a payload goes there instead of `handle_message/2`, most
-often for one of these reasons:
-
-- `:checksum_mismatch` — the frame failed its CRC32C check. 2.x did not verify checksums at all,
-  so such a message was parsed as though it were intact.
-- `:decompression_failed` — the frame arrived intact and its metadata read, but the codec could
-  not turn the payload back into the message that was sent. 2.x raised here, taking the worker
-  down under every codec but `:zstd`, which handed the callback an error tuple in place of the
-  payload.
-- `:uncompressed_size_corruption` — the payload decoded, or the chunks reassembled, to a
-  different size than the producer recorded. 2.x did not check.
-
-Either of the last two keeps `metadata`, and `payload` holds the bytes as they arrived, still
-compressed. The default implementation logs and acknowledges, so invalid messages are not
-redelivered forever; override it to record or divert them instead, and match `:validation_error`
-with a catch-all — malformed framing is reported under its own reasons. Each of them also counts
-against the `[:pulsar, :consumer, :message, :invalid]` telemetry event, whose `reason` is the same
-atom, whose `decompression_reason` narrows the two above, and whose `detail` carries what the
-codec itself reported.
-
-A message that arrived intact but incomplete is not invalid: an expired or evicted chunked message
-still reaches `handle_message/2`. Check `Pulsar.Message.complete?/1` there before reading it.
-
-## Callback initialization
-
-The callback module's `init/1` became `c:Pulsar.Consumer.Callback.init/2`. The second argument
-is the consumer's resolved identity, which matters on a partitioned topic: several callback
-processes share one configured topic while each handles a different partition.
-
-```elixir
-%{
-  topic: "persistent://public/default/orders-partition-2",
-  base_topic: "persistent://public/default/orders",
-  partition: 2,
-  subscription_name: "order-service",
-  subscription_type: :shared,
-  consumer_name: "orders-order-service-partition-2-1"
-}
-```
-
-`:topic` and `:base_topic` are equal, and `:partition` is `nil`, on a topic that is not
-partitioned.
-
-> #### A stale `init/1` compiles and never runs {: .warning}
->
-> `use Pulsar.Consumer.Callback` defines a default `init/2` and marks it overridable. A module
-> that still defines `init/1` overrides nothing: the default `init/2` returning `{:ok, nil}` is
-> what the consumer calls, and the state your `init/1` built is silently never used. There is no
-> warning. Grep for `def init(` in every callback module.
+Change callback `init/1` to `init/2`. The second argument contains the resolved topic,
+partition, subscription, and consumer identity:
 
 ```elixir
 # 2.x
 def init(opts) do
-  {:ok, %{count: 0, max: Keyword.get(opts, :max, 1000)}}
+  {:ok, %{max: Keyword.get(opts, :max, 1000)}}
 end
 
 # 3.0
-def init(opts, _context) do
-  {:ok, %{count: 0, max: Keyword.get(opts, :max, 1000)}}
+def init(opts, context) do
+  {:ok, %{max: Keyword.get(opts, :max, 1000), partition: context.partition}}
 end
 ```
 
-## Manual flow control
+Search every callback module for `def init(`. Because `use Pulsar.Consumer.Callback` supplies a
+default `init/2`, leaving an old `init/1` in place compiles but silently uses the default state
+instead.
 
-In 2.x, `flow_initial: 0` meant "grant nothing and leave refills to `Pulsar.send_flow/2`". In
-3.0 the refill strategy is its own option, and `flow_initial: 0` under the default `:auto` policy
-raises at startup — it is the configuration that never receives a message, since the broker is
-granted nothing and no delivery ever arrives to trigger a refill.
+Invalid messages now go to the optional `handle_invalid_message/2` callback. Implement it if
+your application must record or divert checksum, decompression, or framing failures:
+
+```elixir
+def handle_invalid_message(message, state) do
+  MyApp.InvalidMessages.record(message.validation_error, message.raw)
+  {:ok, state}
+end
+```
+
+The default implementation logs and acknowledges the invalid message.
+
+## 5. Update message access
+
+`Pulsar.Message` no longer exposes wire-protocol fields at its top level:
+
+| 2.x | 3.0 |
+| --- | --- |
+| `message.message_id_to_ack` | `message.message_id` |
+| `message.command` | `message.raw.command` |
+| `message.metadata` | `message.raw.metadata` |
+| `message.single_metadata` | `message.raw.single_metadata` |
+| `message.broker_metadata` | `message.raw.broker_metadata` |
+
+Use accessors for values that should work across normal, batched, and chunked messages:
 
 ```elixir
 # 2.x
-Pulsar.start_consumer(topic, subscription, MyApp.Handler, flow_initial: 0)
+key = message.single_metadata && message.single_metadata.partition_key
+producer = message.metadata.producer_name
 
-# 3.0 — permits granted entirely from outside the consumer
-Pulsar.Consumer.start(topic, subscription, MyApp.Handler,
-  flow_initial: 0,
-  flow_policy: {MyApp.Flow, :never_grant, []}
-)
+# 3.0
+key = Pulsar.Message.key(message)
+producer = Pulsar.Message.producer_name(message)
 ```
 
-A policy is asked after every delivery with `%{consumed: permits, outstanding: permits}` and
-answers `:ok` or `{:grant, permits}`. It is called as `[flow | args]`, so the `args` in the
-tuple decide its arity — `[]` above means `never_grant/1`, and a policy given `[100]` takes the
-flow and that argument:
+Other accessors include `publish_time/1`, `event_time/1`, `ordering_key/1`, `properties/1`,
+`redelivery_count/1`, `message_id_string/1`, `chunked?/1`, `complete?/1`, and `valid?/1`.
+
+Treat `message.message_id` as opaque and pass it directly to `ack/2` or `nack/2`. It can be a
+list for a chunked message.
+
+## 6. Update startup and send-result handling
+
+Consumer and producer startup is asynchronous. If the next operation requires a ready resource,
+wait explicitly:
 
 ```elixir
-defmodule MyApp.Flow do
-  def never_grant(_flow), do: :ok
+{:ok, _producer} = Pulsar.Producer.start(topic: topic, name: :audit)
+:ok = Pulsar.Producer.await_ready(:audit, timeout: 10_000)
+```
 
-  def decide(%{outstanding: outstanding}, refill) when outstanding <= 20, do: {:grant, refill}
-  def decide(_flow, _refill), do: :ok
+Until initialization finishes, operations can return `{:error, :not_ready}`.
+
+Update producer result matches for these 3.0 return values:
+
+```elixir
+case Pulsar.Producer.send(:audit, payload) do
+  {:ok, :deduplicated} ->
+    :ok
+
+  {:ok, message_id} ->
+    {:published, message_id}
+
+  {:error, :producer_queue_full} ->
+    {:retry, :overloaded}
+
+  {:error, :send_timeout} ->
+    {:retry, :unknown_publish_outcome}
 end
 ```
 
-Two constraints follow from it only being asked after a delivery: it cannot grant the first
-permits, which come from `:flow_initial` or from `Pulsar.Consumer.send_flow/3` in another
-process; and it runs inside the consumer, so it must not call `send_flow/3` on that consumer,
-which would deadlock.
+`:send_timeout` does not prove that the broker rejected the message; it means no acknowledgement
+arrived before the deadline. A missing named producer now returns `{:error, :not_found}` instead
+of `{:error, :producer_not_found}`.
 
-If you were using the 2.x default flow settings, nothing changes: `:auto` with the same
-`:flow_initial`, `:flow_threshold` and `:flow_refill` defaults is what you already had.
+## 7. Plan deployment compatibility
 
-## Partition key routing
+These changes may require rollout coordination even after the code compiles.
 
-2.x picked the partition of a partitioned topic with `:erlang.phash2/2`. No other Pulsar client
-implements that, so an Elixir producer and a Java or Go producer sent the same key to different
-partitions. 3.0 defaults to `:murmur3_32`, which every client implements identically.
+### Partition-key routing
 
-Nothing fails. The keys simply land elsewhere, which breaks per-key ordering while both the old
-and the new partition still hold messages for that key, and moves keys away from the consumers
-currently pinned to them under a `:key_shared` subscription.
+3.0 changes the default partition-key hash from `:erlang.phash2` to `:murmur3_32`. This affects
+partitioned topics produced with `:partition_key` and can temporarily break per-key ordering
+during a mixed rollout.
 
-This only affects partitioned topics you publish to with a `:partition_key`. If that is you,
-choose one:
-
-**Drain, then switch.** Stop producing, let consumers empty the topic, then upgrade. Ordering
-is preserved because nothing is in flight to be reordered. This is the recommended path.
-
-**Keep the old routing while upgrading.** `:phash2_legacy` reproduces the pre-3.0 partition
-choice exactly, so keys stay where they are:
+Either drain the topic before switching, or preserve the 2.x routing during the rollout:
 
 ```elixir
 Pulsar.Producer.start(topic: topic, name: :orders, hashing_scheme: :phash2_legacy)
 ```
 
-It is a migration path, not a peer of the other schemes: no other client can reproduce it. Move
-to `:murmur3_32` once you can drain.
+Move to `:murmur3_32` after the old messages are drained. Partition keys must be binaries in
+3.0.
 
-`:java_string_hash` is also available, matching what the Java and Go clients use when left at
-their own defaults.
+### Compressed chunked messages
 
-One related tightening: `:partition_key` must be a binary now, where 2.x accepted any term.
+If both `:chunking_enabled` and `:compression` are enabled, drain messages produced by 2.x and
+upgrade producers and consumers together. 3.0 does not read the old compressed chunk framing.
+Uncompressed chunked messages remain compatible.
 
-## Chunking
+`:batch_enabled` and `:chunking_enabled` can no longer be combined. Choose one; 2.x silently
+ignored chunking when both were enabled.
 
-Uncompressed chunked messages remain compatible across versions. If both
-`:chunking_enabled` and `:compression` are enabled, drain messages produced by 2.x before
-upgrading and move producers and consumers to 3.0 together; 3.0 does not read the old compressed
-chunk framing.
+### Startup delay
 
-Combining `:batch_enabled` with `:chunking_enabled` raises now. 2.x accepted both and batched,
-silently ignoring `:chunking_enabled`, so a payload over `:max_message_size` went into a batch
-entry whole rather than being split.
+`:startup_delay_ms` and `:startup_jitter_ms` now default to `0` instead of `1000`. Set them
+explicitly if your deployment relied on staggered consumer or producer startup.
 
-Incomplete chunked messages reach the callback with `chunk_metadata.complete == false`, as
-before. Check `Pulsar.Message.complete?/1` before reading an incomplete message.
+## Final checklist
 
-## Removed options
-
-**`:producer_count` is gone.** A producer now runs exactly one worker per partition, which keeps
-one ordered send lane, one sequence-id domain and one batching domain per partition. Several
-workers on the same partition gave none of those guarantees; concurrency comes from partitioning
-the topic instead.
-
-```elixir
-# 2.x
-Pulsar.start_producer(topic, producer_count: 4)
-
-# 3.0
-Pulsar.Producer.start(topic: topic)
-```
-
-`:consumer_count` on the consumer side is unchanged — several consumers on one subscription is
-a Pulsar concept, not a client-side one.
-
-**`Pulsar.Reader.stream/2` no longer takes `:host`.** It reads through a client like everything
-else, so start one first:
-
-```elixir
-# 2.x
-Pulsar.Reader.stream(topic, host: "pulsar://localhost:6650", start_position: :earliest)
-
-# 3.0
-{:ok, _pid} = Pulsar.Client.start_link(host: "pulsar://localhost:6650")
-Pulsar.Reader.stream(topic, start_position: :earliest)
-```
-
-The stream no longer closes a connection it did not open. `:client` selects which one to read
-through, defaulting to `:default`.
-
-## Behaviour changes that need no code change
-
-These require no edits, but they change what you observe.
-
-**Consumers and producers subscribe immediately.** `:startup_delay_ms` and `:startup_jitter_ms`
-both default to `0`, where 2.x defaulted both to `1000`. A broker that is not connected yet is
-retried, so the delay was only ever useful to stagger a large fleet of simultaneous restarts.
-Set them explicitly if you relied on that.
-
-**Startup is asynchronous.** `Pulsar.Consumer.start/1` and `Pulsar.Producer.start/1` return once
-the topology root is up, while discovery and worker initialization continue. Operations answer
-`{:error, :not_ready}` until they finish. Use `await_ready/2` where work must not observe that:
-
-```elixir
-:ok = Pulsar.Producer.await_ready(:my_producer, timeout: 10_000)
-```
-
-**Deduplicated sends report themselves.** On a topic with deduplication enabled,
-`Pulsar.Producer.send/3` can answer `{:ok, :deduplicated}`: the broker recognised the sequence id,
-kept the message it already had, and assigned this call no message id. 2.x reported this as
-`{:ok, message_id}` with a message id that referred to nothing. Match on `{:ok, id}` expecting a
-`MessageIdData` and you will now see the atom.
-
-**Send timeouts changed shape.** 2.x `Pulsar.send/3` defaulted `:timeout` to 5000 and let the
-`GenServer.call` exit, surfacing as `{:error, {:producer_died, reason}}`. 3.0 defaults `:timeout`
-to `:infinity` and bounds the wait with the producer's `:send_timeout` (30s by default),
-answering `{:error, :send_timeout}`. A producer already holding `:max_pending_messages`
-unanswered sends refuses more with `{:error, :producer_queue_full}` instead of queueing
-indefinitely.
-
-**A missing producer is `{:error, :not_found}`**, where 2.x answered
-`{:error, :producer_not_found}`.
-
-**Message frames are checksum-verified.** A frame whose CRC32C does not match is delivered to
-`handle_invalid_message/2` rather than being parsed as though it were intact.
-
-**Telemetry metadata gained fields.** Consumer and producer events now carry `topic`,
-`base_topic`, `partition` and `subscription_name` alongside what they carried before, so one set
-of handlers can both aggregate over a partitioned topic and break down by partition. Existing
-handlers keep working.
-
-## Complete example
-
-```elixir
-# 2.x
-config :pulsar,
-  host: "pulsar://localhost:6650",
-  consumers: [
-    orders: [
-      topic: "persistent://public/default/orders",
-      subscription_name: "order-service",
-      callback_module: MyApp.OrderHandler,
-      subscription_type: :Key_Shared,
-      consumer_count: 3
-    ]
-  ],
-  producers: [
-    audit: [topic: "persistent://public/default/audit", compression: :LZ4]
-  ]
-
-defmodule MyApp.OrderHandler do
-  use Pulsar.Consumer.Callback
-
-  require Logger
-
-  def init(_args) do
-    {:ok, %{count: 0}}
-  end
-
-  def handle_message(%Pulsar.Message{} = message, state) do
-    key = message.single_metadata && message.single_metadata.partition_key
-    Logger.info("order #{key} from #{message.metadata.producer_name}")
-    Pulsar.send(:audit, message.payload)
-    {:ok, %{state | count: state.count + 1}}
-  end
-end
-```
-
-```elixir
-# 3.0
-children = [
-  {Pulsar.Client,
-   host: "pulsar://localhost:6650",
-   consumers: [
-     [topic: "persistent://public/default/orders",
-      subscription_name: "order-service",
-      callback_module: MyApp.OrderHandler,
-      subscription_type: :key_shared,
-      consumer_count: 3,
-      name: :orders]
-   ],
-   producers: [
-     [topic: "persistent://public/default/audit", compression: :lz4, name: :audit]
-   ]}
-]
-
-Supervisor.start_link(children, strategy: :one_for_one)
-
-defmodule MyApp.OrderHandler do
-  use Pulsar.Consumer.Callback
-
-  require Logger
-
-  def init(_args, context) do
-    {:ok, %{count: 0, partition: context.partition}}
-  end
-
-  def handle_message(%Pulsar.Message{} = message, state) do
-    Logger.info("order #{Pulsar.Message.key(message)} from #{Pulsar.Message.producer_name(message)}")
-    Pulsar.Producer.send(:audit, message.payload)
-    {:ok, %{state | count: state.count + 1}}
-  end
-end
-```
+- Move all `config :pulsar` values into supervised clients and resources.
+- Replace calls to the old `Pulsar` API.
+- Lowercase enum option values.
+- Change every callback `init/1` to `init/2`.
+- Replace direct message metadata access with `Pulsar.Message` accessors.
+- Remove `:producer_count` and reader `:host` options where used.
+- Update readiness, send-result, and missing-producer matches.
+- Plan partition-key and compressed-chunk migrations before deployment.
 
 ## Where to look next
 
-- `Pulsar.Client`, `Pulsar.Consumer` and `Pulsar.Producer` document every option with its type
-  and default.
-- The [architecture guide](architecture.html) covers the ownership tree, asynchronous startup
-  and the recovery model that the new supervision layout implies.
-- The [batching](batching.html), [chunking](chunking.html) and
-  [dead letter policies](dead_letter_policies.html) guides cover the areas this release changed
-  most.
-- Broadway users upgrade through
-  [off_broadway_pulsar 2.0](https://hexdocs.pm/off_broadway_pulsar/upgrading_to_2-0.html), which
-  handles most of this on your behalf.
+- `Pulsar.Client`, `Pulsar.Consumer`, and `Pulsar.Producer` document their options and API.
+- `Pulsar.Consumer.Callback` documents callback return values and lifecycle events.
+- The [architecture guide](architecture.html) covers ownership, startup, and recovery.
+- The [batching](batching.html), [chunking](chunking.html), [schemas](schemas.html), and
+  [dead letter policies](dead_letter_policies.html) guides cover those features in depth.
+- Broadway users should follow the
+  [off_broadway_pulsar 2.0 upgrade guide](https://hexdocs.pm/off_broadway_pulsar/upgrading_to_2-0.html).
