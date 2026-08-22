@@ -10,6 +10,9 @@ ordered subscription it holds up everything behind it.
 A dead letter policy sets the point at which the consumer stops retrying, publishes the message to another
 topic, and acknowledges it. The subscription moves on, and the message is still there to inspect or replay.
 
+For how callback results become ACKs and NACKs before dead lettering is involved, see
+[Acknowledgement and Redelivery](acknowledgements.html).
+
 ## How Dead Lettering Works
 
 ### Consumer Side

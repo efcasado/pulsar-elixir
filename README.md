@@ -17,11 +17,12 @@ An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 - 📤 Producers
 - 🪾 Partitioned topics
 - 🏎️ Compacted topics
+- ✅ ACK, NACK, and redelivery (see [guide](https://hexdocs.pm/pulsar_elixir/acknowledgements.html))
 - 📝 Schemas (see [guide](https://hexdocs.pm/pulsar_elixir/schemas.html))
 - 🔪 Chunking (see [guide](https://hexdocs.pm/pulsar_elixir/chunking.html))
-- 🍱 Batching (including batch-index ACK; see [guide](https://hexdocs.pm/pulsar_elixir/batching.html))
+- 🍱 Batching (see [guide](https://hexdocs.pm/pulsar_elixir/batching.html))
 - 🗜️ Compression
-- ☠️ NACK and dead-letter topics (see [guide](https://hexdocs.pm/pulsar_elixir/dead_letter_policies.html))
+- ☠️ Dead-letter topics (see [guide](https://hexdocs.pm/pulsar_elixir/dead_letter_policies.html))
 
 
 ## Installation

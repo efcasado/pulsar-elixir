@@ -319,7 +319,8 @@ explicitly if your deployment relied on staggered consumer or producer startup.
 - `Pulsar.Client`, `Pulsar.Consumer`, and `Pulsar.Producer` document their options and API.
 - `Pulsar.Consumer.Callback` documents callback return values and lifecycle events.
 - The [architecture guide](architecture.html) covers ownership, startup, and recovery.
-- The [batching](batching.html), [chunking](chunking.html), [schemas](schemas.html), and
+- The [acknowledgement and redelivery](acknowledgements.html), [batching](batching.html),
+  [chunking](chunking.html), [schemas](schemas.html), and
   [dead letter policies](dead_letter_policies.html) guides cover those features in depth.
 - Broadway users should follow the
   [off_broadway_pulsar 2.0 upgrade guide](https://hexdocs.pm/off_broadway_pulsar/upgrading_to_2-0.html).

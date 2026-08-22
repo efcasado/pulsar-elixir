@@ -114,9 +114,8 @@ defmodule Pulsar.Consumer.Options do
       default: :individual,
       doc: """
       What an acknowledgement covers. `:individual` acknowledges the messages it names.
-      `:cumulative` acknowledges everything up to and including them, sending only the
-      furthest one, which moves the subscription cursor in one command instead of one per
-      message.
+      `:cumulative` acknowledges everything up to and including the furthest one. When one
+      acknowledgement call names several messages, only that furthest target is sent.
 
       **Only `:exclusive` and `:failover` subscriptions may ack cumulatively**, since a shared
       subscription has no single cursor to move; the broker rejects it otherwise, so this is
