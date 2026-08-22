@@ -109,13 +109,39 @@ defmodule Pulsar.Consumer.Options do
       default: true,
       doc: "Create the topic if it does not exist."
     ],
+    ack_type: [
+      type: {:in, [:individual, :cumulative]},
+      default: :individual,
+      doc: """
+      What an acknowledgement covers. `:individual` acknowledges the messages it names.
+      `:cumulative` acknowledges everything up to and including them, sending only the
+      furthest one, which moves the subscription cursor in one command instead of one per
+      message.
+
+      **Only `:exclusive` and `:failover` subscriptions may ack cumulatively**, since a shared
+      subscription has no single cursor to move; the broker rejects it otherwise, so this is
+      refused at startup instead.
+
+      Cumulative acknowledgement covers messages that were never acked, and a nacked message
+      the cursor passes is acknowledged along with the rest.
+
+      Cumulative acknowledgement and batch-index acknowledgement are independent. When a
+      cumulative ack stops part-way through a batch, `:batch_index_ack_enabled: true` lets it
+      move into the entry and retain the later messages for redelivery. With the flag off, it
+      stops at the previous entry instead and the batch is redelivered whole.
+      """
+    ],
     batch_index_ack_enabled: [
       type: :boolean,
       default: false,
       doc: """
-      Tell the broker which messages of a batch an ack was for, so that a nack redelivers only
-      the rest of the entry instead of all of it. Costs one ack command per message rather
-      than one per entry.
+      Tell the broker which messages of a batch an ack covers. For individual acks this tracks
+      each acknowledged message; for cumulative acks it tracks the acknowledged prefix through
+      the target. Redelivery can then return only the messages still outstanding instead of the
+      whole entry. This option is independent of `:ack_type`.
+
+      For individual acknowledgement it can cost one ack command per message rather than one
+      per entry.
 
       **Requires `acknowledgmentAtBatchIndexLevelEnabled=true` on the broker.** Without it the
       broker ignores the set and acknowledges the whole entry, losing the messages batched
@@ -235,6 +261,7 @@ defmodule Pulsar.Consumer.Options do
     |> NimbleOptions.validate!(@schema)
     |> validate_flow!()
     |> validate_consumer_count!()
+    |> validate_ack_type!()
   end
 
   defp validate_consumer_count!(opts) do
@@ -255,6 +282,21 @@ defmodule Pulsar.Consumer.Options do
               "granted nothing, so no delivery arrives to trigger a refill. Set a positive " <>
               ":flow_initial, or a {module, function, args} policy if permits will come from " <>
               "Pulsar.Consumer.send_flow/3."
+    end
+
+    opts
+  end
+
+  @cumulative_subscription_types [:exclusive, :failover]
+
+  defp validate_ack_type!(opts) do
+    subscription_type = Keyword.fetch!(opts, :subscription_type)
+
+    if Keyword.fetch!(opts, :ack_type) == :cumulative and subscription_type not in @cumulative_subscription_types do
+      raise ArgumentError,
+            "ack_type: :cumulative is not supported on a #{inspect(subscription_type)} subscription, which " <>
+              "has no single cursor to move: the broker rejects the acknowledgement. Use " <>
+              ":exclusive or :failover, or ack individually."
     end
 
     opts

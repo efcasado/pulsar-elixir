@@ -20,6 +20,151 @@ defmodule Pulsar.Consumer.AckTest do
     end
   end
 
+  describe "record_ack/2 when cumulative" do
+    setup do: %{ack: Ack.new(ack_type: :cumulative)}
+
+    test "sends only the furthest of the ids it is given", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [id(41), id(43), id(42)])
+
+      assert acked.entryId == 43
+    end
+
+    test "orders by ledger before entry, so a new ledger wins a lower entry id", %{ack: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [%{id(99) | ledgerId: 7}, %{id(1) | ledgerId: 8}])
+
+      assert {acked.ledgerId, acked.entryId} == {8, 1}
+    end
+
+    test "counts nothing off, since one ack covers the messages before it", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert ack.acked == %{}
+    end
+
+    test "sends nothing for an id the cursor has already passed", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+
+      assert {[], ^ack} = Ack.record_ack(ack, [id(42)])
+      assert {[], ^ack} = Ack.record_ack(ack, [id(43)])
+    end
+
+    test "sends again once an id moves the cursor on", %{ack: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [id(43)])
+      {[acked], _ack} = Ack.record_ack(ack, [id(44)])
+
+      assert acked.entryId == 44
+    end
+
+    test "has nothing to send for no ids at all", %{ack: ack} do
+      assert {[], ^ack} = Ack.record_ack(ack, [])
+    end
+  end
+
+  # Without batch-index acknowledgement, stopping part-way through a batch cannot move the
+  # cursor into the entry. With it, the broker can retain the unread suffix in an ack set.
+  describe "record_ack/2 when cumulative, stopping inside a batch" do
+    setup do
+      %{
+        plain: Ack.new(ack_type: :cumulative),
+        indexed: Ack.new(ack_type: :cumulative, batch_index_ack_enabled: true)
+      }
+    end
+
+    test "goes no further than the entry before, rather than acknowledging the rest", %{plain: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert {acked.entryId, acked.batch_index, acked.ack_set} == {41, -1, []}
+    end
+
+    test "uses the before-ledger sentinel when the batch is the ledger's first entry", %{plain: ack} do
+      message_id = batch_id(0, 3, entry: 0)
+
+      {[acked], ack} = Ack.record_ack(ack, [message_id])
+
+      assert acked.entryId == 0xFFFF_FFFF_FFFF_FFFF
+      assert ack.cumulative_cursor == {7, -1, :whole}
+
+      decoded = acked |> Binary.MessageIdData.encode() |> Binary.MessageIdData.decode()
+      assert decoded.entryId == 0xFFFF_FFFF_FFFF_FFFF
+    end
+
+    test "converts every id to a safe target before choosing the furthest one", %{plain: ack} do
+      earlier_ledger = %{id(99) | ledgerId: 6}
+      first_entry_of_later_ledger = %{batch_id(0, 3, entry: 0) | ledgerId: 7}
+
+      {[acked], ack} = Ack.record_ack(ack, [earlier_ledger, first_entry_of_later_ledger])
+
+      assert {acked.ledgerId, acked.entryId} == {7, 0xFFFF_FFFF_FFFF_FFFF}
+      assert ack.cumulative_cursor == {7, -1, :whole}
+    end
+
+    test "stops at the requested batch index when batch index acking is on", %{indexed: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+
+      assert {acked.entryId, acked.batch_index, acked.ack_set, acked.batch_size} ==
+               {42, -1, [0b110], 3}
+    end
+
+    test "clears the whole prefix through the cumulative target", %{indexed: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(1, 4)])
+
+      assert acked.ack_set == [0b1100]
+    end
+
+    test "preserves messages the broker reported as already acknowledged", %{indexed: ack} do
+      message_id = %{batch_id(1, 4) | ack_set: [0b1011]}
+
+      {[acked], _ack} = Ack.record_ack(ack, [message_id])
+
+      assert acked.ack_set == [0b1000]
+    end
+
+    test "spans words when the cumulative target crosses a word boundary", %{indexed: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(64, 70)])
+
+      assert acked.ack_set == [0, 0b111110]
+    end
+
+    test "acknowledges the entry whole once its last message is acked", %{plain: plain, indexed: indexed} do
+      for ack <- [plain, indexed] do
+        {[acked], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+
+        assert {acked.entryId, acked.batch_index, acked.ack_set} == {42, -1, []}
+      end
+    end
+
+    test "moves on to the entry itself once the batch is complete", %{plain: ack} do
+      {[before], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+      {[], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      {[whole], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+
+      assert {before.entryId, whole.entryId} == {41, 42}
+    end
+
+    test "moves through batch indices before covering the entry", %{indexed: ack} do
+      {[first], ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+      {[second], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      {[whole], _ack} = Ack.record_ack(ack, [batch_id(2, 3)])
+
+      assert {first.entryId, first.ack_set} == {42, [0b110]}
+      assert {second.entryId, second.ack_set} == {42, [0b100]}
+      assert {whole.entryId, whole.ack_set} == {42, []}
+    end
+
+    test "stays put while the same message is acked again", %{plain: ack} do
+      {[_acked], ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+
+      assert {[], ^ack} = Ack.record_ack(ack, [batch_id(1, 3)])
+      assert {[], ^ack} = Ack.record_ack(ack, [batch_id(0, 3)])
+    end
+
+    test "treats a batch of one as a whole entry, since there is nothing to stop before", %{plain: ack} do
+      {[acked], _ack} = Ack.record_ack(ack, [batch_id(0, 1)])
+
+      assert {acked.entryId, acked.batch_index} == {42, -1}
+    end
+  end
+
   describe "entry_id/1" do
     test "leaves an id that names no batch untouched" do
       assert Ack.entry_id(id()) == id()

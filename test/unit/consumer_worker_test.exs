@@ -398,6 +398,24 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert message.payload == @chunked
     end
 
+    test "acknowledge the assembled message with the configured cumulative type" do
+      compressed = :zlib.compress(@chunked)
+      half = div(byte_size(compressed), 2)
+      <<first::binary-size(^half), second::binary>> = compressed
+      opts = [uncompressed_size: byte_size(@chunked), total_chunk_msg_size: byte_size(compressed)]
+
+      state =
+        struct(reporting_state(),
+          subscription_type: :failover,
+          max_pending_chunked_messages: 10,
+          acks: Ack.new(ack_type: :cumulative)
+        )
+
+      {:noreply, _state} = deliver_chunks([{first, opts}, {second, opts}], state)
+
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{ack_type: :Cumulative}}}
+    end
+
     test "rejects independently compressed chunks even when their sizes collide" do
       chunk = :binary.copy(<<"a">>, 11)
       compressed = :zlib.compress(chunk)
@@ -439,8 +457,10 @@ defmodule Pulsar.Consumer.WorkerTest do
   end
 
   defp deliver_chunks(chunks) do
-    state = struct(reporting_state(), max_pending_chunked_messages: 10)
+    deliver_chunks(chunks, struct(reporting_state(), max_pending_chunked_messages: 10))
+  end
 
+  defp deliver_chunks(chunks, state) do
     chunks
     |> Enum.with_index()
     |> Enum.reduce({:noreply, state}, fn {{payload, opts}, chunk_id}, {:noreply, acc} ->

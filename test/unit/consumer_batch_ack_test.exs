@@ -215,6 +215,109 @@ defmodule Pulsar.Consumer.BatchAckTest do
     end
   end
 
+  describe "acking cumulatively" do
+    defp cumulative(answers, opts \\ []) do
+      worker_state(answers, Keyword.merge([ack_type: :cumulative, subscription_type: :failover], opts))
+    end
+
+    test "sends the wire ack type the subscription cursor moves on" do
+      deliver_unbatched(cumulative(%{}), "solo")
+
+      assert [%Binary.CommandAck{ack_type: :Cumulative}] = acks()
+    end
+
+    test "does not acknowledge the entry while messages batched after the acked one are deferred" do
+      deliver(cumulative(%{"b" => :defer, "c" => :defer}), ["a", "b", "c"])
+
+      # Acking the entry would take "b" and "c" with it, which nothing has processed. The entry
+      # before is as far as the cursor can go, and it moves the rest of the way once "c" is acked.
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: 41, batch_index: -1}] = ack.message_id
+    end
+
+    test "acknowledges the entry once its last message is acked" do
+      deliver(cumulative(%{"a" => :defer, "b" => :defer}), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{ledgerId: @ledger, entryId: @entry, batch_index: -1}] = ack.message_id
+    end
+
+    test "moves through a batch with ack sets when batch index acking is on" do
+      deliver(cumulative(%{"c" => :defer}, batch_index_ack_enabled: true), ["a", "b", "c"])
+
+      assert [first, second] = acks()
+      assert first.ack_type == :Cumulative
+      assert second.ack_type == :Cumulative
+      assert [%{entryId: @entry, ack_set: [0b110], batch_size: 3}] = first.message_id
+      assert [%{entryId: @entry, ack_set: [0b100], batch_size: 3}] = second.message_id
+    end
+
+    test "starts from the broker's ack set when a partial entry is redelivered" do
+      state = cumulative(%{"d" => :defer}, batch_index_ack_enabled: true)
+
+      # "c" was already acknowledged, while "a", "b", and "d" remain outstanding.
+      deliver(state, ["a", "b", "c", "d"], ack_set: [0b1011])
+
+      assert delivered_payloads() == ["a", "b", "d"]
+      assert [first, second] = Enum.map(acks(), fn ack -> hd(ack.message_id) end)
+      assert first.ack_set == [0b1010]
+      assert second.ack_set == [0b1000]
+    end
+
+    test "leaves a deferred entry unacknowledged until something passes it" do
+      state = deliver_unbatched(cumulative(%{"a" => :defer}), "a")
+      assert [] == acks()
+
+      deliver_unbatched(state, "b", entry: @entry + 1)
+
+      assert [ack] = acks()
+      assert [%{entryId: 43}] = ack.message_id
+    end
+
+    test "sends nothing for a message that does not move the cursor on" do
+      # "a" and "b" both take the cursor to the entry before this one, so only the first of them
+      # is worth a command; "c" then covers the entry itself.
+      deliver(cumulative(%{"c" => :defer}), ["a", "b", "c"])
+
+      assert [ack] = acks()
+      assert [%{entryId: 41}] = ack.message_id
+    end
+
+    test "does not ack an entry the cursor has already passed" do
+      state = deliver_unbatched(cumulative(%{}), "b", entry: @entry + 1)
+      assert [%{message_id: [%{entryId: 43}]}] = acks()
+
+      deliver_unbatched(state, "a")
+
+      assert [] == acks()
+    end
+
+    test "does not let a trailing compacted member acknowledge a deferred visible message" do
+      for opts <- [[], [batch_index_ack_enabled: true]] do
+        deliver(cumulative(%{"a" => :defer}, opts), ["a", "compacted"], compacted_out: [1])
+
+        assert delivered_payloads() == ["a"]
+        assert acks() == []
+      end
+    end
+
+    test "does not let a compacted member advance a batch-index ack past an earlier callback" do
+      state = cumulative(%{"a" => :defer, "c" => :defer}, batch_index_ack_enabled: true)
+
+      deliver(state, ["a", "compacted", "c"], compacted_out: [1])
+
+      assert delivered_payloads() == ["a", "c"]
+      assert acks() == []
+    end
+
+    test "does not initiate a cumulative ack for an entirely compacted batch" do
+      deliver(cumulative(%{}), ["a", "b", "c"], compacted_out: [0, 1, 2])
+
+      assert delivered_payloads() == []
+      assert acks() == []
+    end
+  end
+
   describe "batch index acking" do
     test "sends partial acknowledgements before a callback stops within a batch" do
       state = worker_state(%{"b" => {:stop, :normal}}, batch_index_ack_enabled: true)
@@ -504,7 +607,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   defp worker_state(answers, opts \\ []) do
-    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled])
+    {ack_opts, opts} = Keyword.split(opts, [:batch_index_ack_enabled, :ack_type])
 
     struct(
       Worker,

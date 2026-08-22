@@ -181,7 +181,7 @@ defmodule Pulsar.Consumer.Worker do
       struct(__MODULE__, opts)
       | consumer_id: System.unique_integer([:positive, :monotonic]),
         consumer_name: Keyword.get(opts, :name),
-        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled])),
+        acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled, :ack_type])),
         schema: build_schema(Keyword.get(opts, :schema)),
         max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
     }
@@ -392,11 +392,14 @@ defmodule Pulsar.Consumer.Worker do
     # A skipped message was still sent, and still charged a permit.
     permits_consumed = length(skipped_ids) + Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
 
-    # No callback runs for a skipped message, so nothing else can count it off its entry.
+    # Individual acknowledgement counts skipped messages off so the local batch tally can
+    # complete. A cumulative acknowledgement follows Java's more conservative rule: filtering
+    # a message from delivery does not itself move the subscription cursor. A later visible ack
+    # can still pass and therefore cover it.
     new_state =
       new_state
       |> decrement_permits(permits_consumed)
-      |> ack_message_ids(skipped_ids)
+      |> record_skipped_ids(skipped_ids)
 
     # A delivery the policy is done with is diverted instead of delivered, not as well as.
     result =
@@ -620,6 +623,9 @@ defmodule Pulsar.Consumer.Worker do
     %{state | acks: Ack.record_nack(state.acks, nacked_ids)}
   end
 
+  defp record_skipped_ids(%__MODULE__{acks: %Ack{ack_type: :cumulative}} = state, _skipped_ids), do: state
+  defp record_skipped_ids(%__MODULE__{} = state, skipped_ids), do: ack_message_ids(state, skipped_ids)
+
   defp ack_message_ids(state, message_ids, validation_error \\ nil) do
     {to_send, acks} = Ack.record_ack(state.acks, message_ids)
 
@@ -632,7 +638,7 @@ defmodule Pulsar.Consumer.Worker do
   defp send_ack(state, message_ids, validation_error) do
     ack_command = %Binary.CommandAck{
       consumer_id: state.consumer_id,
-      ack_type: :Individual,
+      ack_type: Protocol.to_ack_type(state.acks.ack_type),
       message_id: message_ids,
       validation_error: validation_error
     }
@@ -1030,7 +1036,9 @@ defmodule Pulsar.Consumer.Worker do
   # compacted topic leaves entries holding messages compaction has replaced. Neither is delivered,
   # and both still count towards their entry, so they come back to be counted off.
   defp build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped_messages) do
-    base_message_id = command.message_id
+    # Preserve the broker's batch-index state on each unwrapped id. A later cumulative ack uses
+    # it as its starting point instead of making previously acknowledged messages outstanding.
+    base_message_id = %{command.message_id | ack_set: command.ack_set}
     batch_size = length(unwrapped_messages)
     outstanding = Ack.outstanding(command.ack_set)
 
