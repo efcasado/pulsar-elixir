@@ -384,6 +384,8 @@ defmodule Pulsar.Producer.Worker do
     attempt_register(state, backoff, deadline)
   end
 
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+
   def handle_info({:EXIT, pid, reason}, state) do
     Logger.info("#{inspect(pid)} exited: #{inspect(reason)}, producer will restart")
 

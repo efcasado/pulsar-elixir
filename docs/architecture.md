@@ -148,16 +148,17 @@ reconnections. It remains registered and appears in client listings while operat
 that no workers are available, so the pid applications use to address the resource does not
 change while its workers churn.
 
-Every level of the tree is `restart: :permanent`, so an exit means one thing only: something
-went wrong, and it is passed upward.
+Consumer workers are `restart: :transient`: a callback can finish its worker with `:normal`,
+`:shutdown`, or `{:shutdown, reason}` and leave it absent. Every supervisory boundary above
+workers remains `:permanent`, so abnormal worker failures are restarted and can be passed upward.
+Producer workers are permanent because they have no worker-level completion callback.
 
 Stopping is the other half of that, and it happens at one level only. `Pulsar.Consumer.stop/2`
 and `Pulsar.Producer.stop/2` take the resource's root out of whatever supervises it, which no
-restart type undoes, and OTP terminates the groups and workers below it. A worker is one of the
-ways a resource is running rather than something anyone asked for, so nothing stops one on its
-own, and a partition of a terminated topic keeps its place until the resource is stopped. A
-callback that wants that decided elsewhere forwards the notification to a process that can
-make it.
+restart type undoes, and OTP terminates the groups and workers below it. A callback may finish
+its own consumer worker, but that intentionally does not remove the logical consumer: sibling
+workers and the stable root remain. A callback that wants the whole resource stopped forwards
+the notification to a process that can call the facade.
 
 Producer publishing resolves the logical root, selects a partition group, and sends through
 that group's worker. Consumer workers receive broker messages and invoke the configured
@@ -221,16 +222,17 @@ initial topology construction and worker initialization when an application need
 barrier. This readiness is a snapshot: broker availability and worker restarts can still affect
 the following operation.
 
-Initial metadata failures are retried with backoff by the controller. Resolver also
-finds the topic owner when workers connect. Once a partitioned topology is ready, the controller
-periodically checks for newly added partitions and adds the missing groups without replacing
-the existing ones. Pulsar topics do not shrink, so a lower transient metadata result does not
-remove groups.
+Initial transient metadata failures are retried with backoff by the controller. Terminal
+metadata failures exit it and participate in the resource's restart budget rather than leaving
+the root initializing forever. Resolver also finds the topic owner when workers connect. Once a
+partitioned topology is ready, the controller periodically checks for newly added partitions and
+adds the missing groups without replacing the existing ones. Pulsar topics do not shrink, so a
+lower transient metadata result does not remove groups.
 
-A group that has been stopped is never rebuilt. Its workers finished, or gave up for a reason
-retrying cannot change, and its `:undefined` slot is what the controller reads to know the partition is
-accounted for. Setting `:partition_discovery_interval_ms` to `false` disables later metadata
-checks; initial discovery still runs.
+A group that has been stopped is never rebuilt. Its `:undefined` slot is what the controller
+reads to know the partition is accounted for. A normally finished transient consumer worker is
+likewise left absent inside its still-running group. Setting `:partition_discovery_interval_ms`
+to `false` disables later metadata checks; initial discovery still runs.
 
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
@@ -276,9 +278,10 @@ instead of making the caller exit because an internal process is temporarily una
 
 ## Error Propagation
 
-One rule decides the shape of this: **an exit is a failure**. Anything finished leaves by being
-removed from its supervisor, which no restart type undoes and which spends no budget. Every exit that
-reaches a supervisor is therefore something going wrong, and it is allowed to travel.
+One rule decides the shape of this: **an abnormal exit is a failure**. A transient consumer
+worker may finish normally and stay absent without spending a restart. Every abnormal worker
+exit, and every exit of a permanent boundary above it, participates in supervision and is
+allowed to travel.
 
 It travels one level at a time, and each level has a budget:
 
@@ -311,15 +314,15 @@ once per window, so the window has to stay small relative to that retry budget. 
 that is one restart against three, which holds; at 3 in 60 seconds it would be twenty against
 three, which does not.
 
-Stopping contributes to none of this. A worker, group or resource that was stopped is terminated
-by its parent rather than exiting, so it costs no restart and escalates nothing.
+Stopping contributes to none of this. A group or resource stopped through the facade is
+terminated by its parent, so it costs no restart and escalates nothing. A consumer callback's
+normal or shutdown exit likewise costs no restart because that worker is transient.
 
-What carries a failure up is that every level is a `:permanent` child. A supervisor that spends
-its budget exits `:shutdown`, which normally reads as an orderly stop; it travels because
-`:permanent` restarts a child whatever its reason, so the level above puts it back, watches it
-fail again, and spends its own budget in turn. Changing any level to `:transient` stops the
-climb there, silently — `:shutdown` is a success to `:transient`, so the child is simply not
-restarted.
+What carries restart exhaustion up is that every level *above workers* is a `:permanent` child.
+A supervisor that spends its budget exits `:shutdown`, which normally reads as an orderly stop;
+it travels because `:permanent` restarts a child whatever its reason, so the level above puts it
+back, watches it fail again, and spends its own budget in turn. Making a group or higher boundary
+`:transient` would stop the climb there: restart exhaustion's `:shutdown` would not be restarted.
 
 Escalation reaches the client, and the client owns every consumer and producer on it, so a
 resource that cannot run takes its siblings with it. Where two things genuinely contend, as two
@@ -374,10 +377,10 @@ use `[:pulsar, :topology, :discovery, ...]` and
 
 1. A consumer or producer cannot outlive the client context it depends on.
 2. Each logical consumer or producer has one registered stable root, which persists while its
-   workers restart and is removed once every one of its groups has been stopped.
+   workers restart or finish and is removed only through the resource lifecycle.
 3. Partitions, groups, and worker pids stay behind the public facade.
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.
 6. Declared resources are restored automatically; owners restore runtime resources.
-7. An exit means a failure and is passed upward. Anything that is finished leaves by being
-   removed from its supervisor, never by exiting.
+7. An abnormal worker exit means failure and is passed upward. A deliberate consumer callback
+   completion exits normally from a transient worker and remains stopped.

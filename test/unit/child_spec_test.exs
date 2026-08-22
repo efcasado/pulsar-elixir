@@ -76,6 +76,13 @@ defmodule Pulsar.ChildSpecTest do
     end
   end
 
+  describe "worker child specs" do
+    test "consumer workers are transient while producer workers remain permanent" do
+      assert Pulsar.Consumer.Worker.child_spec([]).restart == :transient
+      assert Map.get(Pulsar.Producer.Worker.child_spec([]), :restart, :permanent) == :permanent
+    end
+  end
+
   describe "Pulsar.Producer.child_spec/1" do
     test "is a supervisor spec keyed on the producer's name" do
       spec = Pulsar.Producer.child_spec(topic: "persistent://public/default/audit")

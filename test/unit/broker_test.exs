@@ -66,6 +66,20 @@ defmodule Pulsar.BrokerTest do
     end
   end
 
+  test "terminate/3 does not stop registered workers before their broker monitor fires" do
+    consumer = start_supervised!(%{id: :broker_consumer, start: {Agent, :start_link, [fn -> :consumer end]}})
+    producer = start_supervised!(%{id: :broker_producer, start: {Agent, :start_link, [fn -> :producer end]}})
+
+    broker = %Broker{
+      consumers: %{1 => {consumer, make_ref()}},
+      producers: %{2 => {producer, make_ref()}}
+    }
+
+    assert Broker.terminate(:normal, :connected, broker) == :ok
+    assert Process.alive?(consumer)
+    assert Process.alive?(producer)
+  end
+
   defp buffered({head, pending, _size}), do: :erlang.iolist_to_binary([head | pending])
   defp buffered(binary) when is_binary(binary), do: binary
 

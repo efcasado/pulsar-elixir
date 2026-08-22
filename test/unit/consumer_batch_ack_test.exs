@@ -21,6 +21,16 @@ defmodule Pulsar.Consumer.BatchAckTest do
         :ack -> {:ok, answers}
         :defer -> {:noreply, answers}
         :nack -> {:error, :rejected, answers}
+        {:stop, reason} -> {:stop, reason, answers}
+      end
+    end
+
+    def handle_invalid_message(message, answers) do
+      send(self(), {:delivered, message.payload})
+
+      case Map.get(answers, message.payload, :ack) do
+        {:stop, reason} -> {:stop, reason, answers}
+        _other -> {:ok, answers}
       end
     end
   end
@@ -55,6 +65,34 @@ defmodule Pulsar.Consumer.BatchAckTest do
   @entry 42
 
   describe "acking a batched message" do
+    test "a normal callback stop acknowledges its message and halts the rest of the batch" do
+      answers = %{"b" => {:stop, :normal}}
+      assert {:stop, :normal, state} = deliver_result(worker_state(answers), ["a", "b", "c"])
+
+      assert_received {:delivered, "a"}
+      assert_received {:delivered, "b"}
+      refute_received {:delivered, "c"}
+      assert state.callback_state == answers
+    end
+
+    test "a reasoned callback stop carries its reason" do
+      assert {:stop, {:shutdown, :complete}, _state} =
+               deliver_result(worker_state(%{"a" => {:stop, {:shutdown, :complete}}}), ["a"])
+
+      assert [_ack] = acks()
+    end
+
+    test "an invalid-message callback can acknowledge and stop" do
+      state = worker_state(%{"invalid" => {:stop, :normal}})
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: message_id()}
+      delivery = {:broker_message, {:invalid, command, "invalid", :checksum_mismatch}}
+
+      assert {:stop, :normal, _state} = Worker.handle_info(delivery, state)
+      assert_received {:delivered, "invalid"}
+      assert [ack] = acks()
+      assert ack.validation_error == :ChecksumMismatch
+    end
+
     test "acknowledges the entry once, after the last message in it is acked" do
       deliver(worker_state(%{}), ["a", "b", "c"])
 
@@ -476,6 +514,11 @@ defmodule Pulsar.Consumer.BatchAckTest do
 
   # Broker commands are casts, so they arrive in the test process mailbox.
   defp deliver(state, payloads, opts \\ []) do
+    {:noreply, new_state} = deliver_result(state, payloads, opts)
+    new_state
+  end
+
+  defp deliver_result(state, payloads, opts \\ []) do
     command = %Binary.CommandMessage{
       consumer_id: 1,
       message_id: message_id(),
@@ -499,8 +542,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       |> Enum.map(fn {payload, index} -> encode_single_message(payload, index in compacted_out) end)
       |> :erlang.iolist_to_binary()
 
-    {:noreply, new_state} = Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)
-    new_state
+    Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)
   end
 
   defp deliver_unbatched(state, payload, opts \\ []) do

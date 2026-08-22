@@ -126,7 +126,21 @@ defmodule Pulsar.Backoff do
   @spec deadline() :: integer()
   def deadline, do: System.monotonic_time(:millisecond) + @retry_budget
 
-  defp retryable?({wrapper, reason}) when wrapper in @resolver_wrappers, do: retryable?(reason)
-  defp retryable?({code, _message}), do: code in @retryable_errors
-  defp retryable?(reason), do: reason in @retryable_errors
+  @doc false
+  @spec retryable?(term()) :: boolean()
+  def retryable?({:resolver_failed, :exit, reason}), do: retryable_resolver_exit?(reason)
+  def retryable?({wrapper, reason}) when wrapper in @resolver_wrappers, do: retryable?(reason)
+  def retryable?({code, _message}), do: code in @retryable_errors
+  def retryable?(reason), do: reason in @retryable_errors
+
+  # A broker can disappear after the resolver selects its pid but before the call reaches it.
+  # Keep the call context in the match so an arbitrary resolver exit with the same atom remains
+  # a programming failure rather than an infinite retry.
+  defp retryable_resolver_exit?({reason, {server, :call, _args}})
+       when reason in [:noproc, :normal, :shutdown, :timeout] and server in [:gen_statem, GenServer], do: true
+
+  defp retryable_resolver_exit?({{:shutdown, _reason}, {server, :call, _args}}) when server in [:gen_statem, GenServer],
+    do: true
+
+  defp retryable_resolver_exit?(_reason), do: false
 end

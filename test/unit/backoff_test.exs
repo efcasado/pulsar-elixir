@@ -73,6 +73,16 @@ defmodule Pulsar.BackoffTest do
 
       assert :counters.get(counter, 1) == 1
     end
+
+    test "only retries resolver exits caused by a disappearing server call" do
+      call = {:gen_statem, :call, [self(), :metadata, 5_000]}
+
+      assert Backoff.retryable?({:resolver_failed, :exit, {:noproc, call}})
+      assert Backoff.retryable?({:resolver_failed, :exit, {:timeout, call}})
+
+      refute Backoff.retryable?({:resolver_failed, :exit, :noproc})
+      refute Backoff.retryable?({:resolver_failed, :error, %RuntimeError{message: "bug"}})
+    end
   end
 
   describe "run/3" do

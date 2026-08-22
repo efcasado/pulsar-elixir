@@ -186,7 +186,10 @@ defmodule Pulsar.Broker do
   def get_max_message_size(broker), do: :gen_statem.call(broker, :get_max_message_size)
 
   @doc """
-  Gracefully stops the broker by closing all consumers/producers first.
+  Gracefully stops the broker.
+
+  Registered consumers and producers monitor the connection and let their own supervision
+  decide whether to restart them.
   """
   @spec stop(GenServer.server(), term(), timeout()) :: :ok
   def stop(broker, reason \\ :normal, timeout \\ :infinity) do
@@ -201,24 +204,8 @@ defmodule Pulsar.Broker do
   @impl true
   def terminate(reason, _state, broker) do
     Logger.info(
-      "Broker terminating: #{inspect(reason)}, gracefully stopping #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers"
+      "Broker terminating: #{inspect(reason)}; #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers will observe the connection exit"
     )
-
-    # Gracefully stop all consumer processes
-    Enum.each(broker.consumers, fn {consumer_id, {consumer_pid, _monitor_ref}} ->
-      if Process.alive?(consumer_pid) do
-        Logger.debug("Gracefully stopping consumer #{consumer_id}")
-        GenServer.stop(consumer_pid)
-      end
-    end)
-
-    # Gracefully stop all producer processes
-    Enum.each(broker.producers, fn {producer_id, {producer_pid, _monitor_ref}} ->
-      if Process.alive?(producer_pid) do
-        Logger.debug("Gracefully stopping producer #{producer_id}")
-        GenServer.stop(producer_pid)
-      end
-    end)
 
     :ok
   end
