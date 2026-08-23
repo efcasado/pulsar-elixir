@@ -237,7 +237,12 @@ to `false` disables later metadata checks; initial discovery still runs.
 `Pulsar.Reader` builds on this lifecycle. Each enumeration creates a temporary non-durable
 consumer below the selected client, waits internally for the expected workers to become
 ready, and then exposes their messages as a stream. Halting the stream or failing startup
-removes that temporary consumer; the client remains running.
+removes that temporary consumer; the client remains running. The enumeration monitors the
+workers that establish its position. If one exits, Reader raises instead of accepting its
+replacement: a new non-durable subscription would apply the original start position and could
+replay or skip messages. The same rule applies per partition, while a newly discovered partition
+can join because it has no previous cursor to recover. The failure removes the whole temporary
+consumer through the public facade and does not change the worker's supervision policy.
 
 ## Declared and Runtime Resources
 
