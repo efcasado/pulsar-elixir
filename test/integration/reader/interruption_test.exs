@@ -2,10 +2,12 @@ defmodule Pulsar.Integration.Reader.InterruptionTest do
   use Pulsar.Test.Case, async: true
 
   @topic "persistent://public/default/reader-interruption-test"
+  @idle_topic "persistent://public/default/idle-reader-interruption-test"
   @partitioned_topic "persistent://public/default/partitioned-reader-interruption-test"
   @partitions 3
 
   setup_all do
+    :ok = System.create_topic(@idle_topic)
     :ok = System.create_topic(@partitioned_topic, @partitions)
     Utils.seed_topic(@topic, ["message"], client: @client)
     Utils.seed_topic(@partitioned_topic, ["message"], client: @client)
@@ -43,6 +45,44 @@ defmodule Pulsar.Integration.Reader.InterruptionTest do
     assert_interrupted(reader, partition_topic)
     assert_receive {:DOWN, ^reader_ref, :process, ^reader, :normal}, 5_000
     assert Pulsar.Client.consumers(@client) == []
+  end
+
+  test "leaves unrelated DOWN messages in the enumerating process mailbox" do
+    test_pid = self()
+
+    unrelated =
+      spawn(fn ->
+        receive do
+          :stop -> exit(:unrelated_failure)
+        end
+      end)
+
+    unrelated_ref = Process.monitor(unrelated)
+
+    trigger =
+      spawn(fn ->
+        [root] =
+          Utils.wait_for(fn -> Pulsar.Client.consumers(@client) end,
+            until: &match?([_root], &1),
+            description: "Reader consumer root to start"
+          )
+
+        :ok = Pulsar.Consumer.await_ready(root)
+        send(unrelated, :stop)
+        send(test_pid, :unrelated_stopped)
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(trigger), do: Process.exit(trigger, :kill)
+      if Process.alive?(unrelated), do: Process.exit(unrelated, :kill)
+    end)
+
+    assert @idle_topic
+           |> Pulsar.Reader.stream(client: @client, timeout: 500)
+           |> Enum.to_list() == []
+
+    assert_receive :unrelated_stopped
+    assert_receive {:DOWN, ^unrelated_ref, :process, ^unrelated, :unrelated_failure}
   end
 
   defp start_paused_reader(topic) do

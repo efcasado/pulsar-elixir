@@ -285,6 +285,7 @@ defmodule Pulsar.Reader do
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
+        topics_by_monitor = state.topics_by_monitor
 
         receive do
           {:pulsar_message, ^reader_ref, _consumer_pid, message} ->
@@ -299,14 +300,9 @@ defmodule Pulsar.Reader do
               {:error, reason} -> raise_interrupted(topic, reason)
             end
 
-          {:DOWN, monitor_ref, :process, _consumer_pid, reason} ->
-            case state.topics_by_monitor do
-              %{^monitor_ref => topic} ->
-                raise_interrupted(topic, reason)
-
-              _unknown_monitor ->
-                next_message(state, deadline)
-            end
+          {:DOWN, monitor_ref, :process, _consumer_pid, reason}
+          when is_map_key(topics_by_monitor, monitor_ref) ->
+            raise_interrupted(Map.fetch!(topics_by_monitor, monitor_ref), reason)
         after
           time_left(deadline) ->
             {:halt, state}
