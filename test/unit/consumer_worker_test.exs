@@ -95,10 +95,24 @@ defmodule Pulsar.Consumer.WorkerTest do
   end
 
   defp delivery(compression, payload, opts) do
-    metadata = struct(Binary.MessageMetadata, [producer_name: "orders-producer", compression: compression] ++ opts)
+    metadata =
+      struct(
+        Binary.MessageMetadata,
+        [producer_name: "orders-producer", compression: compression, num_messages_in_batch: 0] ++ opts
+      )
+
     command = %Binary.CommandMessage{message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
 
     {:broker_message, {command, metadata, payload, nil}}
+  end
+
+  defp batch_payload(payloads) do
+    payloads
+    |> Enum.map(fn payload ->
+      metadata = Binary.SingleMessageMetadata.encode(%Binary.SingleMessageMetadata{payload_size: byte_size(payload)})
+      <<byte_size(metadata)::32, metadata::binary, payload::binary>>
+    end)
+    |> IO.iodata_to_binary()
   end
 
   defp chunk_delivery(chunk_id, payload, opts) do
@@ -216,6 +230,68 @@ defmodule Pulsar.Consumer.WorkerTest do
     assert invalid.message_id == command.message_id
   end
 
+  describe "a batch whose framing cannot be read" do
+    setup do
+      payload = <<"not two framed messages">>
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      {:ok, delivery: delivery, payload: payload}
+    end
+
+    test "reaches handle_invalid_message/2 with the decompressed entry bytes", ctx do
+      assert {:noreply, _state} = Worker.handle_info(ctx.delivery, reporting_state())
+
+      assert_received {:invalid, invalid}
+      refute_received {:handled, _message}
+      assert invalid.validation_error == :batch_deserialization_failed
+      assert invalid.payload == ctx.payload
+      assert Pulsar.Message.num_broker_messages(invalid) == 2
+    end
+
+    test "acknowledges it with the protocol's batch deserialization error", ctx do
+      Worker.handle_info(ctx.delivery, reporting_state())
+
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
+      assert ack.validation_error == :BatchDeSerializeError
+    end
+
+    test "rejects a batch that ends before its advertised message count" do
+      payload = batch_payload(["only one"])
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "rejects trailing bytes after the advertised batch" do
+      payload = batch_payload(["first", "second"]) <> "trailing"
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "rejects malformed framing in an explicitly marked one-message batch" do
+      payload = "malformed batch"
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 1)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "does not batch-parse an ordinary message" do
+      payload = "ordinary payload"
+      delivery = delivery(:NONE, payload, [])
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:handled, %{payload: ^payload}}
+      refute_received {:invalid, _message}
+    end
+  end
+
   describe "a payload that cannot be decompressed" do
     for compression <- [:ZLIB, :LZ4, :ZSTD, :SNAPPY] do
       test "reaches handle_invalid_message/2 under #{compression}" do
@@ -309,8 +385,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
       Worker.handle_info(delivery(:ZSTD, <<"garbage">>, uncompressed_size: 64), reporting_state())
 
-      assert_received {:telemetry, %{count: 1}, metadata}
-      assert metadata.reason == :decompression_failed
+      assert_received {:telemetry, %{count: 1}, %{reason: :decompression_failed} = metadata}
       assert metadata.decompression_reason == :decompression_error
       assert metadata.topic == "persistent://public/default/orders-partition-2"
     end
@@ -505,6 +580,23 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_received {:telemetry, measurements, metadata}
       assert measurements.received_chunks == 2
       assert metadata.uuid == "orders-producer-1"
+    end
+
+    test "reaches handle_invalid_message/2 and acknowledges its intact chunks normally", ctx do
+      {:noreply, _state} = Worker.handle_info(:cleanup_expired_chunks, age(ctx.state, 200))
+      assert_receive {:broker_message, incomplete_delivery}
+
+      assert {:noreply, _state} =
+               Worker.handle_info({:broker_message, incomplete_delivery}, ctx.state)
+
+      assert_received {:invalid, invalid}
+      refute_received {:handled, _message}
+      assert invalid.validation_error == :incomplete_chunked_message
+      assert invalid.chunk_metadata.error == :expired
+
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
+      assert ack.validation_error == nil
+      assert length(ack.message_id) == 2
     end
 
     test "is left alone while it still has time", ctx do

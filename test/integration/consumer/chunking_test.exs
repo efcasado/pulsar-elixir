@@ -451,6 +451,12 @@ defmodule Pulsar.Integration.Consumer.ChunkingTest do
     assert metadata.partition == nil
     assert metadata.subscription_name == "chunking-evict"
 
+    assert_receive {:consumer, ^consumer,
+                    %{
+                      validation_error: :incomplete_chunked_message,
+                      chunk_metadata: %{complete: false, error: :queue_full, uuid: "fake-uuid-oldest"}
+                    }}
+
     assert_receive {:consumer, ^consumer, %{payload: ^large_message} = received_msg}
     assert received_msg.chunk_metadata.chunked
     assert received_msg.chunk_metadata.complete

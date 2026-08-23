@@ -44,10 +44,6 @@ defmodule Pulsar.Test.Support.DummyConsumer do
   """
   def register(consumer_pid, pid), do: GenServer.call(consumer_pid, {:forward_to, pid})
 
-  def handle_message(%Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}, state) do
-    {:error, :incomplete_chunk, state}
-  end
-
   def handle_message(%Pulsar.Message{} = message, state) do
     notify(state.forward_to, {:consumer, self(), message})
 

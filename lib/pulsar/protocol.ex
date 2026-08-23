@@ -2,6 +2,7 @@ defmodule Pulsar.Protocol do
   # https://pulsar.apache.org/docs/next/developing-binary-protocol/#framing
   @moduledoc false
 
+  alias Google.Protobuf.Empty
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
   # A command's field in the BaseCommand oneof carries the same protobuf tag as
@@ -44,6 +45,11 @@ defmodule Pulsar.Protocol do
 
   @magic_crc32c 0x0E01
   @magic_broker_entry_metadata 0x0E02
+
+  @num_messages_in_batch_field 11
+  # protobuf-elixir omits optional proto2 scalars set to their declared default. A one-message
+  # batch still needs field 11 on the wire so consumers can distinguish it from a plain message.
+  @one_message_batch_marker <<0x58, 0x01>>
 
   # Protobuf does not enforce proto2 required fields when decoding, so an absent
   # one arrives as nil rather than an error. The structs decoded from a frame, and
@@ -90,8 +96,15 @@ defmodule Pulsar.Protocol do
   def encode(command), do: frame(encode_base_command(command), <<>>)
 
   @spec encode(struct(), struct(), binary()) :: binary()
-  def encode(command_send, message_metadata, payload) do
-    frame(encode_base_command(command_send), message_part(message_metadata, payload))
+  def encode(command_send, message_metadata, payload), do: encode_message(command_send, message_metadata, payload, false)
+
+  @doc false
+  @spec encode_batch(struct(), struct(), binary()) :: binary()
+  def encode_batch(command_send, message_metadata, payload),
+    do: encode_message(command_send, message_metadata, payload, true)
+
+  defp encode_message(command_send, message_metadata, payload, batch?) do
+    frame(encode_base_command(command_send), message_part(message_metadata, payload, batch?))
   end
 
   defp encode_base_command(command) do
@@ -105,12 +118,18 @@ defmodule Pulsar.Protocol do
 
   # The counterpart of decode_message/3: the checksum covers the metadata size,
   # metadata and payload, and nothing else.
-  defp message_part(message_metadata, payload) do
-    metadata = Binary.MessageMetadata.encode(message_metadata)
+  defp message_part(message_metadata, payload, batch?) do
+    metadata = encode_message_metadata(message_metadata, batch?)
     checksummed = <<byte_size(metadata)::32, metadata::binary, payload::binary>>
 
     <<@magic_crc32c::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
   end
+
+  defp encode_message_metadata(%Binary.MessageMetadata{num_messages_in_batch: 1} = metadata, true) do
+    Binary.MessageMetadata.encode(metadata) <> @one_message_batch_marker
+  end
+
+  defp encode_message_metadata(metadata, _batch?), do: Binary.MessageMetadata.encode(metadata)
 
   defp frame(command, rest) do
     command_size = byte_size(command)
@@ -296,7 +315,24 @@ defmodule Pulsar.Protocol do
   defp decode_broker_entry_metadata(binary),
     do: decode_protobuf(Binary.BrokerEntryMetadata, binary, :malformed_broker_entry_metadata)
 
-  defp decode_message_metadata(binary), do: decode_protobuf(Binary.MessageMetadata, binary, :malformed_message_metadata)
+  defp decode_message_metadata(binary) do
+    with {:ok, metadata} <- decode_protobuf(Binary.MessageMetadata, binary, :malformed_message_metadata) do
+      count = if batch_count_present?(binary), do: metadata.num_messages_in_batch, else: 0
+      {:ok, %{metadata | num_messages_in_batch: count}}
+    end
+  end
+
+  defp batch_count_present?(binary) do
+    # Decode against an empty schema so every raw field is retained as unknown. This recovers
+    # presence without teaching the client how to parse protobuf wire types itself.
+    binary
+    |> Empty.decode()
+    |> Protobuf.get_unknown_fields()
+    |> Enum.any?(fn
+      {@num_messages_in_batch_field, _wire_type, _value} -> true
+      _other -> false
+    end)
+  end
 
   defp decode_protobuf(module, binary, reason) do
     decoded = module.decode(binary)

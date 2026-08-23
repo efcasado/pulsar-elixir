@@ -30,7 +30,24 @@ message:
 | `{:stop, reason, state}` | Acknowledge | Finish with `reason` |
 
 The same outcomes apply to `handle_invalid_message/2`. Its default implementation acknowledges
-the invalid message so corrupt data is not redelivered forever.
+the invalid message so corrupt or incomplete data is not redelivered forever. Override it and
+return `{:error, reason, state}` when an invalid-message class should deliberately be retried and,
+with a dead letter policy, eventually diverted:
+
+```elixir
+def handle_invalid_message(
+      %Pulsar.Message{validation_error: :decompression_failed},
+      state
+    ) do
+  {:error, :unreadable_payload, state}
+end
+
+def handle_invalid_message(_message, state), do: {:ok, state}
+```
+
+This needs `:redelivery_interval`; without one the NACK remains outstanding as described below.
+Use individual acknowledgement when a failed message must reach the DLQ: a later cumulative ACK
+can pass it and acknowledge it before it is redelivered.
 
 Most consumers only need automatic acknowledgement:
 

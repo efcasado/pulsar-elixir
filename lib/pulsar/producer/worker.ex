@@ -583,7 +583,7 @@ defmodule Pulsar.Producer.Worker do
 
     compressed_payload = maybe_compress(message_metadata, single_messages_payload)
 
-    encoded_frame = Protocol.encode(command_send, message_metadata, compressed_payload)
+    encoded_frame = Protocol.encode_batch(command_send, message_metadata, compressed_payload)
 
     case Pulsar.Broker.publish_message(state.broker_pid, encoded_frame) do
       :ok ->

@@ -63,24 +63,20 @@ The consumer automatically handles chunk assembly:
 4. **Delivery**: The complete message is delivered to your `handle_message/2` callback
 
 ```elixir
+def handle_message(%Pulsar.Message{chunk_metadata: %{num_chunks: n}} = message, state) do
+  IO.puts("Received complete chunked message with #{n} chunks")
+  process(message.payload)
+  {:ok, state}
+end
+
 def handle_message(%Pulsar.Message{} = message, state) do
-  # message.payload contains the complete, reassembled payload
-  # message.chunk_metadata indicates if this was a chunked message
-
-  case message.chunk_metadata do
-    %{chunked: true, complete: true, num_chunks: n} ->
-      IO.puts("Received complete chunked message with #{n} chunks")
-
-    %{chunked: true, complete: false, error: reason} ->
-      IO.puts("Received incomplete chunked message: #{reason}")
-
-    nil ->
-      IO.puts("Received non-chunked message")
-  end
-
+  process(message.payload)
   {:ok, state}
 end
 ```
+
+An incomplete chunked message has no complete application payload and goes to
+`handle_invalid_message/2`, as described below.
 
 ## Chunked Message Metadata
 
@@ -94,8 +90,8 @@ The `Pulsar.Message` struct provides information about chunked messages:
   - `received_chunks` - Number of chunks received (for incomplete messages)
   - `error` - Reason for incompleteness (if incomplete)
 
-A chunked message is assembled before the callback sees it, so `payload` is the complete
-payload and `message_id` covers every chunk: acknowledging it acknowledges them all.
+A complete chunked message is assembled before `handle_message/2` sees it, so `payload` is the
+complete payload and `message_id` covers every chunk: acknowledging it acknowledges them all.
 
 `Pulsar.Message`'s accessors — `producer_name/1`, `key/1`, `properties/1` and the rest — answer
 the same way for a chunked message as for any other. Only the `raw` field reflects the split,
@@ -157,19 +153,32 @@ Chunks may not complete for several reasons:
 1. **Expiration**: Not all chunks arrived within the timeout period
 2. **Queue overflow**: Too many concurrent chunked messages
 
-Incomplete chunks are delivered to your callback with `complete: false`. Their `payload` is
-whatever chunks did arrive, concatenated, and under `:compression` those are still compressed:
-a message only decompresses once all of its chunks are back together, so a partial one cannot
-be decompressed at all. Treat the payload of an incomplete message as opaque.
+Incomplete chunks are delivered to `handle_invalid_message/2` with
+`validation_error: :incomplete_chunked_message` and `complete: false`. Their `payload` is whatever
+chunks did arrive, concatenated, and under `:compression` those are still compressed: a message
+only decompresses once all of its chunks are back together, so a partial one cannot be decompressed
+at all. Treat the payload of an incomplete message as opaque.
 
 ```elixir
-def handle_message(%Pulsar.Message{chunk_metadata: %{complete: false, error: reason, received_chunks: n}}, state) do
+def handle_invalid_message(
+      %Pulsar.Message{
+        validation_error: :incomplete_chunked_message,
+        chunk_metadata: %{error: reason, received_chunks: n}
+      },
+      state
+    ) do
   Logger.warning("Incomplete chunk: #{reason}, received #{n} chunks")
 
-  # Return error to trigger redelivery
+  # Retry the received chunks. With the default {:ok, state}, they are acknowledged.
   {:error, :incomplete_chunk, state}
 end
 ```
+
+Acknowledging an incomplete message acknowledges only the chunks that arrived and carries no
+wire validation error, because those individual chunks were intact. NACKing may recover the
+logical message if redelivery supplies all chunks. If it eventually reaches a DLQ, however, the
+republished payload is still only the partial bytes held by that delivery, not the original
+logical message.
 
 ## Flow Control and Permits
 
@@ -242,7 +251,7 @@ defmodule MyConsumer do
       process_file(message.payload)
       {:ok, state}
     else
-      # Regular non-chunked message or incomplete chunked message
+      # Regular non-chunked message
       {:ok, state}
     end
   end

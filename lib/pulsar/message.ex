@@ -17,9 +17,9 @@ defmodule Pulsar.Message do
     For complete chunked messages: `%{chunked: true, complete: true, uuid: "...", num_chunks: N}`
     For incomplete chunked messages: `%{chunked: true, complete: false, error: :reason, uuid: "..."}`
 
-  - `validation_error` - `nil` for messages that arrived intact. Otherwise why `payload` cannot
-    be treated as data: the frame could not be read, or it could and its payload did not
-    decompress. See `valid?/1`.
+  - `validation_error` - `nil` when `payload` is a complete message that can be treated as
+    data. Otherwise why it cannot: the frame could not be read, its payload could not be
+    decompressed or unbatched, or some chunks never arrived. See `valid?/1`.
 
   - `raw` - The underlying protocol structs, as a map of `:command`, `:metadata`,
     `:single_metadata` and `:broker_metadata`. **Unstable**: its shape follows the wire
@@ -305,7 +305,7 @@ defmodule Pulsar.Message do
 
   # A payload that failed after its metadata was decoded keeps its batch count.
   def num_broker_messages(%__MODULE__{validation_error: error, raw: %{metadata: %{num_messages_in_batch: count}}})
-      when error in [:decompression_failed, :uncompressed_size_corruption] and is_integer(count) and count > 0 do
+      when not is_nil(error) and is_integer(count) and count > 0 do
     count
   end
 
@@ -359,9 +359,9 @@ defmodule Pulsar.Message do
   def complete?(%__MODULE__{}), do: true
 
   @doc """
-  Returns `true` if the message arrived intact, `false` if it did not.
+  Returns `true` if the message is complete and its payload can be treated as data.
 
-  A message is invalid when its bytes could not be turned into a payload, and
+  A message is invalid when its bytes could not be turned into a complete payload, and
   `validation_error` says why:
 
   - The frame itself could not be read: `:checksum_mismatch` when it failed its CRC32C check,
@@ -374,6 +374,12 @@ defmodule Pulsar.Message do
   - `:uncompressed_size_corruption` - the decoded or reassembled payload did not match the
     size advertised by the producer. `metadata` is kept and `payload` holds the bytes as they
     arrived, still compressed when compression was enabled.
+  - `:batch_deserialization_failed` - the entry advertised a batch, but its individual message
+    frames could not be read. `metadata` is kept and `payload` holds the decompressed batch
+    bytes rather than an individual application message.
+  - `:incomplete_chunked_message` - the client gave up waiting for every chunk. Match
+    `chunk_metadata.error` to distinguish `:expired` from `:queue_full`; `payload` is the
+    concatenation of only the chunks that arrived and may still be compressed.
 
   Any of them is delivered so the callback can record or divert it, but no such payload may be
   treated as data. Match `validation_error` with a catch-all: more reasons may be added.
@@ -389,12 +395,14 @@ defmodule Pulsar.Message do
       iex> Pulsar.Message.valid?(%Pulsar.Message{validation_error: :checksum_mismatch})
       false
 
-  Validity is independent of chunk completeness — an incomplete chunked message is
-  still made of bytes that arrived intact:
+  An incomplete chunked message is invalid even though each chunk it contains arrived intact:
 
-      iex> expired = %Pulsar.Message{chunk_metadata: %{chunked: true, complete: false}}
+      iex> expired = %Pulsar.Message{
+      ...>   validation_error: :incomplete_chunked_message,
+      ...>   chunk_metadata: %{chunked: true, complete: false, error: :expired}
+      ...> }
       iex> {Pulsar.Message.valid?(expired), Pulsar.Message.complete?(expired)}
-      {true, false}
+      {false, false}
 
       def handle_invalid_message(%Pulsar.Message{} = message, state) do
         Logger.error("dropping corrupt message: \#{message.validation_error}")
@@ -402,6 +410,6 @@ defmodule Pulsar.Message do
       end
   """
   @spec valid?(t()) :: boolean()
-  def valid?(%__MODULE__{validation_error: nil}), do: true
+  def valid?(%__MODULE__{validation_error: nil} = message), do: complete?(message)
   def valid?(%__MODULE__{}), do: false
 end
