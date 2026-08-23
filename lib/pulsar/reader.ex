@@ -396,9 +396,7 @@ defmodule Pulsar.Reader do
   # a pid that disappeared in the gap immediately produces :DOWN, so the stream cannot miss the
   # lookup/use race here.
   defp collect_initial_workers(state, expected, deadline) do
-    tracked = state.workers_by_topic |> Map.values() |> MapSet.new(fn {pid, _monitor_ref} -> pid end)
-
-    if MapSet.subset?(expected, tracked) do
+    if MapSet.size(expected) == 0 do
       {:ok, state}
     else
       reader_ref = state.reader_ref
@@ -407,7 +405,7 @@ defmodule Pulsar.Reader do
         {:pulsar_reader_ready, ^reader_ref, consumer_pid, topic} ->
           case track_worker(state, consumer_pid, topic) do
             {:ok, new_state} ->
-              collect_initial_workers(new_state, expected, deadline)
+              collect_initial_workers(new_state, MapSet.delete(expected, consumer_pid), deadline)
 
             {:error, reason} ->
               demonitor_workers(state)
@@ -427,10 +425,10 @@ defmodule Pulsar.Reader do
   # cursor reached by the old worker.
   defp track_worker(state, consumer_pid, topic) do
     case state.workers_by_topic do
-      %{^topic => {^consumer_pid, _monitor_ref}} ->
+      %{^topic => ^consumer_pid} ->
         {:ok, state}
 
-      %{^topic => {_previous_pid, _monitor_ref}} ->
+      %{^topic => _previous_pid} ->
         {:error, :worker_replaced}
 
       _new_topic ->
@@ -439,7 +437,7 @@ defmodule Pulsar.Reader do
         {:ok,
          %{
            state
-           | workers_by_topic: Map.put(state.workers_by_topic, topic, {consumer_pid, monitor_ref}),
+           | workers_by_topic: Map.put(state.workers_by_topic, topic, consumer_pid),
              topics_by_monitor: Map.put(state.topics_by_monitor, monitor_ref, topic),
              permits_by_consumer: Map.put_new(state.permits_by_consumer, consumer_pid, state.flow_permits)
          }}
@@ -448,12 +446,14 @@ defmodule Pulsar.Reader do
 
   defp worker_topic(state, consumer_pid) do
     Enum.find_value(state.workers_by_topic, fn
-      {topic, {^consumer_pid, _monitor_ref}} -> topic
-      {_topic, {_other_pid, _monitor_ref}} -> nil
+      {topic, ^consumer_pid} -> topic
+      {_topic, _other_pid} -> nil
     end)
   end
 
   defp raise_interrupted(state, topic, reason) do
+    # Recursive receives may have tracked workers in a newer state than Stream.resource/3
+    # retains for its cleanup callback, so those monitors have to be removed here as well.
     demonitor_workers(state)
 
     raise "reader worker for #{inspect(topic)} was lost (#{inspect(reason)}); " <>

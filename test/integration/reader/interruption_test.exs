@@ -90,11 +90,7 @@ defmodule Pulsar.Integration.Reader.InterruptionTest do
 
     {reader, reader_ref} =
       start_paused_reader(@topic, fn ->
-        send(test_pid, {:reader_waiting, self()})
-
-        receive do
-          :finish -> :ok
-        end
+        send(test_pid, {:reader_monitors, self(), Process.info(self(), :monitors)})
       end)
 
     assert_receive {:reader_message, ^reader, %{payload: "message"}}, 5_000
@@ -103,37 +99,15 @@ defmodule Pulsar.Integration.Reader.InterruptionTest do
     [worker] = Topology.workers(root)
     %{callback_state: %{reader_ref: callback_ref}} = :sys.get_state(worker)
 
-    late_worker =
-      spawn(fn ->
-        receive do
-          :stop -> :ok
-        end
-      end)
-
-    replacement =
-      spawn(fn ->
-        receive do
-          :stop -> :ok
-        end
-      end)
-
     late_topic = "#{@topic}-partition-late"
 
-    on_exit(fn ->
-      if Process.alive?(late_worker), do: send(late_worker, :stop)
-      if Process.alive?(replacement), do: send(replacement, :stop)
-    end)
-
-    send(reader, {:pulsar_reader_ready, callback_ref, late_worker, late_topic})
-    send(reader, {:pulsar_reader_ready, callback_ref, replacement, late_topic})
+    send(reader, {:pulsar_reader_ready, callback_ref, test_pid, late_topic})
+    send(reader, {:pulsar_reader_ready, callback_ref, worker, late_topic})
     send(reader, :continue)
 
     assert_interrupted(reader, late_topic)
-    assert_receive {:reader_waiting, ^reader}, 5_000
-    assert {:monitors, monitors} = Process.info(reader, :monitors)
-    refute {:process, late_worker} in monitors
-
-    send(reader, :finish)
+    assert_receive {:reader_monitors, ^reader, {:monitors, monitors}}, 5_000
+    refute {:process, test_pid} in monitors
     assert_receive {:DOWN, ^reader_ref, :process, ^reader, :normal}, 5_000
   end
 
