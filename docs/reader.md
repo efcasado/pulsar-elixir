@@ -150,6 +150,16 @@ topic
 end
 ```
 
+Once initialized, a Reader cannot recover its exact position if one of its consumer workers
+exits. Its subscription is non-durable, so a replacement would subscribe from the original
+`:start_position`, `:start_message_id`, or `:start_timestamp`, potentially replaying or skipping
+messages. The enumeration therefore raises a `RuntimeError` and removes its temporary consumer.
+
+This applies if any worker of a partitioned Reader exits. A partition discovered for the first
+time can still join a running Reader because it has no earlier cursor to recover. Use
+`Pulsar.Consumer` with a durable subscription when consumption must recover automatically from
+broker disconnects or worker failures.
+
 ## Flow Control
 
 The Reader manages flow control internally. You can configure the number of permits (messages requested from the broker) using `:flow_permits`:

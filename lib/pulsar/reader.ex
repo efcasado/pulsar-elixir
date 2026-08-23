@@ -66,6 +66,11 @@ defmodule Pulsar.Reader do
   - The consumer receives all requested messages (e.g., via `Enum.take/2`)
   - The inactivity timeout is reached (default: 60 seconds)
   - The stream is halted by downstream processing
+
+  A Reader cannot recover a known position after one of its non-durable consumer workers
+  exits. It raises a `RuntimeError` and removes its temporary consumer rather than silently
+  resubscribing from the original start position. Use `Pulsar.Consumer` with a durable
+  subscription when consumption must survive a broker disconnect or worker failure.
   """
 
   alias Pulsar.Consumer
@@ -129,7 +134,9 @@ defmodule Pulsar.Reader do
   Creates a stream of messages from a Pulsar topic.
 
   Returns a `Stream` that yields `Pulsar.Message` structs. If initialization
-  fails, the stream emits `{:error, reason}` as the first (and only) element.
+  fails, the stream emits `{:error, reason}` as the first (and only) element. If a
+  consumer worker exits after initialization, enumeration raises a `RuntimeError` because the
+  non-durable subscription cannot resume from a known position.
 
   ## Options
 
@@ -226,21 +233,25 @@ defmodule Pulsar.Reader do
   end
 
   defp build_reader_state(consumer, client_name, reader_ref, flow_permits, timeout, startup_timeout) do
-    case wait_for_consumers_ready(consumer, startup_timeout) do
+    startup_deadline = deadline(startup_timeout)
+
+    case wait_for_consumers_ready(consumer, startup_deadline) do
       {:ok, consumer_pids} ->
         permits_by_consumer = Map.new(consumer_pids, fn pid -> {pid, flow_permits} end)
 
-        {:ok,
-         %{
-           client: client_name,
-           consumer_pids: consumer_pids,
-           consumer_root: consumer,
-           flow_permits: flow_permits,
-           permits_by_consumer: permits_by_consumer,
-           timeout: timeout,
-           reader_ref: reader_ref,
-           buffer: :queue.new()
-         }}
+        state = %{
+          client: client_name,
+          consumer_root: consumer,
+          flow_permits: flow_permits,
+          permits_by_consumer: permits_by_consumer,
+          timeout: timeout,
+          reader_ref: reader_ref,
+          buffer: :queue.new(),
+          workers_by_topic: %{},
+          topics_by_monitor: %{}
+        }
+
+        collect_initial_workers(state, MapSet.new(consumer_pids), startup_deadline)
 
       {:error, _reason} = error ->
         error
@@ -274,6 +285,7 @@ defmodule Pulsar.Reader do
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
+        topics_by_monitor = state.topics_by_monitor
 
         receive do
           {:pulsar_message, ^reader_ref, _consumer_pid, message} ->
@@ -281,6 +293,16 @@ defmodule Pulsar.Reader do
 
           {:pulsar_permits, ^reader_ref, consumer_pid, consumed} ->
             next_message(%{state | buffer: :queue.in({:permits, consumer_pid, consumed}, state.buffer)}, deadline)
+
+          {:pulsar_reader_ready, ^reader_ref, consumer_pid, topic} ->
+            case track_worker(state, consumer_pid, topic) do
+              {:ok, new_state} -> next_message(new_state, deadline)
+              {:error, reason} -> raise_interrupted(state, topic, reason)
+            end
+
+          {:DOWN, monitor_ref, :process, _consumer_pid, reason}
+          when is_map_key(topics_by_monitor, monitor_ref) ->
+            raise_interrupted(state, Map.fetch!(topics_by_monitor, monitor_ref), reason)
         after
           time_left(deadline) ->
             {:halt, state}
@@ -297,10 +319,18 @@ defmodule Pulsar.Reader do
   defp stop_reader(:halted), do: :ok
 
   defp stop_reader(state) do
+    demonitor_workers(state)
+
     case Consumer.stop(state.consumer_root, client: state.client) do
       :ok -> :ok
       {:error, _reason} -> :ok
     end
+  end
+
+  defp demonitor_workers(state) do
+    Enum.each(state.topics_by_monitor, fn {monitor_ref, _topic} ->
+      Process.demonitor(monitor_ref, [:flush])
+    end)
   end
 
   @doc false
@@ -333,25 +363,101 @@ defmodule Pulsar.Reader do
     threshold = div(state.flow_permits, 2)
 
     if current_permits <= threshold do
-      :ok = Consumer.send_flow(consumer_pid, state.flow_permits)
-      new_permits = Map.put(state.permits_by_consumer, consumer_pid, current_permits + state.flow_permits)
+      case Consumer.send_flow(consumer_pid, state.flow_permits) do
+        :ok ->
+          new_permits =
+            Map.put(state.permits_by_consumer, consumer_pid, current_permits + state.flow_permits)
 
-      maybe_refill_flow(%{state | permits_by_consumer: new_permits}, consumer_pid)
+          maybe_refill_flow(%{state | permits_by_consumer: new_permits}, consumer_pid)
+
+        {:error, reason} ->
+          raise_interrupted(state, worker_topic(state, consumer_pid), {:flow_failed, reason})
+      end
     else
       state
     end
   end
 
   # Each worker grants :flow_initial for itself when it subscribes, so a partition discovered
-  # later, or a worker that restarts, starts with a window instead of waiting to be given one.
-  defp wait_for_consumers_ready(consumer, startup_timeout) do
-    with :ok <- Consumer.await_ready(consumer, timeout: startup_timeout),
+  # later starts with a window instead of waiting to be given one. A replacement worker does
+  # too, but its subscription has lost the non-durable cursor and is rejected above.
+  defp wait_for_consumers_ready(consumer, startup_deadline) do
+    with :ok <- Consumer.await_ready(consumer, timeout: time_left(startup_deadline)),
          [_ | _] = consumer_pids <- Topology.workers(consumer) do
       {:ok, consumer_pids}
     else
       [] -> {:error, :reader_start_timeout}
       {:error, _reason} -> {:error, :reader_start_timeout}
     end
+  end
+
+  # Callback.init/2 has sent a ready signal before await_ready/2 can observe a worker as ready.
+  # Keep receiving until every pid from that readiness snapshot has been identified. Monitoring
+  # a pid that disappeared in the gap immediately produces :DOWN, so the stream cannot miss the
+  # lookup/use race here.
+  defp collect_initial_workers(state, expected, deadline) do
+    if MapSet.size(expected) == 0 do
+      {:ok, state}
+    else
+      reader_ref = state.reader_ref
+
+      receive do
+        {:pulsar_reader_ready, ^reader_ref, consumer_pid, topic} ->
+          case track_worker(state, consumer_pid, topic) do
+            {:ok, new_state} ->
+              collect_initial_workers(new_state, MapSet.delete(expected, consumer_pid), deadline)
+
+            {:error, reason} ->
+              demonitor_workers(state)
+              {:error, {:reader_interrupted, topic, reason}}
+          end
+      after
+        time_left(deadline) ->
+          demonitor_workers(state)
+          {:error, :reader_start_timeout}
+      end
+    end
+  end
+
+  # A topic not seen before is a partition discovered after the enumeration began and is safe
+  # to add: this is its first subscription. A different pid for a known topic is a replacement,
+  # whose new non-durable subscription starts from the original Reader options rather than the
+  # cursor reached by the old worker.
+  defp track_worker(state, consumer_pid, topic) do
+    case state.workers_by_topic do
+      %{^topic => ^consumer_pid} ->
+        {:ok, state}
+
+      %{^topic => _previous_pid} ->
+        {:error, :worker_replaced}
+
+      _new_topic ->
+        monitor_ref = Process.monitor(consumer_pid)
+
+        {:ok,
+         %{
+           state
+           | workers_by_topic: Map.put(state.workers_by_topic, topic, consumer_pid),
+             topics_by_monitor: Map.put(state.topics_by_monitor, monitor_ref, topic),
+             permits_by_consumer: Map.put_new(state.permits_by_consumer, consumer_pid, state.flow_permits)
+         }}
+    end
+  end
+
+  defp worker_topic(state, consumer_pid) do
+    Enum.find_value(state.workers_by_topic, fn
+      {topic, ^consumer_pid} -> topic
+      {_topic, _other_pid} -> nil
+    end)
+  end
+
+  defp raise_interrupted(state, topic, reason) do
+    # Recursive receives may have tracked workers in a newer state than Stream.resource/3
+    # retains for its cleanup callback, so those monitors have to be removed here as well.
+    demonitor_workers(state)
+
+    raise "reader worker for #{inspect(topic)} was lost (#{inspect(reason)}); " <>
+            "the non-durable stream cannot continue from a known position"
   end
 
   defp stop_consumer(consumer, client_name) do
