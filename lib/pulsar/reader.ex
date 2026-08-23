@@ -297,12 +297,12 @@ defmodule Pulsar.Reader do
           {:pulsar_reader_ready, ^reader_ref, consumer_pid, topic} ->
             case track_worker(state, consumer_pid, topic) do
               {:ok, new_state} -> next_message(new_state, deadline)
-              {:error, reason} -> raise_interrupted(topic, reason)
+              {:error, reason} -> raise_interrupted(state, topic, reason)
             end
 
           {:DOWN, monitor_ref, :process, _consumer_pid, reason}
           when is_map_key(topics_by_monitor, monitor_ref) ->
-            raise_interrupted(Map.fetch!(topics_by_monitor, monitor_ref), reason)
+            raise_interrupted(state, Map.fetch!(topics_by_monitor, monitor_ref), reason)
         after
           time_left(deadline) ->
             {:halt, state}
@@ -371,7 +371,7 @@ defmodule Pulsar.Reader do
           maybe_refill_flow(%{state | permits_by_consumer: new_permits}, consumer_pid)
 
         {:error, reason} ->
-          raise_interrupted(worker_topic(state, consumer_pid), {:flow_failed, reason})
+          raise_interrupted(state, worker_topic(state, consumer_pid), {:flow_failed, reason})
       end
     else
       state
@@ -453,7 +453,9 @@ defmodule Pulsar.Reader do
     end)
   end
 
-  defp raise_interrupted(topic, reason) do
+  defp raise_interrupted(state, topic, reason) do
+    demonitor_workers(state)
+
     raise "reader worker for #{inspect(topic)} was lost (#{inspect(reason)}); " <>
             "the non-durable stream cannot continue from a known position"
   end
