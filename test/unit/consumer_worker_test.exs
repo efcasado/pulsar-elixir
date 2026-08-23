@@ -95,7 +95,12 @@ defmodule Pulsar.Consumer.WorkerTest do
   end
 
   defp delivery(compression, payload, opts) do
-    metadata = struct(Binary.MessageMetadata, [producer_name: "orders-producer", compression: compression] ++ opts)
+    metadata =
+      struct(
+        Binary.MessageMetadata,
+        [producer_name: "orders-producer", compression: compression, num_messages_in_batch: 0] ++ opts
+      )
+
     command = %Binary.CommandMessage{message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
 
     {:broker_message, {command, metadata, payload, nil}}
@@ -268,9 +273,18 @@ defmodule Pulsar.Consumer.WorkerTest do
       refute_received {:handled, _message}
     end
 
-    test "treats failed one-message batch framing as an ordinary message" do
-      payload = "ordinary payload"
+    test "rejects malformed framing in an explicitly marked one-message batch" do
+      payload = "malformed batch"
       delivery = delivery(:NONE, payload, num_messages_in_batch: 1)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "does not batch-parse an ordinary message" do
+      payload = "ordinary payload"
+      delivery = delivery(:NONE, payload, [])
 
       assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
       assert_received {:handled, %{payload: ^payload}}

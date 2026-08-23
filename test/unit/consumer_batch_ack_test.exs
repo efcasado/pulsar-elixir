@@ -695,7 +695,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
       sequence_id: 0,
       publish_time: 0,
       compression: :NONE,
-      num_messages_in_batch: 1
+      num_messages_in_batch: 0
     }
 
     {:noreply, new_state} = Worker.handle_info({:broker_message, {command, metadata, payload, nil}}, state)

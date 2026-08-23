@@ -1216,22 +1216,10 @@ defmodule Pulsar.Consumer.Worker do
     }
   end
 
-  defp unwrap_messages(metadata, payload) do
-    if metadata.num_messages_in_batch > 0 do
-      case parse_batch_messages(payload, metadata.num_messages_in_batch, []) do
-        # `num_messages_in_batch` is an optional proto2 scalar whose default is one. The generated
-        # struct cannot tell an absent field on a plain message from an explicitly encoded
-        # one-message batch, so failed batch framing is conclusive only when the entry advertises > 1.
-        {:error, :batch_deserialization_failed} when metadata.num_messages_in_batch == 1 ->
-          {:ok, [{nil, payload}]}
+  defp unwrap_messages(%Binary.MessageMetadata{num_messages_in_batch: count}, payload)
+       when is_integer(count) and count > 0, do: parse_batch_messages(payload, count, [])
 
-        result ->
-          result
-      end
-    else
-      {:ok, [{nil, payload}]}
-    end
-  end
+  defp unwrap_messages(%Binary.MessageMetadata{}, payload), do: {:ok, [{nil, payload}]}
 
   defp parse_batch_messages(<<>>, 0, acc), do: {:ok, Enum.reverse(acc)}
   defp parse_batch_messages(_trailing, 0, _acc), do: {:error, :batch_deserialization_failed}

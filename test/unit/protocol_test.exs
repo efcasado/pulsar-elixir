@@ -140,8 +140,15 @@ defmodule Pulsar.ProtocolTest do
 
       assert {:ok, {command, metadata, payload, nil}} = Protocol.decode(frame)
       assert command == ctx.command
-      assert metadata == ctx.metadata
+      assert metadata == %{ctx.metadata | num_messages_in_batch: 0}
       assert payload == ctx.payload
+    end
+
+    test "preserves an explicit one-message batch marker", ctx do
+      frame = Protocol.encode_batch(ctx.command, ctx.metadata, ctx.payload)
+
+      assert {:ok, {_command, metadata, _payload, nil}} = Protocol.decode(frame)
+      assert metadata.num_messages_in_batch == 1
     end
 
     test "handles an empty payload", ctx do
@@ -302,7 +309,7 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, "payload")
 
       assert {:ok, {^command, decoded_metadata, "payload", nil}} = Protocol.decode(frame)
-      assert decoded_metadata == metadata
+      assert decoded_metadata == %{metadata | num_messages_in_batch: 0}
     end
 
     test "decodes a MESSAGE frame with broker entry metadata" do
@@ -313,7 +320,7 @@ defmodule Pulsar.ProtocolTest do
       frame = message_frame(command, metadata, "payload", broker_entry_metadata: broker_entry)
 
       assert {:ok, {^command, decoded_metadata, "payload", decoded_broker_entry}} = Protocol.decode(frame)
-      assert decoded_metadata == metadata
+      assert decoded_metadata == %{metadata | num_messages_in_batch: 0}
       assert decoded_broker_entry == broker_entry
     end
 
@@ -335,7 +342,7 @@ defmodule Pulsar.ProtocolTest do
         assert {:ok, {^command, decoded_metadata, "payload", decoded_broker_entry}} = Protocol.decode(frame),
                "failed to decode a frame with #{label}"
 
-        assert decoded_metadata == metadata
+        assert decoded_metadata == %{metadata | num_messages_in_batch: 0}
         assert decoded_broker_entry == expected_broker_entry
       end
     end
