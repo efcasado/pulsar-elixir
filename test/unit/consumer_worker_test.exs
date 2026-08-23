@@ -216,6 +216,32 @@ defmodule Pulsar.Consumer.WorkerTest do
     assert invalid.message_id == command.message_id
   end
 
+  describe "a batch whose framing cannot be read" do
+    setup do
+      payload = <<"not two framed messages">>
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      {:ok, delivery: delivery, payload: payload}
+    end
+
+    test "reaches handle_invalid_message/2 with the decompressed entry bytes", ctx do
+      assert {:noreply, _state} = Worker.handle_info(ctx.delivery, reporting_state())
+
+      assert_received {:invalid, invalid}
+      refute_received {:handled, _message}
+      assert invalid.validation_error == :batch_deserialization_failed
+      assert invalid.payload == ctx.payload
+      assert Pulsar.Message.num_broker_messages(invalid) == 2
+    end
+
+    test "acknowledges it with the protocol's batch deserialization error", ctx do
+      Worker.handle_info(ctx.delivery, reporting_state())
+
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
+      assert ack.validation_error == :BatchDeSerializeError
+    end
+  end
+
   describe "a payload that cannot be decompressed" do
     for compression <- [:ZLIB, :LZ4, :ZSTD, :SNAPPY] do
       test "reaches handle_invalid_message/2 under #{compression}" do
@@ -309,8 +335,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
       Worker.handle_info(delivery(:ZSTD, <<"garbage">>, uncompressed_size: 64), reporting_state())
 
-      assert_received {:telemetry, %{count: 1}, metadata}
-      assert metadata.reason == :decompression_failed
+      assert_received {:telemetry, %{count: 1}, %{reason: :decompression_failed} = metadata}
       assert metadata.decompression_reason == :decompression_error
       assert metadata.topic == "persistent://public/default/orders-partition-2"
     end
@@ -505,6 +530,23 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_received {:telemetry, measurements, metadata}
       assert measurements.received_chunks == 2
       assert metadata.uuid == "orders-producer-1"
+    end
+
+    test "reaches handle_invalid_message/2 and acknowledges its intact chunks normally", ctx do
+      {:noreply, _state} = Worker.handle_info(:cleanup_expired_chunks, age(ctx.state, 200))
+      assert_receive {:broker_message, incomplete_delivery}
+
+      assert {:noreply, _state} =
+               Worker.handle_info({:broker_message, incomplete_delivery}, ctx.state)
+
+      assert_received {:invalid, invalid}
+      refute_received {:handled, _message}
+      assert invalid.validation_error == :incomplete_chunked_message
+      assert invalid.chunk_metadata.error == :expired
+
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
+      assert ack.validation_error == nil
+      assert length(ack.message_id) == 2
     end
 
     test "is left alone while it still has time", ctx do

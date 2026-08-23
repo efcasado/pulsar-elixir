@@ -33,8 +33,8 @@ is diverted to the dead letter topic instead of being handed to your callback:
 With `max_redelivery: 3`, a message your callback keeps rejecting is delivered three times. The fourth
 delivery is diverted, and the callback never sees it:
 
-1. **Deliveries 1 to 3**: `handle_message/2` runs and returns `{:error, reason, state}`, so the message is
-   negatively acknowledged and redelivered
+1. **Deliveries 1 to 3**: `handle_message/2` or `handle_invalid_message/2` runs and returns
+   `{:error, reason, state}`, so the message is negatively acknowledged and redelivered
 2. **Delivery 4**: the count has reached the threshold, so the message is published to the dead letter topic
 3. **Acknowledged**: once the publish succeeds, the message is acknowledged and leaves the subscription
 
@@ -118,6 +118,11 @@ it is carried across:
 
 The two property names are the ones the Java client uses, so a dead letter topic can be consumed by either
 client and read the same way.
+
+For an invalid message, “unchanged” means the bytes the consumer was able to retain, not necessarily
+the payload originally published. A decompression failure carries compressed bytes, a malformed batch
+carries its decoded entry framing, and an incomplete chunked message carries only the chunks that arrived.
+These are useful for inspection but must not be treated as the original application payload.
 
 Reading them back:
 

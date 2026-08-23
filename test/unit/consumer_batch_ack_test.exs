@@ -29,8 +29,10 @@ defmodule Pulsar.Consumer.BatchAckTest do
       send(self(), {:delivered, message.payload})
 
       case Map.get(answers, message.payload, :ack) do
+        :ack -> {:ok, answers}
+        :defer -> {:noreply, answers}
+        :nack -> {:error, :rejected_invalid_message, answers}
         {:stop, reason} -> {:stop, reason, answers}
-        _other -> {:ok, answers}
       end
     end
   end
@@ -93,6 +95,18 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert_received {:delivered, "invalid"}
       assert [ack] = acks()
       assert ack.validation_error == :ChecksumMismatch
+    end
+
+    test "an invalid-message callback can opt into redelivery" do
+      state = worker_state(%{"invalid" => :nack}, redelivery_interval: 100)
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: message_id()}
+      delivery = {:broker_message, {:invalid, command, "invalid", :checksum_mismatch}}
+
+      assert {:noreply, state} = Worker.handle_info(delivery, state)
+      assert_received {:delivered, "invalid"}
+      assert acks() == []
+      assert [%{batch_index: -1} = id] = MapSet.to_list(state.acks.nacked)
+      assert {id.ledgerId, id.entryId} == {@ledger, @entry}
     end
 
     test "acknowledges the entry once, after the last message in it is acked" do

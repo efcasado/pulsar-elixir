@@ -24,6 +24,32 @@ defmodule Pulsar.MessageTest do
     assert Message.num_broker_messages(message) == 3
   end
 
+  test "num_broker_messages/1 preserves a batch count when its framing is unreadable" do
+    message = %Message{
+      validation_error: :batch_deserialization_failed,
+      raw: %{metadata: %{num_messages_in_batch: 3}}
+    }
+
+    assert Message.num_broker_messages(message) == 3
+  end
+
+  test "an incomplete chunked message is invalid with its cause kept in chunk metadata" do
+    message = %Message{
+      validation_error: :incomplete_chunked_message,
+      chunk_metadata: %{chunked: true, complete: false, error: :expired}
+    }
+
+    refute Message.valid?(message)
+    refute Message.complete?(message)
+    assert message.chunk_metadata.error == :expired
+  end
+
+  test "valid?/1 rejects an incomplete chunk even if a caller omitted its validation error" do
+    message = %Message{chunk_metadata: %{chunked: true, complete: false, error: :expired}}
+
+    refute Message.valid?(message)
+  end
+
   # The point of the accessors: the same question has one answer whether the broker delivered
   # the message on its own, inside a batch, or split across chunks.
   describe "accessors across delivery shapes" do

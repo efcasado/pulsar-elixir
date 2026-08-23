@@ -44,11 +44,12 @@ defmodule Pulsar.Consumer.Callback do
   - `became_active/1` - Called when this consumer becomes the active consumer of a `:failover` subscription (default: `{:ok, state}`)
   - `became_passive/1` - Called when this consumer becomes a passive (standby) consumer of a `:failover` subscription (default: `{:ok, state}`)
   - `reached_end_of_topic/1` - Called when this consumer has drained a terminated topic (default: `{:ok, state}`)
-  - `handle_invalid_message/2` - Called instead of `handle_message/2` for a message whose
-    bytes could not be trusted (default: log a warning and acknowledge it, so it is not
-    redelivered). Override it to record or divert such messages; see `Pulsar.Message.valid?/1`
-    for what they contain. Because they are routed here, `handle_message/2` only ever
-    receives messages that arrived intact.
+  - `handle_invalid_message/2` - Called instead of `handle_message/2` when no complete
+    application payload could be built: for example, after framing, decompression or batch
+    decoding fails, or when a chunked message expires incomplete (default: log a warning and
+    acknowledge it, so it is not redelivered). Override it to record, retry or divert such
+    messages; see `Pulsar.Message.valid?/1` for what they contain. Because they are routed
+    here, `handle_message/2` only ever receives complete payloads that can be treated as data.
 
   ## Message Format
 
@@ -145,8 +146,11 @@ defmodule Pulsar.Consumer.Callback do
   processed message is acknowledged before the worker stops.
 
   `handle_invalid_message/2` accepts the same results. Its `{:ok, ...}` and `{:stop, ...}`
-  results acknowledge the invalid message with its validation error; `{:noreply, ...}` leaves
-  acknowledgement to the callback, and `{:error, ...}` tracks it for redelivery.
+  results acknowledge the invalid message, including Pulsar's wire validation error when one
+  applies; an incomplete chunk is acknowledged normally because its received bytes were intact.
+  `{:noreply, ...}` leaves acknowledgement to the callback, and `{:error, ...}` tracks the
+  message for redelivery. With a redelivery interval and dead letter policy, repeatedly returning
+  `{:error, ...}` intentionally sends an invalid message through normal DLQ processing.
 
   ### Notification callbacks
 

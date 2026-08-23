@@ -378,6 +378,12 @@ defmodule Pulsar.Consumer.Worker do
           end
 
         {commands, metadatas, payload, broker_metadatas, chunk_metadata} ->
+          report_invalid_message(
+            state,
+            :incomplete_chunked_message,
+            Map.get(chunk_metadata, :error)
+          )
+
           chunk_metadata_full =
             Map.merge(chunk_metadata, %{
               commands: commands,
@@ -385,7 +391,7 @@ defmodule Pulsar.Consumer.Worker do
               broker_metadatas: broker_metadatas
             })
 
-          message = build_message_from_chunk(chunk_metadata_full, payload)
+          message = build_message_from_chunk(chunk_metadata_full, payload, :incomplete_chunked_message)
           {[message], [], state}
       end
 
@@ -648,8 +654,8 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp process_single_message(state, %Pulsar.Message{} = message, nacked_acc) do
-    # Call callback for ALL messages (including incomplete chunks). An invalid one
-    # goes to its own callback, so handle_message/2 can trust what it is given.
+    # Every unusable delivery, including an incomplete chunked message, goes to its own
+    # callback so handle_message/2 can trust what it is given.
     result =
       if Pulsar.Message.valid?(message) do
         state.callback_module.handle_message(message, state.callback_state)
@@ -1091,8 +1097,10 @@ defmodule Pulsar.Consumer.Worker do
   defp compacted_out?(_single_metadata), do: false
 
   defp validation_error(%Pulsar.Message{validation_error: nil}), do: nil
+  defp validation_error(%Pulsar.Message{validation_error: :incomplete_chunked_message}), do: nil
   defp validation_error(%Pulsar.Message{validation_error: :decompression_failed}), do: :DecompressionError
   defp validation_error(%Pulsar.Message{validation_error: :uncompressed_size_corruption}), do: :UncompressedSizeCorruption
+  defp validation_error(%Pulsar.Message{validation_error: :batch_deserialization_failed}), do: :BatchDeSerializeError
   defp validation_error(%Pulsar.Message{}), do: :ChecksumMismatch
 
   # A chunk's uuid lives in the metadata that failed validation, so a corrupt chunk
@@ -1110,8 +1118,23 @@ defmodule Pulsar.Consumer.Worker do
   defp build_messages_from_entry(command, metadata, payload, broker_metadata, state) do
     case maybe_uncompress(metadata, payload) do
       {:ok, uncompressed} ->
-        unwrapped = unwrap_messages(metadata, uncompressed)
-        build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+        case unwrap_messages(metadata, uncompressed) do
+          {:ok, unwrapped} ->
+            build_messages_from_unwrapped(command, metadata, broker_metadata, unwrapped)
+
+          {:error, :batch_deserialization_failed} ->
+            report_invalid_message(state, :batch_deserialization_failed)
+
+            {[
+               build_invalid_message(
+                 command,
+                 uncompressed,
+                 :batch_deserialization_failed,
+                 metadata,
+                 broker_metadata
+               )
+             ], []}
+        end
 
       {:error, reason} ->
         validation_error = report_unreadable_payload(state, reason)
@@ -1161,17 +1184,17 @@ defmodule Pulsar.Consumer.Worker do
     validation_error
   end
 
-  defp report_invalid_message(state, reason) do
+  defp report_invalid_message(state, reason, detail \\ nil) do
     :telemetry.execute(
       [:pulsar, :consumer, :message, :invalid],
       %{count: 1},
       state
       |> consumer_metadata()
-      |> Map.merge(%{reason: reason, decompression_reason: nil, detail: nil})
+      |> Map.merge(%{reason: reason, decompression_reason: nil, detail: detail})
     )
   end
 
-  defp build_message_from_chunk(chunk_metadata, payload, validation_error \\ nil) do
+  defp build_message_from_chunk(chunk_metadata, payload, validation_error) do
     %Pulsar.Message{
       payload: payload,
       message_id: Map.get(chunk_metadata, :message_ids, []),
@@ -1188,20 +1211,25 @@ defmodule Pulsar.Consumer.Worker do
 
   defp unwrap_messages(metadata, payload) do
     if metadata.num_messages_in_batch > 0 do
-      parse_batch_messages(payload, metadata.num_messages_in_batch, [])
+      case parse_batch_messages(payload, metadata.num_messages_in_batch, []) do
+        # `num_messages_in_batch` is an optional proto2 scalar whose default is one. Protox
+        # cannot tell an absent field on a plain message from an explicitly encoded one-message
+        # batch, so failed batch framing is conclusive only when the entry advertises > 1.
+        {:error, :batch_deserialization_failed} when metadata.num_messages_in_batch == 1 ->
+          {:ok, [{nil, payload}]}
+
+        result ->
+          result
+      end
     else
-      [{nil, payload}]
+      {:ok, [{nil, payload}]}
     end
   end
 
-  defp parse_batch_messages(<<>>, 0, acc), do: Enum.reverse(acc)
-  defp parse_batch_messages(_, 0, acc), do: Enum.reverse(acc)
+  defp parse_batch_messages(<<>>, 0, acc), do: {:ok, Enum.reverse(acc)}
+  defp parse_batch_messages(_trailing, 0, _acc), do: {:error, :batch_deserialization_failed}
 
-  defp parse_batch_messages(
-         <<metadata_size::32, metadata::bytes-size(metadata_size), data::binary>> = payload,
-         count,
-         acc
-       ) do
+  defp parse_batch_messages(<<metadata_size::32, metadata::bytes-size(metadata_size), data::binary>>, count, acc) do
     single_metadata = Binary.SingleMessageMetadata.decode(metadata)
 
     payload_size = single_metadata.payload_size
@@ -1212,12 +1240,10 @@ defmodule Pulsar.Consumer.Worker do
 
     parse_batch_messages(rest, count - 1, [message | acc])
   rescue
-    _ -> [{nil, payload}]
+    _ -> {:error, :batch_deserialization_failed}
   end
 
-  defp parse_batch_messages(payload, _, _) do
-    [{nil, payload}]
-  end
+  defp parse_batch_messages(_payload, _count, _acc), do: {:error, :batch_deserialization_failed}
 
   defp chunked_message?(%Binary.MessageMetadata{uuid: uuid, chunk_id: chunk_id})
        when is_binary(uuid) and is_integer(chunk_id) do
