@@ -305,8 +305,7 @@ defmodule Pulsar.Message do
 
   # A payload that failed after its metadata was decoded keeps its batch count.
   def num_broker_messages(%__MODULE__{validation_error: error, raw: %{metadata: %{num_messages_in_batch: count}}})
-      when error in [:decompression_failed, :uncompressed_size_corruption, :batch_deserialization_failed] and
-             is_integer(count) and count > 0 do
+      when not is_nil(error) and is_integer(count) and count > 0 do
     count
   end
 

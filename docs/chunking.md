@@ -68,9 +68,14 @@ def handle_message(%Pulsar.Message{chunk_metadata: %{num_chunks: n}} = message, 
   process(message.payload)
   {:ok, state}
 end
+
+def handle_message(%Pulsar.Message{} = message, state) do
+  process(message.payload)
+  {:ok, state}
+end
 ```
 
-An incomplete chunked message has no application payload and goes to
+An incomplete chunked message has no complete application payload and goes to
 `handle_invalid_message/2`, as described below.
 
 ## Chunked Message Metadata

@@ -22,6 +22,18 @@ defmodule Pulsar.Consumer.Worker do
   @zstd_min_buffer_size 64 * 1024
   @zstd_max_buffer_size 1024 * 1024
 
+  # Message.validation_error is client-level. CommandAck accepts Pulsar's narrower enum,
+  # so only reasons with a deliberate mapping are sent over the wire.
+  @wire_validation_errors %{
+    checksum_mismatch: :ChecksumMismatch,
+    malformed_frame: :ChecksumMismatch,
+    malformed_message_metadata: :ChecksumMismatch,
+    malformed_broker_entry_metadata: :ChecksumMismatch,
+    decompression_failed: :DecompressionError,
+    uncompressed_size_corruption: :UncompressedSizeCorruption,
+    batch_deserialization_failed: :BatchDeSerializeError
+  }
+
   defstruct [
     :client,
     :topic,
@@ -377,11 +389,11 @@ defmodule Pulsar.Consumer.Worker do
             {msgs, skipped_ids, state}
           end
 
-        {commands, metadatas, payload, broker_metadatas, chunk_metadata} ->
+        {commands, metadatas, payload, broker_metadatas, %{error: detail} = chunk_metadata} ->
           report_invalid_message(
             state,
             :incomplete_chunked_message,
-            Map.get(chunk_metadata, :error)
+            detail
           )
 
           chunk_metadata_full =
@@ -540,7 +552,7 @@ defmodule Pulsar.Consumer.Worker do
     state =
       Enum.reduce(messages, state, fn %Pulsar.Message{} = message, acc_state ->
         :ok = DeadLetter.divert(producer, message, acc_state.topic)
-        ack_message_ids(acc_state, List.wrap(message.message_id), validation_error(message))
+        ack_message_ids(acc_state, List.wrap(message.message_id), wire_validation_error(message))
       end)
 
     :telemetry.execute(
@@ -667,7 +679,7 @@ defmodule Pulsar.Consumer.Worker do
 
     case result do
       {:ok, new_callback_state} ->
-        state = ack_message_ids(state, message_ids_list, validation_error(message))
+        state = ack_message_ids(state, message_ids_list, wire_validation_error(message))
         {:continue, %{state | callback_state: new_callback_state}, nacked_acc}
 
       {:noreply, new_callback_state} ->
@@ -685,7 +697,7 @@ defmodule Pulsar.Consumer.Worker do
       {:stop, reason, new_callback_state} ->
         # Do not force an entry-level ack for a partial batch: that would also acknowledge the
         # unread suffix. The normal ledger sends the prefix only when batch-index acks are enabled.
-        state = ack_message_ids(state, message_ids_list, validation_error(message))
+        state = ack_message_ids(state, message_ids_list, wire_validation_error(message))
         {:stop, reason, %{state | callback_state: new_callback_state}, nacked_acc}
     end
   end
@@ -1096,12 +1108,7 @@ defmodule Pulsar.Consumer.Worker do
   defp compacted_out?(%Binary.SingleMessageMetadata{compacted_out: true}), do: true
   defp compacted_out?(_single_metadata), do: false
 
-  defp validation_error(%Pulsar.Message{validation_error: nil}), do: nil
-  defp validation_error(%Pulsar.Message{validation_error: :incomplete_chunked_message}), do: nil
-  defp validation_error(%Pulsar.Message{validation_error: :decompression_failed}), do: :DecompressionError
-  defp validation_error(%Pulsar.Message{validation_error: :uncompressed_size_corruption}), do: :UncompressedSizeCorruption
-  defp validation_error(%Pulsar.Message{validation_error: :batch_deserialization_failed}), do: :BatchDeSerializeError
-  defp validation_error(%Pulsar.Message{}), do: :ChecksumMismatch
+  defp wire_validation_error(%Pulsar.Message{validation_error: error}), do: @wire_validation_errors[error]
 
   # A chunk's uuid lives in the metadata that failed validation, so a corrupt chunk
   # cannot be tied back to its siblings; those expire as an incomplete message.
@@ -1212,9 +1219,9 @@ defmodule Pulsar.Consumer.Worker do
   defp unwrap_messages(metadata, payload) do
     if metadata.num_messages_in_batch > 0 do
       case parse_batch_messages(payload, metadata.num_messages_in_batch, []) do
-        # `num_messages_in_batch` is an optional proto2 scalar whose default is one. Protox
-        # cannot tell an absent field on a plain message from an explicitly encoded one-message
-        # batch, so failed batch framing is conclusive only when the entry advertises > 1.
+        # `num_messages_in_batch` is an optional proto2 scalar whose default is one. The generated
+        # struct cannot tell an absent field on a plain message from an explicitly encoded
+        # one-message batch, so failed batch framing is conclusive only when the entry advertises > 1.
         {:error, :batch_deserialization_failed} when metadata.num_messages_in_batch == 1 ->
           {:ok, [{nil, payload}]}
 

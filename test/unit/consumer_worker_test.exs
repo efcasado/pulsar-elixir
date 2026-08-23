@@ -101,6 +101,15 @@ defmodule Pulsar.Consumer.WorkerTest do
     {:broker_message, {command, metadata, payload, nil}}
   end
 
+  defp batch_payload(payloads) do
+    payloads
+    |> Enum.map(fn payload ->
+      metadata = Binary.SingleMessageMetadata.encode(%Binary.SingleMessageMetadata{payload_size: byte_size(payload)})
+      <<byte_size(metadata)::32, metadata::binary, payload::binary>>
+    end)
+    |> IO.iodata_to_binary()
+  end
+
   defp chunk_delivery(chunk_id, payload, opts) do
     delivery(
       :ZLIB,
@@ -239,6 +248,33 @@ defmodule Pulsar.Consumer.WorkerTest do
 
       assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
       assert ack.validation_error == :BatchDeSerializeError
+    end
+
+    test "rejects a batch that ends before its advertised message count" do
+      payload = batch_payload(["only one"])
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "rejects trailing bytes after the advertised batch" do
+      payload = batch_payload(["first", "second"]) <> "trailing"
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 2)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:invalid, %{validation_error: :batch_deserialization_failed}}
+      refute_received {:handled, _message}
+    end
+
+    test "treats failed one-message batch framing as an ordinary message" do
+      payload = "ordinary payload"
+      delivery = delivery(:NONE, payload, num_messages_in_batch: 1)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+      assert_received {:handled, %{payload: ^payload}}
+      refute_received {:invalid, _message}
     end
   end
 

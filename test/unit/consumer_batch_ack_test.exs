@@ -109,6 +109,17 @@ defmodule Pulsar.Consumer.BatchAckTest do
       assert {id.ledgerId, id.entryId} == {@ledger, @entry}
     end
 
+    test "does not invent a wire validation error for an unknown high-level reason" do
+      state = worker_state(%{})
+      command = %Binary.CommandMessage{consumer_id: 1, message_id: message_id()}
+      delivery = {:broker_message, {:invalid, command, "invalid", :future_validation_error}}
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, state)
+      assert_received {:delivered, "invalid"}
+      assert [ack] = acks()
+      assert ack.validation_error == nil
+    end
+
     test "acknowledges the entry once, after the last message in it is acked" do
       deliver(worker_state(%{}), ["a", "b", "c"])
 

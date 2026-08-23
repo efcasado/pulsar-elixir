@@ -33,6 +33,15 @@ defmodule Pulsar.MessageTest do
     assert Message.num_broker_messages(message) == 3
   end
 
+  test "num_broker_messages/1 preserves decoded batch counts for future validation reasons" do
+    message = %Message{
+      validation_error: :future_validation_error,
+      raw: %{metadata: %{num_messages_in_batch: 3}}
+    }
+
+    assert Message.num_broker_messages(message) == 3
+  end
+
   test "an incomplete chunked message is invalid with its cause kept in chunk metadata" do
     message = %Message{
       validation_error: :incomplete_chunked_message,
