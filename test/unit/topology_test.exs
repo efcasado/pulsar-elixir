@@ -5,7 +5,6 @@ defmodule Pulsar.TopologyTest do
 
   alias Pulsar.Backoff
   alias Pulsar.Client
-  alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
   alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Group
@@ -408,8 +407,27 @@ defmodule Pulsar.TopologyTest do
 
       assert_receive {:resolved, 2}
       :ok = Topology.await_ready(root, 1_000)
+
+      assert_receive {:telemetry_event,
+                      %{
+                        metadata: %{
+                          desired_partition_count: 2,
+                          partition_count: 2,
+                          success: true
+                        }
+                      }}
+
       assert_receive {:resolved, 4}
-      Utils.wait_for(fn -> length(Topology.groups(root)) == 4 end, timeout: 1_000, interval: 10)
+
+      assert_receive {:telemetry_event,
+                      %{
+                        metadata: %{
+                          desired_partition_count: 4,
+                          partition_count: 4,
+                          success: true
+                        }
+                      }}
+
       assert_receive {:resolved, 2}
 
       assert_receive {:telemetry_event,

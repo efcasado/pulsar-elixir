@@ -1,6 +1,5 @@
 defmodule Pulsar.Test.Support.System do
   @moduledoc false
-  alias Pulsar.Test.Support.Utils
 
   require Logger
 
@@ -40,9 +39,10 @@ defmodule Pulsar.Test.Support.System do
 
   def start_pulsar do
     Logger.info("Starting Pulsar ...")
-    {_output, 0} = System.cmd("docker", ["compose", "up", "-d"], stderr_to_stdout: true)
 
-    Utils.wait_for(&brokers_up?/0)
+    {_output, 0} =
+      System.cmd("docker", ["compose", "up", "-d", "--wait", "--wait-timeout", "120"], stderr_to_stdout: true)
+
     :ok
   end
 
@@ -221,13 +221,33 @@ defmodule Pulsar.Test.Support.System do
   end
 
   def compact_topic(topic, broker \\ broker()) do
-    command = [
+    compact = [
       "bin/pulsar-admin",
       "--admin-url",
       broker.admin_url,
       "topics",
       "compact",
       topic
+    ]
+
+    case docker_exec(broker.container, compact) do
+      {_output, 0} ->
+        await_compaction(topic, broker)
+
+      {error_output, exit_code} ->
+        {:error, %{exit_code: exit_code, message: error_output}}
+    end
+  end
+
+  defp await_compaction(topic, broker) do
+    command = [
+      "bin/pulsar-admin",
+      "--admin-url",
+      broker.admin_url,
+      "topics",
+      "compaction-status",
+      topic,
+      "--wait-complete"
     ]
 
     case docker_exec(broker.container, command) do
@@ -239,25 +259,6 @@ defmodule Pulsar.Test.Support.System do
     end
   end
 
-  def compacted_topic?(topic, broker \\ broker()) do
-    command = [
-      "bin/pulsar-admin",
-      "--admin-url",
-      broker.admin_url,
-      "topics",
-      "compaction-status",
-      topic
-    ]
-
-    case docker_exec(broker.container, command) do
-      {"Compaction was a success\n", 0} ->
-        true
-
-      _ ->
-        false
-    end
-  end
-
   defp docker_exec(command) do
     broker = broker()
 
@@ -266,13 +267,5 @@ defmodule Pulsar.Test.Support.System do
 
   defp docker_exec(container, command) do
     System.cmd("docker", ["exec", container | command], stderr_to_stdout: true)
-  end
-
-  defp brokers_up? do
-    Enum.all?(@brokers, &broker_up?(&1))
-  end
-
-  defp broker_up?(broker) do
-    {"ok", 0} == System.cmd("curl", ["-s", broker.health_url])
   end
 end
