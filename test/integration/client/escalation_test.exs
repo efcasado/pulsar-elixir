@@ -4,7 +4,6 @@ defmodule Pulsar.Integration.Client.EscalationTest do
   alias Pulsar.Client
   alias Pulsar.Test.Support.DummyConsumer
   alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
   alias Pulsar.Topology
 
   @moduletag :integration
@@ -64,12 +63,10 @@ defmodule Pulsar.Integration.Client.EscalationTest do
         startup_delay_ms: 30_000
       )
 
-    # Its worker exists but has not subscribed: await_ready/2 would sit out the whole delay.
-    [worker] =
-      Utils.wait_for(fn -> Topology.workers(consumer) end,
-        until: &match?([_worker], &1),
-        description: "the delayed worker to be started"
-      )
+    # The topology-only barrier returns once the worker exists, without waiting for its delayed
+    # subscription to become ready.
+    :ok = Topology.await_ready(consumer, 10_000)
+    [worker] = Topology.workers(consumer)
 
     ref = Process.monitor(worker)
 

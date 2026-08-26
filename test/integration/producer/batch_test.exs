@@ -208,15 +208,17 @@ defmodule Pulsar.Integration.Producer.BatchTest do
       # Neither fills the batch, so both wait for a flush that nothing has scheduled yet.
       pending =
         Enum.map(["batched-1", "batched-2"], fn payload ->
-          Task.async(fn -> Pulsar.Producer.send(producer_pid, payload) end)
+          {:ok, ref} = Pulsar.Producer.send_async(producer_pid, payload)
+          ref
         end)
 
-      # Both are queued before the delayed one arrives, so it is what flushes them.
-      Utils.wait_for(fn -> :sys.get_state(producer).batched == 2 end)
+      # Sent from this process, so the state call is handled after both casts. Both are queued
+      # before the delayed one arrives, making it the send that flushes them.
+      assert :sys.get_state(producer).batched == 2
 
       assert {:ok, _message_id} = Pulsar.Producer.send(producer_pid, "delayed-1", deliver_at_time: deliver_at)
 
-      assert Enum.all?(Task.await_many(pending, 10_000), &match?({:ok, _}, &1))
+      assert Enum.all?(Enum.map(pending, &Pulsar.Producer.await(&1, 10_000)), &match?({:ok, _}, &1))
 
       messages = assert_messages_received(consumer_pid, ["batched-1", "batched-2", "delayed-1"])
       delayed = Enum.find(messages, &(&1.payload == "delayed-1"))

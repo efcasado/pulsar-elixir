@@ -109,15 +109,14 @@ defmodule Pulsar.Integration.AccessModesTest do
         client: @client
       )
 
-    # await_ready/2 would wait out its whole timeout here: this producer is queued behind the
-    # exclusive one and stays unready until that one goes.
-    [producer_2] = Utils.wait_for(fn -> Topology.workers(group_pid_2) end, until: &match?([_], &1))
+    # The topology-only barrier returns once the queued worker exists, without waiting for the
+    # exclusive producer to release the topic.
+    :ok = Topology.await_ready(group_pid_2, 10_000)
+    [producer_2] = Topology.workers(group_pid_2)
+    producer_2_state = :sys.get_state(producer_2)
 
-    Utils.wait_for(fn ->
-      String.starts_with?(:sys.get_state(producer_2).producer_name || "", "waiting-producer-2")
-    end)
-
-    refute :sys.get_state(producer_2).ready
+    assert String.starts_with?(producer_2_state.producer_name, "waiting-producer-2")
+    refute producer_2_state.ready
 
     assert {:ok, _} = Pulsar.Producer.send(group_pid_1, "Message from first producer", client: @client)
 

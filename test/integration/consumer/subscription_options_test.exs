@@ -251,8 +251,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
   test "read_compacted reads the last message per key, not every message", %{expected_count: expected_count} do
     :ok = System.compact_topic(@topic)
 
-    Utils.wait_for(fn -> System.compacted_topic?(@topic) end)
-
     {:ok, compacted_group} =
       Pulsar.Consumer.start(
         @topic,

@@ -90,11 +90,8 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     restart.(before)
     assert_receive {:DOWN, ^ref, :process, ^before, _reason}
 
-    [after_restart] =
-      Utils.wait_for(fn -> Topology.workers(group) end,
-        until: &match?([worker] when worker != before, &1),
-        description: "replacement topology worker to start"
-      )
+    :ok = facade.await_ready(group)
+    [after_restart] = Topology.workers(group)
 
     refute Process.alive?(before)
     assert Process.alive?(group)
