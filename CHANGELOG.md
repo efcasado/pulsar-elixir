@@ -1,5 +1,61 @@
 # Changelog
 
+## [3.1.0](https://github.com/efcasado/pulsar-elixir/compare/v3.0.1...v3.1.0) (2026-08-26)
+
+
+### Features
+
+* **client:** make restart intensity configurable ([019e6ad](https://github.com/efcasado/pulsar-elixir/commit/019e6ad50d390fd692986a3193a40d6d65b6e7f4))
+* **consumer:** add cumulative acknowledgement ([318c8a7](https://github.com/efcasado/pulsar-elixir/commit/318c8a7b97394838e0c6d56622c367dc781bba41))
+* **consumer:** report reaching the end of a terminated topic ([#196](https://github.com/efcasado/pulsar-elixir/issues/196)) ([5bc1936](https://github.com/efcasado/pulsar-elixir/commit/5bc1936a811d146a88836315c0c11b7942d1fdf5))
+* route invalid messages through callback ([#214](https://github.com/efcasado/pulsar-elixir/issues/214)) ([a8d8bb0](https://github.com/efcasado/pulsar-elixir/commit/a8d8bb0e684a3855af861848b44d430ffacaa22f))
+
+
+### Bug Fixes
+
+* **broker:** a close-on-exit ack was logged as an unknown request ([#197](https://github.com/efcasado/pulsar-elixir/issues/197)) ([8034d33](https://github.com/efcasado/pulsar-elixir/commit/8034d331b71bb1ad37661683b746d27e308dd08e))
+* **consumer:** recover from a payload that cannot be decompressed ([#204](https://github.com/efcasado/pulsar-elixir/issues/204)) ([1cf1c5c](https://github.com/efcasado/pulsar-elixir/commit/1cf1c5c47db7c1ec8f0a7f93f62a64974c71429b))
+* **consumer:** run terminate/2 when a worker is stopped ([6655b63](https://github.com/efcasado/pulsar-elixir/commit/6655b6340fbac7b7a773561aca4992ee967db69e))
+* **reader:** fail when a non-durable worker is lost ([#213](https://github.com/efcasado/pulsar-elixir/issues/213)) ([cd60627](https://github.com/efcasado/pulsar-elixir/commit/cd6062741530c4e64214a50c4e7e9c03501d59f4))
+* **reader:** give each reader a subscription name no other node will pick ([c77aa4e](https://github.com/efcasado/pulsar-elixir/commit/c77aa4e52147be893670c967e15d89c8ac30cfc9))
+* restore graceful completion and metadata retry semantics ([21721a0](https://github.com/efcasado/pulsar-elixir/commit/21721a0a627d549c5d03b89628e6d8643afd00cf))
+* **topology:** escalate every resource that cannot run ([b8c3e62](https://github.com/efcasado/pulsar-elixir/commit/b8c3e6202b3a6873da0896083a786f35d593308e))
+* **topology:** leave a group that stopped intentionally stopped ([efe1f6f](https://github.com/efcasado/pulsar-elixir/commit/efe1f6fd21f434e9aa84d20dd61984eb662fe652))
+
+
+### Dependencies
+
+* bump castore from 1.0.20 to 1.0.21 ([#208](https://github.com/efcasado/pulsar-elixir/issues/208)) ([2356b2d](https://github.com/efcasado/pulsar-elixir/commit/2356b2dada6409f261c08515564fa184ded76af3))
+* bump jdx/mise-action from 4.2.4 to 4.2.5 ([#209](https://github.com/efcasado/pulsar-elixir/issues/209)) ([edcc939](https://github.com/efcasado/pulsar-elixir/commit/edcc9391db89baf3a2fac7229f9630b11cff2c00))
+
+
+### Documentation
+
+* add a 2.x to 3.0 upgrade guide ([#200](https://github.com/efcasado/pulsar-elixir/issues/200)) ([c8224bf](https://github.com/efcasado/pulsar-elixir/commit/c8224bf2f367f76145787165a29c8c055deb79c0))
+* add acknowledgement and redelivery guide ([0cf4362](https://github.com/efcasado/pulsar-elixir/commit/0cf4362f077074177c2a825b0f87c1e248b57a2f))
+* shorten upgrade to 3.x guide ([946a73c](https://github.com/efcasado/pulsar-elixir/commit/946a73cc48b9959372e9d6d2686e4c281a93b20f))
+
+
+### Code Refactoring
+
+* simplify resource shutdown and worker startup ([fd91c46](https://github.com/efcasado/pulsar-elixir/commit/fd91c464c6b1bf2e05af424c6874eab2e572f49c))
+* **test:** stop using Utils.wait_for/2 ([#215](https://github.com/efcasado/pulsar-elixir/issues/215)) ([50ae4b1](https://github.com/efcasado/pulsar-elixir/commit/50ae4b1f9daa93fc430b68c4e8c0994b4b1d837c))
+* **topology:** separate reading a tree from being one ([3c2c7c7](https://github.com/efcasado/pulsar-elixir/commit/3c2c7c7d057dd47fc437b0a4f3e48522c61b5b86))
+
+
+### Tests
+
+* cleaner and improved tests ([#207](https://github.com/efcasado/pulsar-elixir/issues/207)) ([82c251b](https://github.com/efcasado/pulsar-elixir/commit/82c251bd3f1a86e13ec4f86f7345f2d6854949c2))
+* **consumer:** cover that stopping a consumer removes it ([#199](https://github.com/efcasado/pulsar-elixir/issues/199)) ([75826cb](https://github.com/efcasado/pulsar-elixir/commit/75826cb49d9a9c52a34233fab599668af324d8cd))
+* fix flaky cumulative ack test ([#216](https://github.com/efcasado/pulsar-elixir/issues/216)) ([78f3e4f](https://github.com/efcasado/pulsar-elixir/commit/78f3e4f6c08b683be8776556941214e3a160f3ef))
+* keep a resource that cannot run off a shared client ([7e9e6aa](https://github.com/efcasado/pulsar-elixir/commit/7e9e6aa62c4c3790f609aeac0ec9fb5e72587047))
+* **producer:** wait for the deduplicated event instead of racing it ([#201](https://github.com/efcasado/pulsar-elixir/issues/201)) ([625aae4](https://github.com/efcasado/pulsar-elixir/commit/625aae405836e3e3e55dbb6e6a1a75b7321282b4))
+
+
+### Miscellaneous Chores
+
+* add AGENTS.md ([03d64d4](https://github.com/efcasado/pulsar-elixir/commit/03d64d46f6bbc23c4fa490eade929f954683f6d9))
+
 ## [3.0.1](https://github.com/efcasado/pulsar-elixir/compare/v3.0.0...v3.0.1) (2026-08-15)
 
 
