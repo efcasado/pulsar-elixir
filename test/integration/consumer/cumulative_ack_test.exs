@@ -73,13 +73,22 @@ defmodule Pulsar.Integration.Consumer.CumulativeAckTest do
     :ok = produce_one_batch(topic, "batch")
 
     consumer = start_consumer(topic, subscription, ack: ["msg-2"])
-    for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
+
+    for expected <- @messages do
+      assert_receive {:received, payload}, 10_000
+      assert payload == expected
+    end
+
     :ok = Pulsar.Consumer.stop(consumer, client: @client)
 
     # msg-3 onwards were never processed, so the entry has to come back — and it comes back
     # whole, since an entry is the unit of redelivery.
     _consumer = start_consumer(topic, subscription, ack: :all)
-    for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
+
+    for expected <- @messages do
+      assert_receive {:received, payload}, 10_000
+      assert payload == expected
+    end
   end
 
   test "redelivers only the suffix after a cumulative batch-index ack" do
@@ -88,11 +97,21 @@ defmodule Pulsar.Integration.Consumer.CumulativeAckTest do
     :ok = produce_one_batch(topic, "batch-index")
 
     consumer = start_consumer(topic, subscription, [ack: ["msg-2"]], batch_index_ack_enabled: true)
-    for payload <- @messages, do: assert_receive({:received, ^payload}, 10_000)
+
+    for expected <- @messages do
+      assert_receive {:received, payload}, 10_000
+      assert payload == expected
+    end
+
     :ok = Pulsar.Consumer.stop(consumer, client: @client)
 
     _consumer = start_consumer(topic, subscription, [ack: :all], batch_index_ack_enabled: true)
-    for payload <- ["msg-3", "msg-4", "msg-5"], do: assert_receive({:received, ^payload}, 10_000)
+
+    for expected <- ["msg-3", "msg-4", "msg-5"] do
+      assert_receive {:received, payload}, 10_000
+      assert payload == expected
+    end
+
     refute_receive {:received, "msg-1"}, 2_000
     refute_receive {:received, "msg-2"}, 2_000
   end
@@ -139,12 +158,15 @@ defmodule Pulsar.Integration.Consumer.CumulativeAckTest do
 
     :ok = Pulsar.Producer.await_ready(producer)
 
-    results =
-      @messages
-      |> Enum.map(fn payload -> Task.async(fn -> Pulsar.Producer.send(producer, payload) end) end)
-      |> Task.await_many(10_000)
+    refs =
+      Enum.map(@messages, fn payload ->
+        assert {:ok, ref} = Pulsar.Producer.send_async(producer, payload)
+        ref
+      end)
 
-    assert Enum.all?(results, &match?({:ok, _}, &1))
+    for ref <- refs do
+      assert {:ok, _message_id} = Pulsar.Producer.await(ref, 10_000)
+    end
 
     :ok
   end
