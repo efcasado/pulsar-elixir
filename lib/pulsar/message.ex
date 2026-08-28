@@ -274,7 +274,9 @@ defmodule Pulsar.Message do
   batch count when its payload failed validation after the metadata was decoded.
   For chunked messages, this is the number of chunks actually received.
 
-  This is used for flow control permit accounting.
+  This lets callers relate an application message to the broker deliveries that produced it.
+  The consumer itself charges chunk permits as each chunk arrives, before the application
+  message exists.
 
   ## Examples
 

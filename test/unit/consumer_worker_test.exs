@@ -543,6 +543,47 @@ defmodule Pulsar.Consumer.WorkerTest do
     end)
   end
 
+  test "charges each chunk as it arrives without charging the assembled message again" do
+    compressed = :zlib.compress(@chunked)
+    half = div(byte_size(compressed), 2)
+    <<first::binary-size(^half), second::binary>> = compressed
+    opts = [uncompressed_size: byte_size(@chunked), total_chunk_msg_size: byte_size(compressed)]
+    state = struct(reporting_state(), max_pending_chunked_messages: 10)
+
+    assert {:noreply, state} = Worker.handle_info(chunk_delivery(0, first, opts), state)
+    assert state.flow_outstanding_permits == 99
+    refute_received {:handled, _message}
+
+    assert {:noreply, state} = Worker.handle_info(chunk_delivery(1, second, opts), state)
+    assert state.flow_outstanding_permits == 98
+    assert_received {:handled, %{payload: @chunked}}
+  end
+
+  test "does not charge an evicted incomplete message after charging its chunks" do
+    state = struct(reporting_state(), max_pending_chunked_messages: 1)
+
+    assert {:noreply, state} =
+             Worker.handle_info(
+               chunk_delivery(0, "first", uuid: "first", num_chunks_from_msg: 3),
+               state
+             )
+
+    assert state.flow_outstanding_permits == 99
+
+    assert {:noreply, state} =
+             Worker.handle_info(
+               chunk_delivery(0, "second", uuid: "second", num_chunks_from_msg: 3),
+               state
+             )
+
+    assert state.flow_outstanding_permits == 98
+    assert_receive {:broker_message, incomplete_delivery}
+
+    assert {:noreply, state} = Worker.handle_info({:broker_message, incomplete_delivery}, state)
+    assert state.flow_outstanding_permits == 98
+    assert_received {:invalid, %{chunk_metadata: %{error: :queue_full, uuid: "first"}}}
+  end
+
   describe "a chunked message that never completes" do
     setup do
       handler = {__MODULE__, :chunk_expired, self()}
@@ -597,6 +638,19 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{} = ack}}
       assert ack.validation_error == nil
       assert length(ack.message_id) == 2
+    end
+
+    test "does not charge or refill for an expired incomplete message after charging its chunks", ctx do
+      assert ctx.state.flow_outstanding_permits == 98
+      state = %{ctx.state | flow_threshold: 98, flow_refill: 1}
+
+      assert {:noreply, state} = Worker.handle_info(:cleanup_expired_chunks, age(state, 200))
+      assert state.flow_outstanding_permits == 98
+      assert_receive {:broker_message, incomplete_delivery}
+
+      assert {:noreply, state} = Worker.handle_info({:broker_message, incomplete_delivery}, state)
+      assert state.flow_outstanding_permits == 98
+      refute_received {:"$gen_cast", {:send_command, %Binary.CommandFlow{}}}
     end
 
     test "is left alone while it still has time", ctx do

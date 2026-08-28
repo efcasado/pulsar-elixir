@@ -268,9 +268,11 @@ defmodule Pulsar.Reader do
 
   defp next_message(state), do: next_message(state, deadline(state.timeout))
 
-  # A delivery's permits arrive after its messages and are charged once the stream has read past
-  # them, so the window tracks what has been consumed rather than what the broker has sent. They
-  # keep their own deadline: :timeout measures time without a message, and a delivery that
+  # A delivery's permits normally arrive after its messages and are charged once the stream has
+  # read past them, so the window tracks what has been consumed rather than what the broker has
+  # sent. An incomplete chunk has no message to precede its permit report; charging it immediately
+  # lets a window smaller than the chunk count refill until the message can be assembled. Permit
+  # reports keep their own deadline: :timeout measures time without a message, and a delivery that
   # yielded none must not extend it.
   defp next_message(state, deadline) do
     case :queue.out(state.buffer) do
