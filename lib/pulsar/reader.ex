@@ -283,7 +283,7 @@ defmodule Pulsar.Reader do
         %{state | buffer: new_buffer}
         |> decrement_permits(consumer_pid, consumed)
         |> maybe_refill_flow(consumer_pid)
-        |> next_message(deadline)
+        |> continue_reader(deadline)
 
       {:empty, _buffer} ->
         reader_ref = state.reader_ref
@@ -298,7 +298,7 @@ defmodule Pulsar.Reader do
 
           {:pulsar_reader_ready, ^reader_ref, consumer_pid, topic} ->
             case track_worker(state, consumer_pid, topic) do
-              {:ok, new_state} -> next_message(new_state, deadline)
+              {:ok, new_state} -> continue_reader(new_state, deadline)
               {:error, reason} -> raise_interrupted(state, topic, reason)
             end
 
@@ -312,6 +312,13 @@ defmodule Pulsar.Reader do
     end
   end
 
+  defp continue_reader(state, deadline) do
+    case time_left(deadline) do
+      0 -> {:halt, state}
+      _time_left -> next_message(state, deadline)
+    end
+  end
+
   defp deadline(:infinity), do: :infinity
   defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
 
@@ -322,10 +329,22 @@ defmodule Pulsar.Reader do
 
   defp stop_reader(state) do
     demonitor_workers(state)
+    stop_consumer(state.consumer_root, state.client)
+    flush_reader_messages(state.reader_ref)
+  end
 
-    case Consumer.stop(state.consumer_root, client: state.client) do
-      :ok -> :ok
-      {:error, _reason} -> :ok
+  defp flush_reader_messages(reader_ref) do
+    receive do
+      {:pulsar_message, ^reader_ref, _consumer_pid, _message} ->
+        flush_reader_messages(reader_ref)
+
+      {:pulsar_permits, ^reader_ref, _consumer_pid, _consumed} ->
+        flush_reader_messages(reader_ref)
+
+      {:pulsar_reader_ready, ^reader_ref, _consumer_pid, _topic} ->
+        flush_reader_messages(reader_ref)
+    after
+      0 -> :ok
     end
   end
 

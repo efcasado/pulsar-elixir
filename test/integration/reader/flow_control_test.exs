@@ -82,6 +82,42 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
              |> Enum.take(1)
   end
 
+  test "permit-only deliveries do not extend the inactivity timeout" do
+    topic = @topic <> "-idle-#{:erlang.unique_integer([:positive])}"
+    :ok = System.create_topic(topic)
+    test_pid = self()
+
+    {reader, reader_monitor} =
+      spawn_monitor(fn ->
+        messages = topic |> Pulsar.Reader.stream(client: @client, timeout: 500) |> Enum.to_list()
+        send(test_pid, {:reader_finished, self(), messages})
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(reader), do: Process.exit(reader, :kill)
+    end)
+
+    [root] =
+      Utils.wait_for(fn -> Pulsar.Client.consumers(@client) end,
+        until: &match?([_root], &1),
+        description: "Reader consumer root to start"
+      )
+
+    :ok = Pulsar.Consumer.await_ready(root)
+    [worker] = Topology.workers(root)
+
+    %{callback_state: %{reader_ref: reader_ref, stream_pid: ^reader}} = :sys.get_state(worker)
+    flooder = spawn(fn -> flood_permits(reader, reader_ref, worker) end)
+
+    on_exit(fn ->
+      if Process.alive?(flooder), do: send(flooder, :stop)
+    end)
+
+    assert_receive {:reader_finished, ^reader, []}, 2_000
+    assert_receive {:DOWN, ^reader_monitor, :process, ^reader, :normal}, 2_000
+    send(flooder, :stop)
+  end
+
   # Every test listening for this event is sent every consumer's, so the id picks out ours.
   defp assert_granted(consumer_id, permits) do
     assert_receive {:telemetry_event,
@@ -93,5 +129,31 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
 
   defp refute_granted(consumer_id) do
     refute_receive {:telemetry_event, %{event: @flow_control, metadata: %{consumer_id: ^consumer_id}}}
+  end
+
+  defp flood_permits(reader, reader_ref, worker) do
+    case Process.info(reader, :message_queue_len) do
+      nil ->
+        :ok
+
+      {:message_queue_len, length} ->
+        fill_mailbox(reader, reader_ref, worker, length)
+
+        receive do
+          :stop -> :ok
+        after
+          0 ->
+            :erlang.yield()
+            flood_permits(reader, reader_ref, worker)
+        end
+    end
+  end
+
+  defp fill_mailbox(_reader, _reader_ref, _worker, length) when length >= 1_000, do: :ok
+
+  defp fill_mailbox(reader, reader_ref, worker, length) do
+    for _message <- 1..(1_000 - length) do
+      send(reader, {:pulsar_permits, reader_ref, worker, 1})
+    end
   end
 end
