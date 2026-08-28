@@ -182,11 +182,11 @@ logical message.
 
 ## Flow Control and Permits
 
-Flow control permits are only decremented when messages are assembled and delivered to your callback:
+Flow control tracks chunks as the broker delivers them, before a complete application message exists:
 
-- **Individual chunks arriving**: No permits are decremented yet
-- **Chunked message completed**: Decrements N permits (where N = number of chunks)
-- **Chunked message expired/evicted**: Decrements M permits (where M = number of chunks received)
+- **Individual chunks arriving**: Decrements one permit immediately
+- **Chunked message completed**: Adds no further cost; its chunks were already counted
+- **Chunked message expired/evicted**: Adds no further cost; every received chunk was already counted
 - **Non-chunked message**: Decrements 1 permit
 
 The `Pulsar.Message.num_broker_messages/1` helper returns the correct permit count:
@@ -202,7 +202,10 @@ Pulsar.Message.num_broker_messages(message) # => 3
 Pulsar.Message.num_broker_messages(message) # => 2
 ```
 
-This ensures that flow control accurately reflects the number of broker messages consumed, regardless of whether messages are chunked or not.
+The helper remains useful to application code that needs the total broker cost represented by
+one callback-visible message. The consumer does not wait for that message to exist before updating
+its own window: accounting on arrival lets it refill a window smaller than the number of chunks
+needed to assemble the message.
 
 ## Helper Functions
 

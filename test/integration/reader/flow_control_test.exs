@@ -59,6 +59,29 @@ defmodule Pulsar.Integration.Reader.FlowControlTest do
     refute_granted(consumer_id)
   end
 
+  test "refills while assembling a chunked message wider than its window" do
+    topic = @topic <> "-chunked"
+    payload = String.duplicate("chunked-reader-", 10)
+
+    {:ok, producer} =
+      Pulsar.Producer.start(
+        topic,
+        client: @client,
+        name: :reader_flow_chunked_producer,
+        chunking_enabled: true,
+        max_message_size: 8
+      )
+
+    :ok = Pulsar.Producer.await_ready(producer)
+    assert {:ok, %{num_chunks: num_chunks}} = Pulsar.Producer.send(producer, payload)
+    assert num_chunks > 5
+
+    assert [%{payload: ^payload}] =
+             topic
+             |> Pulsar.Reader.stream(client: @client, flow_permits: 5, timeout: 2_000)
+             |> Enum.take(1)
+  end
+
   # Every test listening for this event is sent every consumer's, so the id picks out ours.
   defp assert_granted(consumer_id, permits) do
     assert_receive {:telemetry_event,

@@ -372,21 +372,25 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   def handle_info({:broker_message, message_data}, state) do
-    {messages, skipped_ids, new_state} =
+    {messages, skipped_ids, new_state, permits_consumed} =
       case message_data do
         {:invalid, command, bytes, validation_error} ->
           report_invalid_message(state, validation_error)
-          {[build_invalid_message(command, bytes, validation_error)], [], state}
+          message = build_invalid_message(command, bytes, validation_error)
+          {[message], [], state, Pulsar.Message.num_broker_messages(message)}
 
         {command, metadata, payload, broker_metadata} ->
           if chunked_message?(metadata) do
             # A chunk is a slice of the compressed message, so it cannot be decompressed
             # before the rest of the slices are back around it.
             {state_after, msgs} = maybe_assemble_chunked_message(state, command, metadata, payload, broker_metadata)
-            {msgs, [], state_after}
+            # Each chunk is one broker delivery, whether or not it completes the message.
+            {msgs, [], state_after, 1}
           else
             {msgs, skipped_ids} = build_messages_from_entry(command, metadata, payload, broker_metadata, state)
-            {msgs, skipped_ids, state}
+            # A skipped message was still sent, and still charged a permit.
+            permits = length(skipped_ids) + Enum.sum(Enum.map(msgs, &Pulsar.Message.num_broker_messages/1))
+            {msgs, skipped_ids, state, permits}
           end
 
         {commands, metadatas, payload, broker_metadatas, %{error: detail} = chunk_metadata} ->
@@ -404,11 +408,9 @@ defmodule Pulsar.Consumer.Worker do
             })
 
           message = build_message_from_chunk(chunk_metadata_full, payload, :incomplete_chunked_message)
-          {[message], [], state}
+          # The received chunks spent their permits on arrival; this delivery is synthetic.
+          {[message], [], state, 0}
       end
-
-    # A skipped message was still sent, and still charged a permit.
-    permits_consumed = length(skipped_ids) + Enum.sum(Enum.map(messages, &Pulsar.Message.num_broker_messages/1))
 
     # Individual acknowledgement counts skipped messages off so the local batch tally can
     # complete. A cumulative acknowledgement follows Java's more conservative rule: filtering
@@ -874,6 +876,8 @@ defmodule Pulsar.Consumer.Worker do
     new_permits = max(state.flow_outstanding_permits - count, 0)
     %{state | flow_outstanding_permits: new_permits}
   end
+
+  defp apply_flow_policy(state, 0), do: state
 
   defp apply_flow_policy(state, consumed) do
     case decide_flow(state, consumed) do
