@@ -3,11 +3,8 @@ defmodule Pulsar.TopologyTest do
 
   import TelemetryTest
 
-  alias Pulsar.Backoff
-  alias Pulsar.Client
   alias Pulsar.Topology
   alias Pulsar.Topology.Controller
-  alias Pulsar.Topology.Group
   alias Pulsar.Topology.Root
 
   setup [:telemetry_listen]
@@ -28,7 +25,6 @@ defmodule Pulsar.TopologyTest do
         topic: "persistent://public/default/t",
         name: "owner-root-#{System.unique_integer([:positive])}",
         client: :test,
-        consumer_count: 1,
         partition_discovery_interval_ms: false
       ]
 
@@ -127,18 +123,24 @@ defmodule Pulsar.TopologyTest do
     def start_link(opts), do: Agent.start_link(fn -> opts end)
   end
 
-  defmodule DisappearingSupervisor do
+  defmodule FacadeWorker do
     @moduledoc false
+    use GenServer
 
-    def start_link(reason) do
-      pid =
-        spawn_link(fn ->
-          receive do
-            _message -> exit(reason)
-          end
-        end)
+    def start_link(_opts), do: GenServer.start_link(__MODULE__, nil)
 
-      {:ok, pid}
+    @impl true
+    def init(nil), do: {:ok, nil}
+
+    @impl true
+    def handle_cast({:send_message, _message, _opts, from}, state) do
+      GenServer.reply(from, {:error, :not_ready})
+      {:noreply, state}
+    end
+
+    @impl true
+    def handle_call({:send_flow, _permits}, _from, state) do
+      {:reply, {:error, :no_consumers_available}, state}
     end
   end
 
@@ -170,11 +172,6 @@ defmodule Pulsar.TopologyTest do
         ],
         opts
       )
-
-    topology_opts =
-      if kind == :consumers,
-        do: Keyword.put_new(topology_opts, :consumer_count, 1),
-        else: topology_opts
 
     root =
       start_supervised!(%{
@@ -208,7 +205,7 @@ defmodule Pulsar.TopologyTest do
       send(discovery, :resolve)
 
       assert Task.await(waiter) == :ok
-      assert length(Topology.groups(root)) == 2
+      assert length(Topology.partitions(root)) == 2
     end
 
     test "await_ready/2 rejects a stale pid" do
@@ -235,12 +232,12 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:resolution_started, resolver_pid}
       assert Process.alive?(root)
       assert [{^root, _value}] = Registry.lookup(registry, @name)
-      assert Topology.groups(root) == []
+      assert Topology.partitions(root) == []
 
       send(resolver_pid, :resolve)
 
       :ok = Topology.await_ready(root, 1_000)
-      assert length(Topology.groups(root)) == 2
+      assert length(Topology.partitions(root)) == 2
     end
 
     test "retries failed initialization without blocking the topology" do
@@ -251,11 +248,11 @@ defmodule Pulsar.TopologyTest do
         if attempt == 0, do: {:error, :no_broker_available}, else: {:ok, 3}
       end
 
-      {root, _registry} = start_async_topology(resolver, consumer_count: 2)
+      {root, _registry} = start_async_topology(resolver)
 
       :ok = Topology.await_ready(root, 1_000)
       assert Agent.get(attempts, & &1) >= 2
-      assert length(Topology.groups(root)) == 3
+      assert length(Topology.partitions(root)) == 3
     end
 
     test "retries wrapped ServiceNotReady metadata failures" do
@@ -331,8 +328,8 @@ defmodule Pulsar.TopologyTest do
       :ok = Topology.await_ready(root, 1_000)
       assert_receive :resolved
       refute_receive :resolved, 150
-      assert [{0, group}] = Topology.groups(root)
-      assert is_pid(group)
+      assert [{0, worker}] = Topology.partitions(root)
+      assert is_pid(worker)
     end
 
     test "a producer topology starts one worker per partition" do
@@ -344,12 +341,9 @@ defmodule Pulsar.TopologyTest do
 
       :ok = Topology.await_ready(root, 1_000)
 
-      groups = Topology.groups(root)
-      assert length(groups) == 3
-
-      assert Enum.all?(groups, fn {_index, group} ->
-               match?([{_id, pid, :worker, _modules}] when is_pid(pid), Supervisor.which_children(group))
-             end)
+      partitions = Topology.partitions(root)
+      assert length(partitions) == 3
+      assert Enum.all?(partitions, fn {_index, worker} -> is_pid(worker) end)
     end
 
     @tag telemetry_listen: [[:pulsar, :topology, :discovery, :stop]]
@@ -439,7 +433,7 @@ defmodule Pulsar.TopologyTest do
                         }
                       }}
 
-      assert length(Topology.groups(root)) == 4
+      assert length(Topology.partitions(root)) == 4
     end
 
     test "adds missing partitions from highest to lowest" do
@@ -452,13 +446,13 @@ defmodule Pulsar.TopologyTest do
         partition_discovery_interval_ms: false
       ]
 
-      config = %{worker: PartitionFourFails, kind: :consumers, worker_count: 1, opts: opts}
+      config = %{worker: PartitionFourFails, kind: :consumers, opts: opts}
 
       assert {:error, {:partition_start_failed, 4, _reason}} =
                Root.reconcile(root, 6, config)
 
       assert root
-             |> Topology.groups()
+             |> Topology.partitions()
              |> Enum.map(&elem(&1, 0))
              |> Enum.sort() == [0, 1, 2, 3, 5]
     end
@@ -481,7 +475,8 @@ defmodule Pulsar.TopologyTest do
         end
       end
 
-      {root, _registry} = start_async_topology(resolver, partition_discovery_interval_ms: 10)
+      {root, _registry} =
+        start_async_topology(resolver, [partition_discovery_interval_ms: 10], worker: FacadeWorker)
 
       :ok = Topology.await_ready(root, 1_000)
       assert_receive {:resolution_started, discovery}, 1_000
@@ -513,9 +508,9 @@ defmodule Pulsar.TopologyTest do
     test "leaves a partition that is down where it is, while its siblings keep running" do
       {root, _registry} = start_topology(2)
 
-      groups = Map.new(Topology.groups(root))
-      stopped = Map.fetch!(groups, 0)
-      surviving = Map.fetch!(groups, 1)
+      partitions = Map.new(Topology.partitions(root))
+      stopped = Map.fetch!(partitions, 0)
+      surviving = Map.fetch!(partitions, 1)
 
       ref = Process.monitor(stopped)
       :ok = Supervisor.terminate_child(root, {:partition, 0})
@@ -526,18 +521,15 @@ defmodule Pulsar.TopologyTest do
       assert GenServer.call(discovery, :status) == {:ready, {:partitioned, 2}}
 
       assert Process.alive?(root)
-      assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
+      assert Map.new(Topology.partitions(root)) == %{0 => :undefined, 1 => surviving}
     end
 
-    test "stopping a topology takes its groups and workers with it" do
+    test "stopping a topology takes its workers with it" do
       {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end, partition_discovery_interval_ms: 10)
 
       :ok = Topology.await_ready(root, 1_000)
 
-      below =
-        for {_index, group} <- Topology.groups(root),
-            {_id, worker, :worker, _modules} <- Supervisor.which_children(group),
-            do: worker
+      below = Topology.workers(root)
 
       refs = Map.new([root | below], &{Process.monitor(&1), &1})
 
@@ -548,42 +540,38 @@ defmodule Pulsar.TopologyTest do
   end
 
   describe "propagation" do
-    test "restarts a worker that crashes, leaving its group and root alone" do
+    test "restarts a worker that crashes, leaving its root alone" do
       {root, _registry} = start_topology(0)
 
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      [{0, worker}] = Topology.partitions(root)
 
       worker_ref = Process.monitor(worker)
-      group_ref = Process.monitor(group)
       root_ref = Process.monitor(root)
 
       Process.exit(worker, :kill)
       assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
 
-      refute_receive {:DOWN, ^group_ref, :process, _pid, _reason}, 200
-      refute_receive {:DOWN, ^root_ref, :process, _pid, _reason}, 0
+      refute_receive {:DOWN, ^root_ref, :process, _pid, _reason}, 200
 
-      assert [{_id, restarted, :worker, _modules}] = Supervisor.which_children(group)
+      assert [{0, restarted}] = Topology.partitions(root)
       assert restarted != worker
-      assert Topology.groups(root) == [{0, group}]
     end
 
-    test "stops a worker and leaves its group running while a sibling remains" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, consumer_count: 2)
+    test "stops a worker and leaves its root running while a sibling remains" do
+      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 2} end)
       :ok = Topology.await_ready(root, 1_000)
 
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules} | _rest] = Supervisor.which_children(group)
+      partitions = Map.new(Topology.partitions(root))
+      worker = Map.fetch!(partitions, 0)
+      sibling = Map.fetch!(partitions, 1)
 
       ref = Process.monitor(worker)
       assert Topology.stop(worker) == :ok
       assert_receive {:DOWN, ^ref, :process, ^worker, _reason}, 1_000
 
-      assert Process.alive?(group)
       assert Process.alive?(root)
-
-      assert Enum.count(Supervisor.which_children(group), &match?({_id, :undefined, _type, _modules}, &1)) == 1
+      assert Process.alive?(sibling)
+      assert Map.new(Topology.partitions(root)) == %{0 => :undefined, 1 => sibling}
     end
 
     test "a transient worker that finishes normally stays absent under permanent boundaries" do
@@ -591,31 +579,14 @@ defmodule Pulsar.TopologyTest do
         start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], worker: TransientWorker)
 
       :ok = Topology.await_ready(root, 1_000)
-      [{0, group}] = Topology.groups(root)
-      [{id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      [{0, worker}] = Topology.partitions(root)
 
       ref = Process.monitor(worker)
       :ok = Agent.stop(worker, :normal)
       assert_receive {:DOWN, ^ref, :process, ^worker, :normal}
 
-      assert Process.alive?(group)
       assert Process.alive?(root)
-      assert [{^id, :undefined, :worker, _modules}] = Supervisor.which_children(group)
-    end
-
-    test "a group that goes down leaves its siblings and its root alone" do
-      {root, _registry} = start_topology(2)
-
-      groups = Map.new(Topology.groups(root))
-      stopping = Map.fetch!(groups, 0)
-      surviving = Map.fetch!(groups, 1)
-
-      ref = Process.monitor(stopping)
-      :ok = Supervisor.terminate_child(root, {:partition, 0})
-      assert_receive {:DOWN, ^ref, :process, ^stopping, _reason}, 1_000
-
-      assert Process.alive?(root)
-      assert Map.new(Topology.groups(root)) == %{0 => :undefined, 1 => surviving}
+      assert Topology.partitions(root) == [{0, :undefined}]
     end
 
     test "leaves nothing behind once the resource has been stopped" do
@@ -623,11 +594,10 @@ defmodule Pulsar.TopologyTest do
       {:ok, root} = DynamicSupervisor.start_child(client, topology_spec(StubWorker))
 
       :ok = Topology.await_ready(root, 1_000)
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      [{0, worker}] = Topology.partitions(root)
       discovery = discovery(root)
 
-      refs = Map.new([root, group, worker, discovery], &{Process.monitor(&1), &1})
+      refs = Map.new([root, worker, discovery], &{Process.monitor(&1), &1})
 
       assert Topology.stop(root) == :ok
 
@@ -645,19 +615,6 @@ defmodule Pulsar.TopologyTest do
       assert Topology.stop(root) == :ok
 
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
-    end
-
-    test "a broker that is away cannot spend a group's restart budget, whatever its worker count" do
-      window_ms = Keyword.fetch!(Client.restart_intensity(:no_such_client, :worker), :max_seconds) * 1_000
-
-      {paced_ms, {:error, :no_broker_available}} =
-        :timer.tc(fn -> Backoff.run(fn -> {:error, :no_broker_available} end) end, :millisecond)
-
-      for count <- [1, 10] do
-        budget = Group.restart_intensity(:no_such_client, count)
-
-        assert count * div(window_ms, paced_ms) < Keyword.fetch!(budget, :max_restarts)
-      end
     end
 
     test "a resource that cannot stay up escalates to its client instead of disappearing" do
@@ -681,17 +638,21 @@ defmodule Pulsar.TopologyTest do
         assert Keyword.fetch!(opts, :topic) == Pulsar.Topic.partition(@topic, index)
         assert Keyword.fetch!(opts, :base_topic) == @topic
         assert Keyword.fetch!(opts, :partition) == index
+        assert Keyword.fetch!(opts, :name) == "#{Pulsar.Topic.partition(@name, index)}-1"
       end
     end
 
-    test "leaves a non-partitioned worker on the configured topic, with no partition" do
-      {root, _registry} = start_async_topology(fn _topic, _opts -> {:ok, 0} end, [], worker: OptsWorker)
+    test "leaves a non-partitioned worker on the configured topic and preserves its broker name" do
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 0} end, [name: :named_worker], worker: OptsWorker)
+
       :ok = Topology.await_ready(root, 1_000)
 
       assert [{0, opts}] = worker_opts(root)
       assert Keyword.fetch!(opts, :topic) == @topic
       assert Keyword.fetch!(opts, :base_topic) == @topic
       assert Keyword.fetch!(opts, :partition) == nil
+      assert Keyword.fetch!(opts, :name) == "named_worker-1"
     end
   end
 
@@ -745,7 +706,7 @@ defmodule Pulsar.TopologyTest do
 
   defp assert_controller_stops(resolver, expected) do
     opts = [topic: @topic, client: :test, partition_discovery_interval_ms: false]
-    config = %{worker: StubWorker, kind: :consumers, worker_count: 1, opts: opts}
+    config = %{worker: StubWorker, kind: :consumers, opts: opts}
 
     assert {:ok, controller} = GenServer.start(Controller, {self(), config, [resolver: resolver]})
     ref = Process.monitor(controller)
@@ -756,7 +717,7 @@ defmodule Pulsar.TopologyTest do
     registry = :"registry-#{System.unique_integer([:positive])}"
     start_supervised!({Registry, keys: :unique, name: registry})
 
-    opts = [topic: @topic, name: @name, client: :test, partition_discovery_interval_ms: false, consumer_count: 1]
+    opts = [topic: @topic, name: @name, client: :test, partition_discovery_interval_ms: false]
     controller_opts = [resolver: fn _topic, _opts -> {:ok, 0} end]
 
     %{
@@ -768,8 +729,7 @@ defmodule Pulsar.TopologyTest do
   end
 
   defp worker_opts(root) do
-    for {index, group} <- Topology.groups(root) do
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+    for {index, worker} <- Topology.partitions(root) do
       {index, Agent.get(worker, & &1)}
     end
   end
@@ -792,11 +752,7 @@ defmodule Pulsar.TopologyTest do
     test "collects the workers across every partition" do
       partitions =
         for index <- 0..2 do
-          %{
-            id: Pulsar.Topic.partition(@topic, index),
-            type: :supervisor,
-            start: {Supervisor, :start_link, [[worker_spec("w-#{index}")], [strategy: :one_for_one]]}
-          }
+          worker_spec({:partition, index})
         end
 
       assert length(Topology.workers(start_supervisor(partitions))) == 3
@@ -815,40 +771,17 @@ defmodule Pulsar.TopologyTest do
 
       assert Topology.workers(root) == []
     end
-
-    test "leaves out a supervisor that disappears during traversal" do
-      child = %{
-        id: :disappearing,
-        start: {DisappearingSupervisor, :start_link, [:shutdown]},
-        restart: :temporary,
-        type: :supervisor
-      }
-
-      assert Topology.workers(start_supervisor([child])) == []
-    end
-
-    test "surfaces an unexpected supervisor exit during traversal" do
-      child = %{
-        id: :crashing,
-        start: {DisappearingSupervisor, :start_link, [:unexpected]},
-        restart: :temporary,
-        type: :supervisor
-      }
-
-      assert catch_exit(Topology.workers(start_supervisor([child])))
-    end
   end
 
-  describe "groups/1" do
-    test "pairs each index with the group for that partition" do
+  describe "partitions/1" do
+    test "pairs each index with the worker for that partition" do
       {root, registry} = start_topology(12)
-      groups = Topology.groups(root)
+      partitions = Topology.partitions(root)
 
-      assert length(groups) == 12
+      assert length(partitions) == 12
       assert [{^root, _value}] = Registry.lookup(registry, @name)
 
-      for {index, pid} <- groups do
-        assert [{_id, worker, :worker, _modules}] = Supervisor.which_children(pid)
+      for {index, worker} <- partitions do
         assert Agent.get(worker, & &1) == Pulsar.Topic.partition(@topic, index)
         assert Registry.lookup(registry, Pulsar.Topic.partition(@name, index)) == []
       end
@@ -858,31 +791,30 @@ defmodule Pulsar.TopologyTest do
       {root, _registry} = start_topology(3)
       :ok = Supervisor.terminate_child(root, {:partition, 1})
 
-      assert List.keyfind(Topology.groups(root), 1, 0) == {1, :undefined}
+      assert List.keyfind(Topology.partitions(root), 1, 0) == {1, :undefined}
     end
 
-    test "answers a non-partitioned topic with its internal group" do
+    test "answers a non-partitioned topic with its worker at index zero" do
       {root, _registry} = start_topology(0)
 
-      assert [{0, group}] = Topology.groups(root)
-      assert group != root
+      assert [{0, worker}] = Topology.partitions(root)
+      assert worker != root
       assert Topology.kind(root) == :root
-      assert Topology.kind(group) == :group
+      assert Topology.kind(worker) == :worker
     end
 
-    test "answers workers and stale pids with no groups" do
+    test "answers workers and stale pids with no partitions" do
       {root, _registry} = start_topology(0)
-      [{0, group}] = Topology.groups(root)
-      [{_id, worker, :worker, _modules}] = Supervisor.which_children(group)
+      [{0, worker}] = Topology.partitions(root)
 
-      assert Topology.groups(worker) == []
+      assert Topology.partitions(worker) == []
 
       stale = spawn(fn -> :ok end)
       ref = Process.monitor(stale)
       assert_receive {:DOWN, ^ref, :process, ^stale, _reason}
 
       assert Topology.kind(stale) == :worker
-      assert Topology.groups(stale) == []
+      assert Topology.partitions(stale) == []
     end
   end
 end

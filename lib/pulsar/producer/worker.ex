@@ -1,8 +1,8 @@
 defmodule Pulsar.Producer.Worker do
   @moduledoc false
 
-  # The GenServer behind a single producer. Pulsar.Producer starts one through
-  # Pulsar.Topology.Group for the topic or for each partition.
+  # The GenServer behind a single producer. Pulsar.Producer starts one under its topology root
+  # for the topic or for each partition.
 
   use GenServer
 
@@ -101,7 +101,7 @@ defmodule Pulsar.Producer.Worker do
   Starts one producer process.
 
   Takes `Pulsar.Producer`'s options, already validated against `Pulsar.Producer.Options`
-  and given the `:name` of this worker within its group.
+  and given the `:name` of this worker within its topology.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -128,7 +128,7 @@ defmodule Pulsar.Producer.Worker do
       end
 
     # Option names and struct field names are the same, so struct/2 carries them across
-    # and ignores the group-level options that are not part of a producer's state.
+    # and ignores the topology options that are not part of a producer's state.
     state = %{
       struct(__MODULE__, opts)
       | producer_id: producer_id,

@@ -1,8 +1,8 @@
 defmodule Pulsar.Consumer.Worker do
   @moduledoc false
 
-  # The GenServer behind a single consumer. Pulsar.Consumer starts these through
-  # Pulsar.Topology.Group, one per partition and per :consumer_count.
+  # The GenServer behind a single consumer. Pulsar.Consumer starts one under its topology root
+  # for the topic or for each partition.
 
   use GenServer
 
@@ -124,7 +124,7 @@ defmodule Pulsar.Consumer.Worker do
   Starts one consumer process.
 
   Takes `Pulsar.Consumer`'s options, already validated against `Pulsar.Consumer.Options`
-  and given the `:name` of this worker within its group.
+  and given the `:name` of this worker within its topology.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -187,7 +187,7 @@ defmodule Pulsar.Consumer.Worker do
     Process.flag(:trap_exit, true)
 
     # Option names and struct field names are the same, so struct/2 carries them across
-    # and ignores the group-level options that are not part of a consumer's state. That
+    # and ignores the topology options that are not part of a consumer's state. That
     # includes :dead_letter_root, resolved once for the whole consumer by Pulsar.Topology.
     state = %{
       struct(__MODULE__, opts)

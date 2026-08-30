@@ -108,13 +108,13 @@ defmodule Pulsar.Topology.Controller do
            reconcile_topology(state, desired)
          end) do
       {:ok, outcome} = result ->
-        summary = "partitions=#{outcome.partition_count}, added_groups=#{inspect(outcome.added_groups)}"
+        summary = "partitions=#{outcome.partition_count}, added_partitions=#{inspect(outcome.added_partitions)}"
 
         cond do
           state.status == :initializing ->
             Logger.info("Topology for #{state.topic} is ready: #{summary}")
 
-          outcome.added_groups != [] ->
+          outcome.added_partitions != [] ->
             Logger.info("Topology reconciliation for #{state.topic} changed topology: #{summary}")
 
           true ->

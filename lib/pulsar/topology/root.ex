@@ -9,7 +9,6 @@ defmodule Pulsar.Topology.Root do
   alias Pulsar.Client
   alias Pulsar.Topic
   alias Pulsar.Topology.Controller
-  alias Pulsar.Topology.Group
 
   require Logger
 
@@ -35,7 +34,7 @@ defmodule Pulsar.Topology.Root do
           Supervisor.on_start()
   def start_link(worker, registry, kind, opts, controller_opts) when kind in [:consumers, :producers] do
     name = Keyword.fetch!(opts, :name)
-    config = %{worker: worker, kind: kind, worker_count: worker_count(kind, opts), opts: opts}
+    config = %{worker: worker, kind: kind, opts: opts}
 
     Supervisor.start_link(__MODULE__, {config, controller_opts}, start_options(registry, name))
   end
@@ -61,7 +60,7 @@ defmodule Pulsar.Topology.Root do
     # their own brokers, so none delays this root coming up.
     children = companions ++ [controller]
 
-    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
+    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker))
   end
 
   # `:companions` configures this root, and is not part of what a worker is started with.
@@ -77,7 +76,7 @@ defmodule Pulsar.Topology.Root do
   end
 
   # On the child id rather than in the registry, so routing reads it from the same
-  # which_children the groups come from and a send costs one call. Producer.send/3 takes a pid
+  # which_children the workers come from and a send costs one call. Producer.send/3 takes a pid
   # without consulting the registry, and start_link_unregistered/1 has no registry entry at all.
   defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
@@ -87,14 +86,14 @@ defmodule Pulsar.Topology.Root do
 
   @doc false
   @spec reconcile(pid(), non_neg_integer(), map()) ::
-          {:ok, %{partition_count: non_neg_integer(), added_groups: [non_neg_integer()]}}
+          {:ok, %{partition_count: non_neg_integer(), added_partitions: [non_neg_integer()]}}
           | {:error, term()}
   def reconcile(root, desired, config) when is_integer(desired) and desired >= 0 do
     children = Supervisor.which_children(root)
 
     case reconcile_children(root, children, desired, config) do
-      {:ok, partition_count, added_groups} ->
-        {:ok, %{partition_count: partition_count, added_groups: added_groups}}
+      {:ok, partition_count, added_partitions} ->
+        {:ok, %{partition_count: partition_count, added_partitions: added_partitions}}
 
       {:error, _reason} = error ->
         error
@@ -104,11 +103,11 @@ defmodule Pulsar.Topology.Root do
   end
 
   defp reconcile_children(root, children, desired, config) do
-    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
+    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :worker, _}, &1))
 
     partitions =
       Enum.flat_map(children, fn
-        {{:partition, index}, _pid, :supervisor, _modules} -> [index]
+        {{:partition, index}, _pid, :worker, _modules} -> [index]
         _child -> []
       end)
 
@@ -138,18 +137,18 @@ defmodule Pulsar.Topology.Root do
   end
 
   defp reconcile_shape({:partitioned, partitions}, root, desired, config) do
-    with {:ok, added_groups} <- add_missing_partitions(root, desired, partitions, config) do
-      {:ok, max(desired, partition_width(partitions)), added_groups}
+    with {:ok, added_partitions} <- add_missing_partitions(root, desired, partitions, config) do
+      {:ok, max(desired, partition_width(partitions)), added_partitions}
     end
   end
 
   defp reconcile_shape(:empty, root, 0, config) do
-    with :ok <- start_group(root, topic_child_spec(config)), do: {:ok, 0, [0]}
+    with :ok <- start_worker(root, topic_child_spec(config)), do: {:ok, 0, [0]}
   end
 
   defp reconcile_shape(:empty, root, desired, config) do
-    with {:ok, added_groups} <- add_missing_partitions(root, desired, [], config) do
-      {:ok, desired, added_groups}
+    with {:ok, added_partitions} <- add_missing_partitions(root, desired, [], config) do
+      {:ok, desired, added_partitions}
     end
   end
 
@@ -160,14 +159,14 @@ defmodule Pulsar.Topology.Root do
     |> Enum.reject(&(&1 in existing))
     |> Enum.sort(:desc)
     |> Enum.reduce_while({:ok, []}, fn index, {:ok, added} ->
-      case start_group(root, partition_child_spec(index, config)) do
+      case start_worker(root, partition_child_spec(index, config)) do
         :ok -> {:cont, {:ok, [index | added]}}
         {:error, reason} -> {:halt, {:error, {:partition_start_failed, index, reason}}}
       end
     end)
   end
 
-  defp start_group(root, child_spec) do
+  defp start_worker(root, child_spec) do
     case Supervisor.start_child(root, child_spec) do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
@@ -180,13 +179,18 @@ defmodule Pulsar.Topology.Root do
   end
 
   # Both topics, so a callback can tell which partition it handles without reading the tree.
-  defp topic_child_spec(%{worker: worker, worker_count: worker_count, opts: opts}) do
-    topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
+  defp topic_child_spec(%{worker: worker, opts: opts}) do
+    topic_opts =
+      Keyword.merge(opts,
+        base_topic: Keyword.fetch!(opts, :topic),
+        partition: nil,
+        name: worker_name(Keyword.fetch!(opts, :name))
+      )
 
-    group_child_spec({:topic, :non_partitioned}, worker, worker_count, topic_opts)
+    worker_child_spec({:topic, :non_partitioned}, worker, topic_opts)
   end
 
-  defp partition_child_spec(partition_index, %{worker: worker, worker_count: worker_count, opts: opts}) do
+  defp partition_child_spec(partition_index, %{worker: worker, opts: opts}) do
     base_topic = Keyword.fetch!(opts, :topic)
 
     partition_opts =
@@ -194,21 +198,19 @@ defmodule Pulsar.Topology.Root do
         topic: Topic.partition(base_topic, partition_index),
         base_topic: base_topic,
         partition: partition_index,
-        name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
+        name: opts |> Keyword.fetch!(:name) |> Topic.partition(partition_index) |> worker_name()
       )
 
-    group_child_spec({:partition, partition_index}, worker, worker_count, partition_opts)
+    worker_child_spec({:partition, partition_index}, worker, partition_opts)
   end
 
-  defp worker_count(:consumers, opts), do: Keyword.fetch!(opts, :consumer_count)
-  defp worker_count(:producers, _opts), do: 1
-
-  defp group_child_spec(id, worker, worker_count, opts) do
-    %{
-      id: id,
-      start: {Group, :start_link, [worker, worker_count, opts]},
-      restart: :permanent,
-      type: :supervisor
-    }
+  defp worker_child_spec(id, worker, opts) do
+    {worker, opts}
+    |> Supervisor.child_spec([])
+    |> Map.put(:id, id)
   end
+
+  # Preserve the broker-visible identity used when a group held the sole worker. Besides limiting
+  # a compatibility change, producer epochs are keyed by this name.
+  defp worker_name(name), do: "#{name}-1"
 end

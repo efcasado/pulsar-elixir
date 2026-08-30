@@ -184,8 +184,8 @@ defmodule Pulsar.Integration.AccessModesTest do
       match?({:ok, _}, Pulsar.Producer.send(group_pid_2, "Probe message", client: @client))
     end)
 
-    # Both opened before either was fenced. A worker is named after its group with an index
-    # suffix, so the prefix is what identifies it.
+    # Both opened before either was fenced. A worker keeps the configured name with the sole
+    # worker's suffix, so the prefix is what identifies it.
     assert_receive {:telemetry_event,
                     %{event: @opened, metadata: %{success: true, producer_name: "original-exclusive" <> _}}}
 
