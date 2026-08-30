@@ -21,22 +21,22 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     {:ok, expected_count: length(@messages)}
   end
 
-  test "reads every partition, across the workers of every consumer", %{expected_count: expected_count} do
+  test "reads every partition through one worker per partition", %{expected_count: expected_count} do
     {:ok, partitioned_consumer_pid} =
       Pulsar.Consumer.start(
         @topic,
         "partitioned-consumers",
         @consumer_callback,
-        subscription_options(2)
+        subscription_options()
       )
 
     assert Pulsar.Client.consumers(@client) == [partitioned_consumer_pid]
 
     assert :ok = Pulsar.Consumer.await_ready(partitioned_consumer_pid)
     consumers = Topology.workers(partitioned_consumer_pid)
-    assert length(consumers) == 6
+    assert length(consumers) == 3
 
-    # Every worker forwards here, so the six of them are counted off together.
+    # Every partition worker forwards here, so they are counted off together.
     for _message <- 1..expected_count, do: assert_receive({:consumer, _pid, _message})
     refute_receive {:consumer, _pid, _message}
 
@@ -50,7 +50,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     System.create_topic(topic, 3)
 
-    opts = Keyword.put(subscription_options(1), :partition_discovery_interval_ms, @discovery_interval_ms)
+    opts = Keyword.put(subscription_options(), :partition_discovery_interval_ms, @discovery_interval_ms)
 
     {:ok, partitioned_consumer_pid} =
       Pulsar.Consumer.start(topic, "partition-discovery-#{test_id}", @consumer_callback, opts)
@@ -61,12 +61,12 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
     System.update_partitions(topic, 6)
 
-    # The poller picks the new partitions up and starts a group for each, leaving the groups
+    # The poller picks the new partitions up and starts a worker for each, leaving the workers
     # already running where they were.
     assert_receive {:telemetry_event,
                     %{
                       event: @reconciliation,
-                      metadata: %{topic: ^topic, partition_count: 6, added_groups: [3, 4, 5]}
+                      metadata: %{topic: ^topic, partition_count: 6, added_partitions: [3, 4, 5]}
                     }},
                    10_000
 
@@ -77,7 +77,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   test "topic/1 answers for a partitioned consumer and its workers without stopping them" do
     {:ok, partitioned} =
-      Pulsar.Consumer.start(@topic, "topic-at-every-level", @consumer_callback, subscription_options(1))
+      Pulsar.Consumer.start(@topic, "topic-at-every-level", @consumer_callback, subscription_options())
 
     assert :ok = Pulsar.Consumer.await_ready(partitioned)
     assert Pulsar.Consumer.topic(partitioned) == @topic
@@ -100,7 +100,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         partition_topic,
         "explicit-partition-topic",
         @consumer_callback,
-        subscription_options(1)
+        subscription_options()
       )
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
@@ -115,7 +115,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
 
   test "init/2 tells each worker which partition it resolved to" do
     {:ok, consumer} =
-      Pulsar.Consumer.start(@topic, "init-context", @consumer_callback, subscription_options(1))
+      Pulsar.Consumer.start(@topic, "init-context", @consumer_callback, subscription_options())
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
 
@@ -132,7 +132,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
       assert context.topic == Pulsar.Topic.partition(@topic, context.partition)
       assert context.subscription_name == "init-context"
       assert context.subscription_type == :shared
-      assert context.consumer_name =~ "-partition-#{context.partition}-"
+      assert String.ends_with?(context.consumer_name, "-partition-#{context.partition}-1")
     end
 
     :ok = Pulsar.Consumer.stop(consumer)
@@ -146,7 +146,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
         partition_topic,
         "init-context-explicit-partition",
         @consumer_callback,
-        subscription_options(1)
+        subscription_options()
       )
 
     assert :ok = Pulsar.Consumer.await_ready(consumer)
@@ -168,8 +168,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     System.create_topic(topic, 3)
 
     opts =
-      1
-      |> subscription_options()
+      subscription_options()
       |> Keyword.put(:flow_policy, {Pulsar.Test.Support.Flow, :never, []})
       |> Keyword.put(:flow_initial, 0)
       |> Keyword.put(:partition_discovery_interval_ms, false)
@@ -182,7 +181,7 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     workers = Topology.workers(consumer)
     assert length(workers) == 3
 
-    [{partition, _group} | _rest] = Topology.groups(consumer)
+    [{partition, _worker} | _rest] = Topology.partitions(consumer)
     :ok = Supervisor.terminate_child(consumer, {:partition, partition})
 
     live_workers = Topology.workers(consumer)
@@ -194,11 +193,10 @@ defmodule Pulsar.Integration.Consumer.PartitionedTopicTest do
     :ok = Pulsar.Consumer.stop(consumer)
   end
 
-  defp subscription_options(count) do
+  defp subscription_options do
     [
       client: @client,
       initial_position: :earliest,
-      consumer_count: count,
       flow_initial: 1,
       flow_threshold: 0,
       flow_refill: 1,

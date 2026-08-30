@@ -152,12 +152,12 @@ defmodule Pulsar.Integration.Producer.PartitionedTopicTest do
 
     System.update_partitions(topic, 6)
 
-    # The poller picks the new partitions up and starts a group for each, leaving the groups
+    # The poller picks the new partitions up and starts a worker for each, leaving the workers
     # already running where they were.
     assert_receive {:telemetry_event,
                     %{
                       event: @reconciliation,
-                      metadata: %{topic: ^topic, partition_count: 6, added_groups: [3, 4, 5]}
+                      metadata: %{topic: ^topic, partition_count: 6, added_partitions: [3, 4, 5]}
                     }},
                    10_000
 

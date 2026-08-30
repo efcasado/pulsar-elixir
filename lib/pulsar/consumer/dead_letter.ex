@@ -17,8 +17,8 @@ defmodule Pulsar.Consumer.DeadLetter do
   @doc """
   Attaches a dead letter producer to a consumer's topology. `Pulsar.Topology`'s `:companions`.
 
-  Called with the logical consumer's options, before `Pulsar.Topology.Group` rewrites `:name` and
-  `:topic` per partition, so what it builds describes the whole consumer rather than one partition.
+  Called with the logical consumer's options before the topology rewrites `:name` and `:topic` per
+  partition, so what it builds describes the whole consumer rather than one partition.
   """
   @spec attach(keyword(), pid()) :: {keyword(), [Supervisor.child_spec()]}
   def attach(opts, root), do: {annotate(opts, root), child_specs(opts)}

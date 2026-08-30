@@ -17,7 +17,7 @@ Preserve these invariants from `docs/architecture.md`:
 1. A consumer or producer cannot outlive the client context it depends on.
 2. Each logical consumer or producer has one registered stable root, even while it has no live
    workers.
-3. Partitions, groups, and worker pids remain behind the public facade.
+3. Partitions and worker pids remain behind the public facade.
 4. Starting establishes ownership, not readiness.
 5. Consumer and producer failures are isolated from each other.
 6. Declared resources are restored automatically; callers restore runtime resources.
@@ -55,7 +55,7 @@ child. Preserve linked exit reasons when trapping exits so OTP can retain that d
 ## Concurrency and public boundaries
 
 Assume a supervised process can terminate between lookup and use. Code at public facades that
-interacts with registries, supervisors, broker connections, topology groups, or workers should turn
+interacts with registries, supervisors, broker connections, topology roots, or workers should turn
 expected lifecycle races into the documented public result rather than unexpectedly exiting the
 caller. Do not assume a pid is still alive merely because a registry or supervisor just returned it.
 

@@ -27,29 +27,23 @@ defmodule Pulsar.Integration.Consumer.SubscriptionOptionsTest do
     {:ok, expected_count: length(@messages)}
   end
 
-  test ":name names the group, and each consumer is named after it on the broker" do
-    {:ok, group} =
+  test ":name names the root and remains the base of its consumer name on the broker" do
+    {:ok, root} =
       Pulsar.Consumer.start(
         "persistent://public/default/consumer-naming",
         "naming",
         @consumer_callback,
         client: @client,
-        name: "naming-group",
-        consumer_count: 2,
+        name: "named-consumer",
         init_args: [forward_to: self()]
       )
 
-    on_exit(fn -> Pulsar.Consumer.stop("naming-group", client: @client) end)
+    on_exit(fn -> Pulsar.Consumer.stop("named-consumer", client: @client) end)
 
-    :ok = Pulsar.Consumer.await_ready(group)
-    workers = Topology.workers(group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [worker] = Topology.workers(root)
 
-    names =
-      workers
-      |> Enum.map(fn pid -> :sys.get_state(pid).consumer_name end)
-      |> Enum.sort()
-
-    assert names == ["naming-group-1", "naming-group-2"]
+    assert :sys.get_state(worker).consumer_name == "named-consumer-1"
   end
 
   test ":latest starts past what the topic already held" do
