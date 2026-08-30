@@ -177,7 +177,7 @@ defmodule Pulsar.Consumer do
   @doc """
   Acknowledges one or more messages, marking them as processed.
 
-  Takes the pid of the worker that delivered them. Not a group or a name: an acknowledgement
+  Takes the pid of the worker that delivered them, not a root or a name: an acknowledgement
   carries the consumer id of the worker the broker sent the message to, so no other worker
   can answer for it.
 
@@ -247,9 +247,11 @@ defmodule Pulsar.Consumer do
   Takes the stable consumer root, one of its worker pids, or its name. Every live worker behind
   a root is granted the permits, and the first refusal is returned — retrying by name is safe,
   since a worker that already holds permits is only over-credited, and a worker that refused
-  has usually been replaced by one with a different pid. If a configured group has no live
-  worker, the other groups are granted permits before `{:error, :no_consumers_available}` is
-  returned.
+  has usually been replaced by one with a different pid. If a configured partition has no live
+  worker, the other partitions are granted permits before `{:error, :no_consumers_available}`
+  is returned.
+
+  A root that belongs to a producer returns `{:error, :not_found}`.
 
   A consumer with no workers is an error rather than a silent success: nothing was granted,
   so nothing will be delivered. Permits belong to individual worker instances, and each grants
@@ -264,13 +266,11 @@ defmodule Pulsar.Consumer do
       :worker ->
         grant(consumer, permits)
 
-      :group ->
-        {:error, :not_found}
-
       :root ->
         case topology_workers(consumer) do
           :initializing -> {:error, :not_ready}
           {:ready, workers, unavailable?} -> grant_all(workers, permits, unavailable?)
+          {:error, :not_found} = error -> error
         end
     end
   catch
@@ -325,9 +325,6 @@ defmodule Pulsar.Consumer do
       :worker ->
         Worker.topic(consumer)
 
-      :group ->
-        {:error, :not_found}
-
       :root ->
         Topology.topic(consumer)
     end
@@ -335,22 +332,21 @@ defmodule Pulsar.Consumer do
     :exit, _reason -> {:error, :not_found}
   end
 
-  # Initial discovery has no groups. Once constructed, their child ids remain present while
-  # workers restart, so this distinguishes initialization without calling the discovery process.
   defp topology_workers(consumer) do
-    case Topology.groups(consumer) do
-      [] ->
-        :initializing
+    if Topology.resource?(consumer, :consumers),
+      do: consumer |> Topology.partitions() |> partition_workers(),
+      else: {:error, :not_found}
+  end
 
-      groups ->
-        workers_by_group =
-          Enum.map(groups, fn
-            {_index, group} when is_pid(group) -> Topology.workers(group, Worker)
-            {_index, _not_running} -> []
-          end)
+  # Initial discovery has no partition workers. Once constructed, their child ids remain while
+  # workers restart, so this distinguishes initialization without calling the discovery process.
+  defp partition_workers([]), do: :initializing
 
-        {:ready, List.flatten(workers_by_group), Enum.any?(workers_by_group, &(&1 == []))}
-    end
+  defp partition_workers(partitions) do
+    workers = for {_index, worker} <- partitions, is_pid(worker), do: worker
+    unavailable? = Enum.any?(partitions, fn {_index, worker} -> not is_pid(worker) end)
+
+    {:ready, workers, unavailable?}
   end
 
   # Two consumers in one static supervision tree need distinct ids, so the id follows

@@ -97,10 +97,11 @@ defmodule Pulsar.Consumer.Callback do
         end
       end
 
-  ## Multiple Consumers
+  ## Scaling Consumers
 
-  For shared or key-shared subscriptions, `:consumer_count` runs several consumer processes
-  on one subscription to increase throughput:
+  A logical consumer runs one process for its topic or for each partition. To attach multiple
+  consumers to a shared or key-shared subscription, start separately named resources with the
+  same subscription:
 
       {Pulsar.Client,
        host: "pulsar://localhost:6650",
@@ -109,8 +110,12 @@ defmodule Pulsar.Consumer.Callback do
           subscription_name: subscription,
           callback_module: MyCallback,
           subscription_type: :key_shared,
-          consumer_count: 3,
-          name: :orders]
+          name: :orders_1],
+         [topic: topic,
+          subscription_name: subscription,
+          callback_module: MyCallback,
+          subscription_type: :key_shared,
+          name: :orders_2]
        ]}
 
   Each process has independent callback state. The consumer facade intentionally hides
@@ -222,10 +227,10 @@ defmodule Pulsar.Consumer.Callback do
   implementation keeps the consumer running, which is what a partitioned consumer wants:
   each partition reaches its end separately, and the others still have messages to deliver.
 
-  Every consumer on the subscription is told, not just whichever one read last: each of the
-  `:consumer_count` processes on a shared subscription hears it, both the active and the
-  passive consumers of a failover one, and each partition's process separately. A shutdown
-  that waits for the whole topic waits for every worker to report, not for the first.
+  Every consumer on the subscription is told, not just whichever one read last: separately
+  named consumers on a shared subscription each hear it, both the active and passive consumers
+  of a failover one hear it, and each partition's process hears it separately. A shutdown that
+  waits for the whole topic waits for every worker to report, not for the first.
 
   A worker can be told more than once. Unacknowledged messages are redelivered after the
   notification, and draining them reaches the end again; so does every reconnect, since the
@@ -242,7 +247,7 @@ defmodule Pulsar.Consumer.Callback do
 
   That leaves the worker absent and the logical consumer running, possibly with fewer workers.
   To remove the whole consumer, tell a coordinator and have it call `Pulsar.Consumer.stop/2`
-  once it has heard from every worker it expects - one per partition and `:consumer_count`.
+  once it has heard from every worker it expects - one per partition.
 
   ## Manual Acknowledgment
 
@@ -293,8 +298,8 @@ defmodule Pulsar.Consumer.Callback do
   - `:partition` - the partition index, or `nil` when the topic is not partitioned
   - `:subscription_name` - the subscription this consumer belongs to
   - `:subscription_type` - how that subscription is shared
-  - `:consumer_name` - this worker's broker-visible name, which is its group's name suffixed
-    with the worker's position in it, not the `:name` the consumer was configured with
+  - `:consumer_name` - this worker's broker-visible name: the configured consumer `:name`, with
+    the partition suffix when applicable, followed by `-1`
   """
   @type context :: %{
           topic: String.t(),
