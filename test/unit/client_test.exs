@@ -1,6 +1,7 @@
 defmodule Pulsar.ClientTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Broker.Pool, as: BrokerPool
   alias Pulsar.Client
   alias Pulsar.Test.Support.Utils
 
@@ -359,14 +360,15 @@ defmodule Pulsar.ClientTest do
   end
 
   describe "broker options" do
-    test "owns the initial broker in a client-level broker branch" do
+    test "owns the initial broker pool in a client-level broker branch" do
       client = :initial_broker_owner
       url = "pulsar://127.0.0.1:1"
       client_pid = start_supervised!({Client, name: client, host: url})
 
       brokers = child_pid(client_pid, :brokers)
       dynamic = Process.whereis(Client.broker_supervisor(client))
-      initial = child_pid(brokers, {:broker, url})
+      initial_pool = child_pid(brokers, {:broker_pool, url})
+      [initial] = BrokerPool.connections(initial_pool)
 
       assert Enum.any?(Supervisor.which_children(brokers), &match?({_id, ^dynamic, :supervisor, _modules}, &1))
       assert DynamicSupervisor.which_children(dynamic) == []
@@ -375,9 +377,69 @@ defmodule Pulsar.ClientTest do
 
       redirected_url = "pulsar://127.0.0.1:2"
       assert {:ok, redirected} = Client.start_broker(redirected_url, client: client)
-      assert Enum.any?(DynamicSupervisor.which_children(dynamic), &match?({_id, ^redirected, :worker, _modules}, &1))
+      [{redirected_pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+
+      assert Enum.any?(
+               DynamicSupervisor.which_children(dynamic),
+               &match?({_id, ^redirected_pool, :supervisor, _modules}, &1)
+             )
+
+      assert BrokerPool.connections(redirected_pool) == [redirected]
       assert Client.lookup_broker(redirected_url, client: client) == {:ok, redirected}
       assert Client.random_broker(client) in [initial, redirected]
+    end
+
+    test "starts the configured number of connections for every broker" do
+      client = :pooled_brokers
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 3})
+
+      brokers = child_pid(client_pid, :brokers)
+      initial_pool = child_pid(brokers, {:broker_pool, url})
+      initial_connections = BrokerPool.connections(initial_pool)
+
+      assert length(initial_connections) == 3
+      assert Enum.all?(initial_connections, &Process.alive?/1)
+      assert Client.connections_per_broker(client) == 3
+      refute Keyword.has_key?(Client.get_broker_opts(client), :connections_per_broker)
+
+      assert {:ok, initial} = Client.lookup_broker(url, client: client)
+      assert initial in initial_connections
+
+      assert {:ok, redirected} = Client.start_broker(redirected_url, client: client)
+      [{redirected_pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+      redirected_connections = BrokerPool.connections(redirected_pool)
+
+      assert length(redirected_connections) == 3
+      assert redirected in redirected_connections
+    end
+
+    test "restarts one failed pooled connection without replacing its siblings" do
+      client = :pooled_connection_restart
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 2})
+
+      brokers = child_pid(client_pid, :brokers)
+      pool = child_pid(brokers, {:broker_pool, url})
+      [failed, sibling] = BrokerPool.connections(pool)
+      monitor = Process.monitor(failed)
+
+      Process.exit(failed, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^failed, :killed}
+
+      connections =
+        Utils.wait_for(
+          fn -> BrokerPool.connections(pool) end,
+          until: fn connections -> length(connections) == 2 and failed not in connections end,
+          description: "failed broker connection to restart"
+        )
+
+      assert sibling in connections
     end
 
     test "carries the connection tunables to the broker with their defaults" do
@@ -460,6 +522,18 @@ defmodule Pulsar.ClientTest do
     test "still rejects a value that is not a timeout" do
       assert_raise NimbleOptions.ValidationError, ~r/:conn_timeout/, fn ->
         Client.start_link(name: :bad_conn_timeout, host: "pulsar://127.0.0.1:6650", conn_timeout: -1)
+      end
+    end
+  end
+
+  describe "connections_per_broker" do
+    test "requires at least one connection" do
+      assert_raise NimbleOptions.ValidationError, ~r/:connections_per_broker/, fn ->
+        Client.start_link(
+          name: :no_broker_connections,
+          host: "pulsar://127.0.0.1:6650",
+          connections_per_broker: 0
+        )
       end
     end
   end

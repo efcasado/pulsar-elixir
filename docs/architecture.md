@@ -73,8 +73,10 @@ MyApp.Supervisor
     ├── BrokerRegistry
     ├── brokers
     │   ├── BrokerSupervisor
-    │   │   └── broker connection(s) learned through lookup
-    │   └── initial broker connection
+    │   │   └── broker pool(s) learned through lookup
+    │   │       └── broker connection(s)
+    │   └── initial broker pool
+    │       └── broker connection(s)
     └── resources
         ├── consumers
         │   ├── ConsumerRegistry
@@ -94,11 +96,16 @@ MyApp.Supervisor
             └── Bootstrap
 ```
 
-The client-configured broker is a static child of the broker branch. Connections learned
+The client-configured broker pool is a static child of the broker branch. Pools learned
 through topic lookup are children of its dynamic broker supervisor. Both kinds register in
-the broker registry, which maps service URLs to connection processes. The consumer and
-producer registries map application-facing names to stable topology roots; internal
-partition groups are not registered as public resources.
+the broker registry, which maps service URLs to stable pool processes. Each pool owns
+`:connections_per_broker` connection processes, one by default.
+
+A consumer or producer worker selects one connection from the topic owner's pool when it
+registers and retains that connection for the registration's lifetime. Producer and consumer
+ids are scoped to a connection, so commands are never checked out independently. The consumer
+and producer registries map application-facing names to stable topology roots; internal
+partition groups and broker pools are not exposed as public resources.
 
 Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
 does not take runtime producers down with it, and the reverse is also true. If the broker
