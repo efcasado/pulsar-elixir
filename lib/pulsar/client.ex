@@ -87,14 +87,13 @@ defmodule Pulsar.Client do
               ],
               default: [max_restarts: 3, max_seconds: 5],
               doc: """
-              How often a consumer or producer worker under this client may be restarted before
-              its partition gives up, as `[max_restarts: integer, max_seconds: integer]`. OTP's
-              own intensity by default.
+              How often direct children under one consumer or producer root — workers, the
+              topology controller, and any companion — may restart before that resource gives up, as
+              `[max_restarts: integer, max_seconds: integer]`. OTP's own intensity by default.
 
-              A group multiplies `:max_restarts` by its worker count, so a broker dropping every
-              worker registered with it at once counts as one round rather than as many. See
-              `docs/architecture.md` for what that trades and how the two numbers relate to
-              `Pulsar.Backoff`.
+              The budget is shared by those children. See
+              `docs/architecture.md` for the resulting failure granularity and how these numbers
+              relate to `Pulsar.Backoff`.
               """
             ],
             resource_restart_intensity: [
@@ -105,13 +104,8 @@ defmodule Pulsar.Client do
               ],
               default: [max_restarts: 3, max_seconds: 5],
               doc: """
-              How many times a partition may give up before the consumer or producer it belongs
-              to does, and how many resources may do that before the client does. The failure
-              then reaches whatever supervises the client.
-
-              Much smaller than `:worker_restart_intensity`, and deliberately so: a partition
-              only gives up when it genuinely cannot run, and tying this to the larger budget
-              would make escalation depend on how quickly the failure comes back.
+              How many consumer or producer resources may give up before their client branch
+              does. The failure then reaches the client and whatever supervises it.
               """
             ],
             producers: [

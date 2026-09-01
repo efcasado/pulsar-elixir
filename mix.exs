@@ -59,10 +59,9 @@ defmodule Pulsar.MixProject do
           "Pulsar.Topology",
           "Pulsar.Topology.Root",
           "Pulsar.Topology.Controller",
-          "Pulsar.Topology.Group",
           "Pulsar.Topology.Resolver",
-          "Pulsar.Topology.groups/1",
           "Pulsar.Topology.kind/1",
+          "Pulsar.Topology.partitions/1",
           "Pulsar.Topology.workers/1"
         ]
       ]

@@ -162,7 +162,7 @@ defmodule Pulsar.Producer.SendAsyncTest do
     end
   end
 
-  # `Topology.kind/1` reads anything that is not a topology or group supervisor as a worker, so a
+  # `Topology.kind/1` reads anything that is not a topology root as a worker, so a
   # stub answers `send/3` as a producer would.
   describe "send/3 over send_async/3" do
     test "answers with what the producer replied" do

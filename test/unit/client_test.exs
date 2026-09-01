@@ -155,7 +155,7 @@ defmodule Pulsar.ClientTest do
           host: "pulsar://127.0.0.1:1",
           consumers: [
             [topic: "t", subscription_name: "s", callback_module: MyApp.H],
-            [topic: "t", subscription_name: "s", callback_module: MyApp.H, consumer_count: 2]
+            [topic: "t", subscription_name: "s", callback_module: MyApp.H]
           ]
         )
       end

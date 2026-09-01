@@ -100,7 +100,7 @@ defmodule Pulsar.Backoff do
   into the following call, or `:give_up` once the reason is not retryable or the deadline has
   passed. Same policy and budget as `run/1`, without blocking the caller.
 
-  This is what paces a worker that cannot start. Giving up at once would let its group restart
+  This is what paces a worker that cannot start. Giving up at once would let its root restart
   it in a tight loop and exhaust the restart budget, which reads as a clean `:shutdown` and
   takes the whole resource down; spacing the attempts spends that budget slowly enough for a
   broker to come back.

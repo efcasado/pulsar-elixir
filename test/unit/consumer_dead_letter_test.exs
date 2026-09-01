@@ -21,7 +21,6 @@ defmodule Pulsar.Consumer.DeadLetterTest do
         name: @consumer_name,
         client: :test,
         subscription_name: @subscription,
-        consumer_count: 1,
         partition_discovery_interval_ms: false,
         dead_letter_policy: [max_redelivery: 3]
       ],
