@@ -521,10 +521,7 @@ defmodule Pulsar.Client do
       Supervisor.delete_child(supervisor, child_id)
     end
   catch
-    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
-      {:error, :not_found}
-
-    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+    :exit, {_reason, {GenServer, :call, _call}} ->
       {:error, :not_found}
   end
 

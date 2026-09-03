@@ -18,6 +18,10 @@ defmodule Pulsar.ClientTest do
     def handle_call({:start_child, _child_spec}, _from, reason), do: {:stop, reason, reason}
 
     def handle_call(:which_children, _from, reason), do: {:stop, reason, reason}
+
+    def handle_call({:terminate_child, _child_id}, _from, reason), do: {:reply, :ok, reason}
+
+    def handle_call({:delete_child, _child_id}, _from, reason), do: {:stop, reason, reason}
   end
 
   describe "start_link/1 option validation" do
@@ -190,6 +194,18 @@ defmodule Pulsar.ClientTest do
       assert Client.stop_broker("pulsar://127.0.0.1:6650", client: :never_started) == {:error, :not_found}
       assert Client.consumers(:never_started) == []
       assert Client.producers(:never_started) == []
+    end
+
+    test "broker removal tolerates an abnormal supervisor exit during deletion" do
+      client = :crashing_broker_removal
+
+      {:ok, _supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.broker_supervisor(client),
+          :unexpected
+        )
+
+      assert Client.stop_broker("pulsar://127.0.0.1:6650", client: client) == {:error, :not_found}
     end
 
     test "send and stop keep their contracts" do
