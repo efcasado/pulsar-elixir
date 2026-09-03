@@ -438,7 +438,7 @@ defmodule Pulsar.ClientTest do
       assert any in connections
     end
 
-    test "does not remap an unavailable numbered slot to a sibling" do
+    test "does not remap unavailable slots and classifies an empty pool as disconnected" do
       client = :unavailable_pool_slot
       url = "pulsar://127.0.0.1:1"
 
@@ -455,9 +455,20 @@ defmodule Pulsar.ClientTest do
       assert Client.lookup_broker(url, client: client, connection_slot: 0) == {:ok, slot_zero}
       assert Client.lookup_broker(url, client: client, connection_slot: 1) == {:error, :disconnected}
 
+      assert :ok = Supervisor.terminate_child(pool, {:connection, 0})
+      assert Client.lookup_broker(url, client: client) == {:error, :disconnected}
+
+      assert {:ok, _restarted} = Supervisor.restart_child(pool, {:connection, 0})
       assert {:ok, restarted} = Supervisor.restart_child(pool, {:connection, 1})
       assert restarted != slot_one
       assert Client.lookup_broker(url, client: client, connection_slot: 1) == {:ok, restarted}
+    end
+
+    test "turns an abnormal pool exit during checkout into an unavailable pool" do
+      pool = :abnormally_stopping_pool
+      {:ok, _pid} = StoppingResourceSupervisor.start(pool, :unexpected)
+
+      assert BrokerPool.checkout(pool, :random) == {:error, :disconnected}
     end
 
     test "allocates logical worker slots round-robin" do
@@ -483,7 +494,6 @@ defmodule Pulsar.ClientTest do
       assert :ok = Client.stop_broker(url, client: client)
       assert_receive {:DOWN, ^pool_ref, :process, ^old_pool, :shutdown}
       assert child_pid(brokers, {:broker_pool, url}) == nil
-      assert Client.lookup_broker(url, client: client) == {:error, :not_found}
       assert Enum.all?(old_connections, &(not Process.alive?(&1)))
 
       Utils.wait_for(
@@ -491,6 +501,8 @@ defmodule Pulsar.ClientTest do
         until: &(&1 == []),
         description: "stopped broker pool to leave its registry"
       )
+
+      assert Client.lookup_broker(url, client: client) == {:error, :not_found}
 
       # Starting the URL again adds a new pool under the same owner.
       assert {:ok, _connection} = Client.start_broker(url, client: client)

@@ -30,7 +30,7 @@ defmodule Pulsar.Broker.Pool do
   A slot that is restarting is unavailable rather than silently moving the caller to a sibling.
   """
   @spec checkout(Supervisor.supervisor(), non_neg_integer() | :random) ::
-          {:ok, pid()} | {:error, :not_found | :disconnected}
+          {:ok, pid()} | {:error, :disconnected}
   def checkout(pool, connection_slot) when is_integer(connection_slot) and connection_slot >= 0 do
     child_id = {:connection, connection_slot}
 
@@ -42,7 +42,7 @@ defmodule Pulsar.Broker.Pool do
 
   def checkout(pool, :random) do
     case connections(pool) do
-      [] -> {:error, :not_found}
+      [] -> {:error, :disconnected}
       connections -> {:ok, Enum.random(connections)}
     end
   end
@@ -63,8 +63,7 @@ defmodule Pulsar.Broker.Pool do
   defp children(pool) do
     Supervisor.which_children(pool)
   catch
-    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] -> []
-    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} -> []
+    :exit, {_reason, {GenServer, :call, _call}} -> []
   end
 
   @impl true
