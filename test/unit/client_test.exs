@@ -471,6 +471,24 @@ defmodule Pulsar.ClientTest do
       assert BrokerPool.checkout(pool, :random) == {:error, :disconnected}
     end
 
+    test "classifies a retained stopped pool as disconnected" do
+      client = :retained_stopped_pool
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid = start_supervised!({Client, name: client, host: url})
+      brokers = child_pid(client_pid, :brokers)
+
+      assert :ok = Supervisor.terminate_child(brokers, {:broker_pool, url})
+
+      Utils.wait_for(
+        fn -> Registry.lookup(Client.broker_registry(client), url) end,
+        until: &(&1 == []),
+        description: "terminated broker pool to leave its registry"
+      )
+
+      assert Client.start_broker(url, client: client) == {:error, :disconnected}
+    end
+
     test "allocates logical worker slots round-robin" do
       client = :round_robin_slots
       start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", connections_per_broker: 3})

@@ -477,6 +477,9 @@ defmodule Pulsar.Client do
           {:error, {:already_started, pool_pid}} ->
             BrokerPool.checkout(pool_pid, connection_slot)
 
+          {:error, :already_present} ->
+            {:error, :disconnected}
+
           {:error, reason} ->
             {:error, reason}
         end
