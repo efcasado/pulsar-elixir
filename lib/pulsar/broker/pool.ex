@@ -1,9 +1,9 @@
 defmodule Pulsar.Broker.Pool do
   @moduledoc false
 
-  # One stable supervisor per broker URL. Workers check out a concrete connection and keep
-  # using it for the lifetime of their broker registration, since producer and consumer ids
-  # are scoped to that connection.
+  # One stable supervisor per broker URL. A worker is assigned a numbered slot before it starts
+  # and retains it across restarts. Stateless metadata operations use any live child process and
+  # let that broker report whether its socket is currently usable.
 
   use Supervisor
 
@@ -12,6 +12,7 @@ defmodule Pulsar.Broker.Pool do
     %{
       id: {:broker_pool, broker_url},
       start: {__MODULE__, :start_link, [broker_url, opts]},
+      restart: :permanent,
       type: :supervisor
     }
   end
@@ -25,15 +26,24 @@ defmodule Pulsar.Broker.Pool do
   @doc """
   Selects a live connection from `pool`.
 
-  The selection key keeps repeated lookups by one worker on the same connection while the
-  pool membership is unchanged. Callers retain the returned pid; this is not a per-command
-  checkout.
+  An integer selects that exact numbered slot.
+  A slot that is restarting is unavailable rather than silently moving the caller to a sibling.
   """
-  @spec checkout(Supervisor.supervisor(), term()) :: {:ok, pid()} | {:error, :not_found}
-  def checkout(pool, key \\ self()) do
+  @spec checkout(Supervisor.supervisor(), non_neg_integer() | :random) ::
+          {:ok, pid()} | {:error, :not_found | :disconnected}
+  def checkout(pool, connection_slot) when is_integer(connection_slot) and connection_slot >= 0 do
+    child_id = {:connection, connection_slot}
+
+    case List.keyfind(children(pool), child_id, 0) do
+      {^child_id, pid, :worker, _modules} when is_pid(pid) -> {:ok, pid}
+      _unavailable -> {:error, :disconnected}
+    end
+  end
+
+  def checkout(pool, :random) do
     case connections(pool) do
       [] -> {:error, :not_found}
-      connections -> {:ok, Enum.at(connections, :erlang.phash2(key, length(connections)))}
+      connections -> {:ok, Enum.random(connections)}
     end
   end
 
@@ -41,15 +51,20 @@ defmodule Pulsar.Broker.Pool do
   @spec connections(Supervisor.supervisor()) :: [pid()]
   def connections(pool) do
     pool
-    |> Supervisor.which_children()
+    |> children()
     |> Enum.filter(fn
       {{:connection, _slot}, pid, :worker, _modules} when is_pid(pid) -> true
       _child -> false
     end)
     |> Enum.sort_by(fn {{:connection, slot}, _pid, :worker, _modules} -> slot end)
     |> Enum.map(fn {{:connection, _slot}, pid, :worker, _modules} -> pid end)
+  end
+
+  defp children(pool) do
+    Supervisor.which_children(pool)
   catch
-    :exit, _reason -> []
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] -> []
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} -> []
   end
 
   @impl true

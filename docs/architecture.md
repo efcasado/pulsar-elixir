@@ -71,11 +71,8 @@ A client starts the following ownership tree:
 MyApp.Supervisor
 └── Pulsar.Client
     ├── BrokerRegistry
-    ├── brokers
-    │   ├── BrokerSupervisor
-    │   │   └── broker pool(s) learned through lookup
-    │   │       └── broker connection(s)
-    │   └── initial broker pool
+    ├── BrokerSupervisor
+    │   └── broker pool(s), including the configured initial pool
     │       └── broker connection(s)
     └── resources
         ├── consumers
@@ -96,16 +93,22 @@ MyApp.Supervisor
             └── Bootstrap
 ```
 
-The client-configured broker pool is a static child of the broker branch. Pools learned
-through topic lookup are children of its dynamic broker supervisor. Both kinds register in
-the broker registry, which maps service URLs to stable pool processes. Each pool owns
-`:connections_per_broker` connection processes, one by default.
+The client-configured broker pool starts with the broker supervisor. Pools learned through topic
+lookup are added to the same supervisor. Every pool has a stable URL-based child id and registers
+in the broker registry, which maps service URLs to pool processes. Each pool owns
+`:connections_per_broker` connection processes, one by default. Explicitly stopping a broker URL
+removes that entire pool from the supervisor; a later lookup may discover and start it again.
 
-A consumer or producer worker selects one connection from the topic owner's pool when it
-registers and retains that connection for the registration's lifetime. Producer and consumer
-ids are scoped to a connection, so commands are never checked out independently. The consumer
-and producer registries map application-facing names to stable topology roots; internal
-partition groups and broker pools are not exposed as public resources.
+When a partition group is created, its stable topology root assigns its workers connection slots
+round-robin and records those slots in the group's child specification. Each worker's own child
+specification also carries its slot, so worker and group restarts retain the assignment. A worker
+uses that numbered slot in whichever broker pool owns its topic. If the slot is restarting, the
+worker waits for it instead of silently moving to a sibling. Producer and consumer ids are scoped
+to a connection, and commands are never checked out independently. Stateless metadata lookups use
+any live sibling process; if its socket is disconnected, the operation fails fast and the existing
+metadata backoff retries. The consumer and producer registries map application-facing names to
+stable topology roots; internal partition groups and broker pools are not exposed as public
+resources.
 
 Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
 does not take runtime producers down with it, and the reverse is also true. If the broker

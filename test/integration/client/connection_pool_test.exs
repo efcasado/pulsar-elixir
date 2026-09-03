@@ -40,9 +40,40 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
       description: "every pooled broker connection to complete its handshake"
     )
 
+    assert Client.random_broker(@client) in connections
+
     for connection <- connections do
       assert {:ok, %{response: :Success, partitions: 0}} =
                Broker.partitioned_topic_metadata(connection, @topic)
     end
+  end
+
+  test "logical producers on the same topic are assigned connections round-robin" do
+    {:ok, first} =
+      Pulsar.Producer.start(topic: @topic, name: :first_pooled_producer, client: @client)
+
+    :ok = Pulsar.Producer.await_ready(first)
+
+    {:ok, second} =
+      Pulsar.Producer.start(topic: @topic, name: :second_pooled_producer, client: @client)
+
+    :ok = Pulsar.Producer.await_ready(second)
+
+    on_exit(fn ->
+      Pulsar.Producer.stop(first)
+      Pulsar.Producer.stop(second)
+    end)
+
+    registration_counts =
+      @client
+      |> Client.broker_registry()
+      |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [:"$2"]}])
+      |> Enum.flat_map(&BrokerPool.connections/1)
+      |> Enum.map(&Broker.get_producers/1)
+      |> Enum.map(&map_size/1)
+      |> Enum.reject(&(&1 == 0))
+      |> Enum.sort()
+
+    assert registration_counts == [1, 1]
   end
 end

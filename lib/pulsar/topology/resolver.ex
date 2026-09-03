@@ -53,15 +53,31 @@ defmodule Pulsar.Topology.Resolver do
     end
   end
 
+  @doc """
+  Returns a connection to the broker that owns `topic`, following lookup redirects to the
+  authoritative one.
+
+  Redirect lookups are stateless request/response operations, so they may use any live sibling
+  and fail fast when its socket is disconnected. The final connection is checked out from
+  `:connection_slot` when supplied, keeping a producer or consumer on the slot its topology owns.
+  """
   @spec lookup_topic(String.t(), keyword()) :: {:ok, pid()} | {:error, any()}
   def lookup_topic(topic, opts \\ []) do
     client = Keyword.get(opts, :client, :default)
+    connection_slot = Keyword.get(opts, :connection_slot, :random)
 
     :telemetry.span(
       [:pulsar, :topology, :resolver, :lookup_topic],
       %{topic: topic, client: client},
       fn ->
-        result = lookup_topic(Pulsar.Client.random_broker(client), topic, false, client)
+        result =
+          lookup_topic(
+            Pulsar.Client.random_broker(client),
+            topic,
+            false,
+            client,
+            connection_slot
+          )
 
         metadata = %{success: match?({:ok, _}, result), topic: topic, client: client}
         {result, metadata}
@@ -69,22 +85,25 @@ defmodule Pulsar.Topology.Resolver do
     )
   end
 
-  defp lookup_topic(nil, _topic, _authoritative, _client), do: {:error, :no_broker_available}
+  defp lookup_topic(nil, _topic, _authoritative, _client, _connection_slot), do: {:error, :no_broker_available}
 
-  defp lookup_topic(broker, topic, authoritative, client) do
+  defp lookup_topic(broker, topic, authoritative, client, connection_slot) do
     case Pulsar.Broker.lookup_topic(broker, topic, authoritative) do
       {:ok, %{response: :Connect} = response} ->
-        response
-        |> get_broker_url()
-        |> Pulsar.Client.start_broker(client: client)
+        Pulsar.Client.start_broker(get_broker_url(response),
+          client: client,
+          connection_slot: connection_slot
+        )
 
       {:ok, %{response: :Redirect, authoritative: authoritative} = response} ->
-        {:ok, broker} =
-          response
-          |> get_broker_url()
-          |> Pulsar.Client.start_broker(client: client)
+        case Pulsar.Client.start_broker(get_broker_url(response), client: client) do
+          {:ok, broker} ->
+            lookup_topic(broker, topic, authoritative, client, connection_slot)
 
-        lookup_topic(broker, topic, authoritative, client)
+          {:error, reason} ->
+            Logger.error("Cannot reach the broker a lookup redirected to: #{inspect(reason)}")
+            {:error, reason}
+        end
 
       {:ok, %{response: :Failed, error: error}} ->
         Logger.error("Topic lookup failed: #{inspect(error)}")

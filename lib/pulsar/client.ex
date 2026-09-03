@@ -76,7 +76,8 @@ defmodule Pulsar.Client do
               default: 1,
               doc: """
               Connections this client opens to each broker. Consumer and producer workers
-              select one connection when they register and retain it for that registration.
+              are assigned slots round-robin and retain their slot across worker and group
+              restarts. Each slot adds one process and TCP connection per discovered broker.
               Defaults to one.
               """
             ],
@@ -185,6 +186,7 @@ defmodule Pulsar.Client do
 
     :persistent_term.put(client_key(client_name), %{
       broker_opts: build_broker_opts(opts),
+      connection_slot_counter: :atomics.new(1, []),
       connections_per_broker: Keyword.fetch!(opts, :connections_per_broker),
       restart_intensity: [
         worker: Keyword.fetch!(opts, :worker_restart_intensity),
@@ -205,37 +207,32 @@ defmodule Pulsar.Client do
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  # The initial broker pool is static because it belongs to the client configuration. Pools
-  # learned through lookup remain dynamic, but both kinds register in the same registry.
+  # The configured pool starts with this supervisor; pools learned through lookup are added to
+  # the same owner. Stable URL-based child ids make pool removal unambiguous.
   defp brokers_spec(opts) do
     client = Keyword.fetch!(opts, :name)
     url = Keyword.fetch!(opts, :host)
 
-    children = [
-      {DynamicSupervisor, strategy: :one_for_one, name: broker_supervisor(client)},
-      broker_pool_spec(url, client)
-    ]
-
     %{
       id: :brokers,
-      start: {Supervisor, :start_link, [children, [strategy: :one_for_one]]},
+      start:
+        {Supervisor, :start_link,
+         [[broker_pool_spec(url, client)], [strategy: :one_for_one, name: broker_supervisor(client)]]},
       type: :supervisor
     }
   end
 
   defp broker_pool_spec(url, client, connection_opts \\ []) do
     name = {:via, Registry, {broker_registry(client), url}}
-    connection_opts = Keyword.merge(get_broker_opts(client), connection_opts)
 
     opts =
-      [name: name, connections_per_broker: connections_per_broker(client)] ++ connection_opts
+      client
+      |> get_broker_opts()
+      |> Keyword.merge(connection_opts)
+      |> Keyword.put(:connections_per_broker, connections_per_broker(client))
+      |> Keyword.put(:name, name)
 
-    %{
-      id: {:broker_pool, url},
-      start: {BrokerPool, :start_link, [url, opts]},
-      type: :supervisor,
-      restart: :permanent
-    }
+    BrokerPool.child_spec({url, opts})
   end
 
   # Separate branches isolate consumer and producer failures. OTP's default intensity at this
@@ -388,12 +385,24 @@ defmodule Pulsar.Client do
   @spec connections_per_broker(atom()) :: pos_integer()
   def connections_per_broker(client_name), do: client_term(client_name, :connections_per_broker)
 
-  defp client_term(client_name, key) do
-    client_name
-    |> client_key()
-    |> :persistent_term.get(@default_client_terms)
-    |> Map.fetch!(key)
+  @doc false
+  @spec allocate_connection_slots(atom(), pos_integer()) :: [non_neg_integer()]
+  def allocate_connection_slots(client_name, count) when is_integer(count) and count > 0 do
+    case client_terms(client_name) do
+      %{connection_slot_counter: counter, connections_per_broker: pool_size} ->
+        last = :atomics.add_get(counter, 1, count)
+        Enum.map((last - count)..(last - 1), &rem(&1, pool_size))
+
+      _no_client ->
+        List.duplicate(0, count)
+    end
   end
+
+  defp client_term(client_name, key) do
+    client_name |> client_terms() |> Map.fetch!(key)
+  end
+
+  defp client_terms(client_name), do: :persistent_term.get(client_key(client_name), @default_client_terms)
 
   @doc """
   Returns a connection from a random broker pool registered to the specified client.
@@ -408,9 +417,9 @@ defmodule Pulsar.Client do
     |> registered_broker_pools()
     |> Enum.shuffle()
     |> Enum.find_value(fn pool ->
-      case BrokerPool.checkout(pool) do
+      case BrokerPool.checkout(pool, :random) do
         {:ok, broker} -> broker
-        {:error, :not_found} -> nil
+        {:error, _reason} -> nil
       end
     end)
   end
@@ -442,27 +451,31 @@ defmodule Pulsar.Client do
   If a pool for the given URL already exists, returns one of its connections.
   Otherwise, starts a pool with the client-configured number of connections and returns one.
 
+  The internal `:connection_slot` option selects a numbered pool member. By default, any live
+  connection process is returned, including one that is currently reconnecting.
+
   Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_broker(broker_url, opts \\ []) do
     client = Keyword.get(opts, :client, :default)
+    connection_slot = Keyword.get(opts, :connection_slot, :random)
     broker_supervisor = broker_supervisor(client)
 
     case lookup_broker_pool(broker_url, client) do
       {:ok, pool_pid} ->
-        BrokerPool.checkout(pool_pid)
+        BrokerPool.checkout(pool_pid, connection_slot)
 
       {:error, :not_found} ->
-        connection_opts = Keyword.drop(opts, [:client, :connections_per_broker])
+        connection_opts = Keyword.drop(opts, [:client, :connection_slot, :connections_per_broker])
         child_spec = broker_pool_spec(broker_url, client, connection_opts)
 
-        case DynamicSupervisor.start_child(broker_supervisor, child_spec) do
+        case Supervisor.start_child(broker_supervisor, child_spec) do
           {:ok, pool_pid} ->
-            BrokerPool.checkout(pool_pid)
+            BrokerPool.checkout(pool_pid, connection_slot)
 
           {:error, {:already_started, pool_pid}} ->
-            BrokerPool.checkout(pool_pid)
+            BrokerPool.checkout(pool_pid, connection_slot)
 
           {:error, reason} ->
             {:error, reason}
@@ -473,14 +486,16 @@ defmodule Pulsar.Client do
   @doc """
   Looks up an existing broker pool by URL and selects one of its connections.
 
-  Returns `{:ok, broker_pid}` if found, `{:error, :not_found}` otherwise.
+  Returns `{:ok, broker_pid}` if found, or an error when the pool or requested connection is
+  unavailable.
   """
-  @spec lookup_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, :not_found}
+  @spec lookup_broker(String.t(), keyword()) ::
+          {:ok, pid()} | {:error, :not_found | :disconnected}
   def lookup_broker(broker_url, opts \\ []) do
     client = Keyword.get(opts, :client, :default)
 
     with {:ok, pool} <- lookup_broker_pool(broker_url, client) do
-      BrokerPool.checkout(pool)
+      BrokerPool.checkout(pool, Keyword.get(opts, :connection_slot, :random))
     end
   end
 
@@ -489,18 +504,25 @@ defmodule Pulsar.Client do
   end
 
   @doc """
-  Stops a broker connection by broker URL.
+  Stops and removes the entire pool for a broker URL, including all of its connections.
+
+  A later lookup may discover and start a new pool for the URL.
   """
   @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
   def stop_broker(broker_url, opts \\ []) do
-    case lookup_broker(broker_url, opts) do
-      {:ok, broker_pid} ->
-        Pulsar.Broker.stop(broker_pid)
-        :ok
+    client = Keyword.get(opts, :client, :default)
+    supervisor = broker_supervisor(client)
+    child_id = {:broker_pool, broker_url}
 
-      {:error, :not_found} ->
-        {:error, :not_found}
+    with :ok <- Supervisor.terminate_child(supervisor, child_id) do
+      Supervisor.delete_child(supervisor, child_id)
     end
+  catch
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, :not_found}
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      {:error, :not_found}
   end
 
   @doc """

@@ -16,23 +16,30 @@ defmodule Pulsar.Topology.Group do
   def init({worker, count, opts}) do
     name = Keyword.fetch!(opts, :name)
     client = Keyword.fetch!(opts, :client)
+    connection_slots = Keyword.fetch!(opts, :connection_slots)
+    worker_opts = Keyword.delete(opts, :connection_slots)
 
     Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
     )
 
     children =
-      for i <- 1..count do
+      1..count
+      |> Enum.zip(connection_slots)
+      |> Enum.map(fn {i, connection_slot} ->
         # Workers need distinct names within a group; producer epochs are keyed by this identity.
         worker_name = "#{name}-#{i}"
 
+        worker_opts =
+          Keyword.merge(worker_opts, name: worker_name, connection_slot: connection_slot)
+
         %{
           id: worker_name,
-          start: {worker, :start_link, [Keyword.put(opts, :name, worker_name)]},
-          restart: worker_restart(worker, opts),
+          start: {worker, :start_link, [worker_opts]},
+          restart: worker_restart(worker, worker_opts),
           type: :worker
         }
-      end
+      end)
 
     # Consumer workers are transient, so a callback can finish one normally without spending a
     # restart. Groups and every boundary above them remain permanent, which lets abnormal worker

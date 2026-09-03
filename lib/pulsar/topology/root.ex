@@ -204,6 +204,13 @@ defmodule Pulsar.Topology.Root do
   defp worker_count(:producers, _opts), do: 1
 
   defp group_child_spec(id, worker, worker_count, opts) do
+    connection_slots =
+      opts
+      |> Keyword.fetch!(:client)
+      |> Client.allocate_connection_slots(worker_count)
+
+    opts = Keyword.put(opts, :connection_slots, connection_slots)
+
     %{
       id: id,
       start: {Group, :start_link, [worker, worker_count, opts]},
