@@ -460,7 +460,8 @@ defmodule Pulsar.Client do
   The internal `:connection_slot` option selects a numbered pool member. By default, any live
   connection process is returned, including one that is currently reconnecting.
 
-  Returns `{:ok, broker_pid}` if successful, `{:error, reason}` otherwise.
+  Returns `{:ok, broker_pid}` if successful or `{:error, reason}` for runtime failures.
+  Invalid broker connection options raise `NimbleOptions.ValidationError`.
   """
   @spec start_broker(String.t(), keyword()) :: {:ok, pid()} | {:error, term()}
   def start_broker(broker_url, opts \\ []) do
