@@ -90,20 +90,8 @@ defmodule Pulsar.Broker do
   #{Options.docs()}
   """
   @spec start_link(String.t(), keyword()) :: {:ok, pid()} | :ignore | {:error, term()}
-  def start_link(broker_url, opts \\ []) do
-    name = Keyword.get(opts, :name, nil)
-
-    args = Keyword.put(opts, :url, broker_url)
-
-    start_opts = Keyword.take(opts, [:name])
-
-    case name do
-      nil ->
-        :gen_statem.start_link(__MODULE__, args, start_opts)
-
-      name ->
-        :gen_statem.start_link(name, __MODULE__, args, start_opts)
-    end
+  def start_link(broker_url, opts) do
+    :gen_statem.start_link(__MODULE__, Keyword.put(opts, :url, broker_url), [])
   end
 
   @doc """
@@ -204,7 +192,7 @@ defmodule Pulsar.Broker do
   @impl true
   def init(opts) do
     opts = Options.validate!(opts)
-    name = Keyword.get(opts, :name)
+    connection_slot = Keyword.fetch!(opts, :connection_slot)
     uri = URI.parse(Keyword.fetch!(opts, :url))
     host = Map.get(uri, :host, "localhost")
     port = Map.get(uri, :port, default_port(uri.scheme))
@@ -219,7 +207,7 @@ defmodule Pulsar.Broker do
     # settings across; only what is derived from the URL is set explicitly.
     broker = %{
       struct(__MODULE__, opts)
-      | name: connection_name(name || broker_key(to_string(uri)), Keyword.get(opts, :connection_slot)),
+      | name: connection_name(broker_key(to_string(uri)), connection_slot),
         host: host,
         port: port,
         socket_module: socket_module
@@ -937,10 +925,7 @@ defmodule Pulsar.Broker do
     "#{host}:#{port}"
   end
 
-  defp connection_name(name, nil) when is_binary(name), do: name
-  defp connection_name(name, nil), do: inspect(name)
-  defp connection_name(name, slot) when is_binary(name), do: "#{name}##{slot}"
-  defp connection_name(name, slot), do: "#{inspect(name)}##{slot}"
+  defp connection_name(name, slot) when is_binary(name) and is_integer(slot) and slot >= 0, do: "#{name}##{slot}"
 
   defp close_socket(%__MODULE__{socket: nil}), do: :ok
 

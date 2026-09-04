@@ -222,13 +222,12 @@ defmodule Pulsar.Client do
     }
   end
 
-  defp broker_pool_spec(url, client, connection_opts \\ []) do
+  defp broker_pool_spec(url, client) do
     name = {:via, Registry, {broker_registry(client), url}}
 
     opts =
       client
       |> get_broker_opts()
-      |> Keyword.merge(connection_opts)
       |> Keyword.put(:connections_per_broker, connections_per_broker(client))
       |> Keyword.put(:name, name)
 
@@ -468,8 +467,7 @@ defmodule Pulsar.Client do
         BrokerPool.checkout(pool_pid, connection_slot)
 
       {:error, :not_found} ->
-        connection_opts = Keyword.drop(opts, [:client, :connection_slot, :connections_per_broker])
-        child_spec = broker_pool_spec(broker_url, client, connection_opts)
+        child_spec = broker_pool_spec(broker_url, client)
         start_broker_connection(broker_supervisor, child_spec, connection_slot)
     end
   end
