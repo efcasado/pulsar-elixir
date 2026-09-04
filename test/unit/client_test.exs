@@ -474,6 +474,20 @@ defmodule Pulsar.ClientTest do
       assert Enum.map(connections, settings) == [{300, 400}, {300, 400}]
     end
 
+    test "rejects unknown per-call broker options" do
+      client = :invalid_broker_pool_connection_options
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      start_supervised!({Client, name: client, host: url})
+
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:conn_timout/, fn ->
+        Client.start_broker(redirected_url, client: client, conn_timout: 300)
+      end
+
+      assert Registry.lookup(Client.broker_registry(client), redirected_url) == []
+    end
+
     test "checks a worker out by its slot and any connection out for a lookup" do
       client = :pooled_checkout
       url = "pulsar://127.0.0.1:1"
@@ -533,7 +547,7 @@ defmodule Pulsar.ClientTest do
       client = :retained_stopped_pool
       url = "pulsar://127.0.0.1:1"
 
-      client_pid = start_supervised!({Client, name: client, host: url})
+      client_pid = start_supervised!({Client, name: client, host: url, conn_timeout: 100})
       brokers = child_pid(client_pid, :brokers)
       old_pool = child_pid(brokers, {:broker_pool, url})
 
@@ -545,11 +559,14 @@ defmodule Pulsar.ClientTest do
         description: "terminated broker pool to leave its registry"
       )
 
-      assert {:ok, connection} = Client.start_broker(url, client: client)
+      assert {:ok, connection} = Client.start_broker(url, client: client, conn_timeout: 300)
 
       new_pool = child_pid(brokers, {:broker_pool, url})
       assert new_pool != old_pool
       assert BrokerPool.connections(new_pool) == [connection]
+
+      {_state, broker} = :sys.get_state(connection)
+      assert broker.conn_timeout == 100
     end
 
     test "allocates logical worker slots round-robin" do

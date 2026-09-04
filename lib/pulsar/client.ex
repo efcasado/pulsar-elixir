@@ -229,6 +229,7 @@ defmodule Pulsar.Client do
       client
       |> get_broker_opts()
       |> Keyword.merge(connection_opts)
+      |> NimbleOptions.validate!(BrokerOptions.schema())
       |> Keyword.put(:connections_per_broker, connections_per_broker(client))
       |> Keyword.put(:name, name)
 
