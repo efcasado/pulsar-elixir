@@ -40,7 +40,8 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
       description: "every pooled broker connection to complete its handshake"
     )
 
-    assert Client.random_broker(@client) in connections
+    assert {:ok, selected} = Client.lookup_broker(broker.service_url, client: @client)
+    assert selected in BrokerPool.connections(pool)
 
     for connection <- connections do
       assert {:ok, %{response: :Success, partitions: 0}} =
