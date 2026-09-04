@@ -438,6 +438,42 @@ defmodule Pulsar.ClientTest do
              ]
     end
 
+    test "applies per-call options only when creating a broker pool" do
+      client = :broker_pool_connection_options
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      start_supervised!(
+        {Client, name: client, host: url, connections_per_broker: 2, conn_timeout: 100, request_timeout: 200}
+      )
+
+      assert {:ok, _connection} =
+               Client.start_broker(redirected_url,
+                 client: client,
+                 conn_timeout: 300,
+                 request_timeout: 400
+               )
+
+      [{pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+      connections = BrokerPool.connections(pool)
+
+      settings = fn connection ->
+        {_state, broker} = :sys.get_state(connection)
+        {broker.conn_timeout, broker.request_timeout}
+      end
+
+      assert Enum.map(connections, settings) == [{300, 400}, {300, 400}]
+
+      assert {:ok, _connection} =
+               Client.start_broker(redirected_url,
+                 client: client,
+                 conn_timeout: 500,
+                 request_timeout: 600
+               )
+
+      assert Enum.map(connections, settings) == [{300, 400}, {300, 400}]
+    end
+
     test "checks a worker out by its slot and any connection out for a lookup" do
       client = :pooled_checkout
       url = "pulsar://127.0.0.1:1"

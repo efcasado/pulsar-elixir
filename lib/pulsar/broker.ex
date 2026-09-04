@@ -195,12 +195,11 @@ defmodule Pulsar.Broker do
     connection_slot = Keyword.fetch!(opts, :connection_slot)
     uri = URI.parse(Keyword.fetch!(opts, :url))
     host = uri.host
-    port = uri.port || default_port(uri.scheme)
 
-    socket_module =
+    {socket_module, port} =
       case uri.scheme do
-        "pulsar+ssl" -> :ssl
-        "pulsar" -> :gen_tcp
+        "pulsar" -> {:gen_tcp, uri.port || 6650}
+        "pulsar+ssl" -> {:ssl, uri.port || 6651}
       end
 
     # Option names and struct field names are the same, so struct/2 carries the client's
@@ -915,10 +914,6 @@ defmodule Pulsar.Broker do
   end
 
   defp get_auth_data(_), do: ""
-
-  defp default_port("pulsar+ssl"), do: 6651
-  defp default_port("pulsar"), do: 6650
-  defp default_port(_), do: 6650
 
   defp close_socket(%__MODULE__{socket: nil}), do: :ok
 

@@ -222,12 +222,13 @@ defmodule Pulsar.Client do
     }
   end
 
-  defp broker_pool_spec(url, client) do
+  defp broker_pool_spec(url, client, connection_opts \\ []) do
     name = {:via, Registry, {broker_registry(client), url}}
 
     opts =
       client
       |> get_broker_opts()
+      |> Keyword.merge(connection_opts)
       |> Keyword.put(:connections_per_broker, connections_per_broker(client))
       |> Keyword.put(:name, name)
 
@@ -451,6 +452,10 @@ defmodule Pulsar.Client do
   If a pool for the given URL already exists, returns one of its connections.
   Otherwise, starts a pool with the client-configured number of connections and returns one.
 
+  Broker connection options passed to this function override the client's settings when creating
+  a new pool. Once a pool exists, later calls select from its stored configuration instead of
+  reconfiguring it.
+
   The internal `:connection_slot` option selects a numbered pool member. By default, any live
   connection process is returned, including one that is currently reconnecting.
 
@@ -467,7 +472,8 @@ defmodule Pulsar.Client do
         BrokerPool.checkout(pool_pid, connection_slot)
 
       {:error, :not_found} ->
-        child_spec = broker_pool_spec(broker_url, client)
+        connection_opts = Keyword.drop(opts, [:client, :connection_slot, :connections_per_broker])
+        child_spec = broker_pool_spec(broker_url, client, connection_opts)
         start_broker_connection(broker_supervisor, child_spec, connection_slot)
     end
   end

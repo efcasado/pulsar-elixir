@@ -93,6 +93,23 @@ MyApp.Supervisor
             └── Bootstrap
 ```
 
+Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
+does not take runtime producers down with it, and the reverse is also true. If the broker
+infrastructure itself must be rebuilt, the resource subtree is later in the dependency
+chain and is rebuilt as well. An individual broker connection loss normally affects the
+workers using that connection rather than restarting every resource branch.
+
+Each branch also has a <code>Pulsar.Client.Bootstrap</code> process. It registers declared resource
+roots before branch startup completes and recreates those declarations when the branch starts
+again. Topic discovery and worker initialization remain asynchronous.
+
+### Broker Connection Pools
+
+Each broker connection is an independent process with its own TCP stream, mailbox, frame buffer,
+and pending requests. A pool keeps all consumer and producer workers for a broker from contending
+on those serialized resources. Increasing the pool size also opens another process and TCP
+connection to every discovered broker, so it is a throughput setting rather than a worker count.
+
 The client-configured broker pool starts with the broker supervisor. Pools learned through topic
 lookup are added to the same supervisor. Every pool has a stable URL-based child id and registers
 in the broker registry, which maps service URLs to pool processes. Each pool owns
@@ -100,6 +117,11 @@ in the broker registry, which maps service URLs to pool processes. Each pool own
 removes that entire pool from the supervisor; a later lookup may discover and start it again.
 Stopping the final pool also removes the client's discovery path. In that case an application must
 explicitly start a broker URL again, or restart the client to restore its configured bootstrap pool.
+
+Broker connection options configured on the client seed every pool. When
+`Pulsar.Client.start_broker/2` creates a pool for a previously unknown URL, options passed to that
+call override the client defaults for the new pool. Once the URL has a running or retained pool
+child specification, later calls select or restart that pool without reconfiguring it.
 
 When a partition group is created, its stable topology root assigns its workers connection slots
 round-robin and records those slots in the group's child specification. Each worker's own child
@@ -111,16 +133,6 @@ any live sibling process; if its socket is disconnected, the operation fails fas
 metadata backoff retries. The consumer and producer registries map application-facing names to
 stable topology roots; internal partition groups and broker pools are not exposed as public
 resources.
-
-Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
-does not take runtime producers down with it, and the reverse is also true. If the broker
-infrastructure itself must be rebuilt, the resource subtree is later in the dependency
-chain and is rebuilt as well. An individual broker connection loss normally affects the
-workers using that connection rather than restarting every resource branch.
-
-Each branch also has a <code>Pulsar.Client.Bootstrap</code> process. It registers declared resource
-roots before branch startup completes and recreates those declarations when the branch starts
-again. Topic discovery and worker initialization remain asynchronous.
 
 ## Logical Resources and Stable Roots
 
