@@ -98,6 +98,8 @@ lookup are added to the same supervisor. Every pool has a stable URL-based child
 in the broker registry, which maps service URLs to pool processes. Each pool owns
 `:connections_per_broker` connection processes, one by default. Explicitly stopping a broker URL
 removes that entire pool from the supervisor; a later lookup may discover and start it again.
+Stopping the final pool also removes the client's discovery path. In that case an application must
+explicitly start a broker URL again, or restart the client to restore its configured bootstrap pool.
 
 When a partition group is created, its stable topology root assigns its workers connection slots
 round-robin and records those slots in the group's child specification. Each worker's own child

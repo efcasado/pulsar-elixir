@@ -196,7 +196,7 @@ defmodule Pulsar.ClientTest do
       assert Client.producers(:never_started) == []
     end
 
-    test "broker removal tolerates an abnormal supervisor exit during deletion" do
+    test "broker removal reports an abnormal supervisor exit during deletion" do
       client = :crashing_broker_removal
 
       {:ok, _supervisor} =
@@ -205,7 +205,7 @@ defmodule Pulsar.ClientTest do
           :unexpected
         )
 
-      assert Client.stop_broker("pulsar://127.0.0.1:6650", client: client) == {:error, :not_found}
+      assert Client.stop_broker("pulsar://127.0.0.1:6650", client: client) == {:error, :unavailable}
     end
 
     test "send and stop keep their contracts" do
@@ -430,6 +430,12 @@ defmodule Pulsar.ClientTest do
 
       assert length(redirected_connections) == 3
       assert redirected in redirected_connections
+
+      assert Enum.map(initial_connections, &broker_identity/1) == [
+               {0, "127.0.0.1:1#0"},
+               {1, "127.0.0.1:1#1"},
+               {2, "127.0.0.1:1#2"}
+             ]
     end
 
     test "checks a worker out by its slot and any connection out for a lookup" do
@@ -487,12 +493,13 @@ defmodule Pulsar.ClientTest do
       assert BrokerPool.checkout(pool, :random) == {:error, :disconnected}
     end
 
-    test "classifies a retained stopped pool as disconnected" do
+    test "repairs a retained stopped pool before starting it again" do
       client = :retained_stopped_pool
       url = "pulsar://127.0.0.1:1"
 
       client_pid = start_supervised!({Client, name: client, host: url})
       brokers = child_pid(client_pid, :brokers)
+      old_pool = child_pid(brokers, {:broker_pool, url})
 
       assert :ok = Supervisor.terminate_child(brokers, {:broker_pool, url})
 
@@ -502,7 +509,11 @@ defmodule Pulsar.ClientTest do
         description: "terminated broker pool to leave its registry"
       )
 
-      assert Client.start_broker(url, client: client) == {:error, :disconnected}
+      assert {:ok, connection} = Client.start_broker(url, client: client)
+
+      new_pool = child_pid(brokers, {:broker_pool, url})
+      assert new_pool != old_pool
+      assert BrokerPool.connections(new_pool) == [connection]
     end
 
     test "allocates logical worker slots round-robin" do
@@ -537,6 +548,7 @@ defmodule Pulsar.ClientTest do
       )
 
       assert Client.lookup_broker(url, client: client) == {:error, :not_found}
+      assert Client.random_broker(client) == nil
 
       # Starting the URL again adds a new pool under the same owner.
       assert {:ok, _connection} = Client.start_broker(url, client: client)
@@ -688,5 +700,10 @@ defmodule Pulsar.ClientTest do
     supervisor
     |> Supervisor.which_children()
     |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
+  end
+
+  defp broker_identity(connection) do
+    {_state, broker} = :sys.get_state(connection)
+    {broker.connection_slot, broker.name}
   end
 end

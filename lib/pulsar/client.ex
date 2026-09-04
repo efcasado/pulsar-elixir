@@ -430,7 +430,8 @@ defmodule Pulsar.Client do
     ArgumentError -> []
   end
 
-  # An unavailable supervisor contributes no children during startup or restart.
+  # Normal startup and restart gaps contribute no resources to a public listing. An abnormal
+  # branch exit still surfaces: unlike broker checkout, a listing has no retryable error result.
   defp children_of(supervisor) do
     Supervisor.which_children(supervisor)
   catch
@@ -469,20 +470,64 @@ defmodule Pulsar.Client do
       {:error, :not_found} ->
         connection_opts = Keyword.drop(opts, [:client, :connection_slot, :connections_per_broker])
         child_spec = broker_pool_spec(broker_url, client, connection_opts)
+        start_broker_connection(broker_supervisor, child_spec, connection_slot)
+    end
+  end
 
-        case Supervisor.start_child(broker_supervisor, child_spec) do
-          {:ok, pool_pid} ->
-            BrokerPool.checkout(pool_pid, connection_slot)
+  # A stopped child specification may outlive whichever process terminated it. Restart that
+  # specification regardless of how it became orphaned. One repair attempt is enough: any further
+  # :already_present is a concurrent lifecycle operation for the caller's existing backoff to retry.
+  defp start_broker_connection(supervisor, child_spec, connection_slot, repair? \\ true) do
+    case Supervisor.start_child(supervisor, child_spec) do
+      {:ok, pool_pid} ->
+        BrokerPool.checkout(pool_pid, connection_slot)
 
-          {:error, {:already_started, pool_pid}} ->
-            BrokerPool.checkout(pool_pid, connection_slot)
+      {:error, {:already_started, pool_pid}} ->
+        BrokerPool.checkout(pool_pid, connection_slot)
 
-          {:error, :already_present} ->
-            {:error, :disconnected}
+      {:error, :already_present} when repair? ->
+        restart_broker_connection(supervisor, child_spec, connection_slot)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+      {:error, :already_present} ->
+        {:error, :disconnected}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  catch
+    :exit, {_reason, {GenServer, :call, _call}} ->
+      {:error, :disconnected}
+  end
+
+  defp restart_broker_connection(supervisor, child_spec, connection_slot) do
+    case Supervisor.restart_child(supervisor, child_spec.id) do
+      {:ok, pool_pid} ->
+        BrokerPool.checkout(pool_pid, connection_slot)
+
+      {:ok, pool_pid, _info} ->
+        BrokerPool.checkout(pool_pid, connection_slot)
+
+      {:error, {:already_started, pool_pid}} ->
+        BrokerPool.checkout(pool_pid, connection_slot)
+
+      {:error, reason} when reason in [:running, :restarting] ->
+        checkout_broker_child(supervisor, child_spec.id, connection_slot)
+
+      {:error, :not_found} ->
+        start_broker_connection(supervisor, child_spec, connection_slot, false)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp checkout_broker_child(supervisor, child_id, connection_slot) do
+    case List.keyfind(Supervisor.which_children(supervisor), child_id, 0) do
+      {^child_id, pool_pid, :supervisor, _modules} when is_pid(pool_pid) ->
+        BrokerPool.checkout(pool_pid, connection_slot)
+
+      _unavailable ->
+        {:error, :disconnected}
     end
   end
 
@@ -509,9 +554,16 @@ defmodule Pulsar.Client do
   @doc """
   Stops and removes the entire pool for a broker URL, including all of its connections.
 
-  A later lookup may discover and start a new pool for the URL.
+  A later lookup may discover and start a new pool for the URL. If this removes the client's
+  final pool, discovery has no broker to ask until `start_broker/2` starts one explicitly or the
+  client restarts its configured bootstrap pool.
+
+  Returns `:ok` after removing the pool, `{:error, :not_found}` when the client or pool is absent,
+  `{:error, :running}` or `{:error, :restarting}` if a concurrent operation starts it during
+  removal, or `{:error, :unavailable}` if the broker supervisor fails during the operation.
   """
-  @spec stop_broker(String.t(), keyword()) :: :ok | {:error, :not_found}
+  @spec stop_broker(String.t(), keyword()) ::
+          :ok | {:error, :not_found | :running | :restarting | :unavailable}
   def stop_broker(broker_url, opts \\ []) do
     client = Keyword.get(opts, :client, :default)
     supervisor = broker_supervisor(client)
@@ -521,8 +573,14 @@ defmodule Pulsar.Client do
       Supervisor.delete_child(supervisor, child_id)
     end
   catch
-    :exit, {_reason, {GenServer, :call, _call}} ->
+    :exit, {reason, {GenServer, :call, _call}} when reason in [:noproc, :normal, :shutdown] ->
       {:error, :not_found}
+
+    :exit, {{:shutdown, _reason}, {GenServer, :call, _call}} ->
+      {:error, :not_found}
+
+    :exit, {_reason, {GenServer, :call, _call}} ->
+      {:error, :unavailable}
   end
 
   @doc """

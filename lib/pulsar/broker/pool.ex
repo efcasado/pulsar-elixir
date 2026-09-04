@@ -32,16 +32,14 @@ defmodule Pulsar.Broker.Pool do
   @spec checkout(Supervisor.supervisor(), non_neg_integer() | :random) ::
           {:ok, pid()} | {:error, :disconnected}
   def checkout(pool, connection_slot) when is_integer(connection_slot) and connection_slot >= 0 do
-    child_id = {:connection, connection_slot}
-
-    case List.keyfind(children(pool), child_id, 0) do
-      {^child_id, pid, :worker, _modules} when is_pid(pid) -> {:ok, pid}
+    case List.keyfind(connection_entries(pool), connection_slot, 0) do
+      {^connection_slot, pid} -> {:ok, pid}
       _unavailable -> {:error, :disconnected}
     end
   end
 
   def checkout(pool, :random) do
-    case connections(pool) do
+    case Enum.map(connection_entries(pool), &elem(&1, 1)) do
       [] -> {:error, :disconnected}
       connections -> {:ok, Enum.random(connections)}
     end
@@ -51,15 +49,18 @@ defmodule Pulsar.Broker.Pool do
   @spec connections(Supervisor.supervisor()) :: [pid()]
   def connections(pool) do
     pool
-    |> children()
-    |> Enum.filter(fn
-      {{:connection, _slot}, pid, :worker, _modules} when is_pid(pid) -> true
-      _child -> false
-    end)
-    |> Enum.sort_by(fn {{:connection, slot}, _pid, :worker, _modules} -> slot end)
-    |> Enum.map(fn {{:connection, _slot}, pid, :worker, _modules} -> pid end)
+    |> connection_entries()
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
 
+  defp connection_entries(pool) do
+    for {{:connection, slot}, pid, :worker, _modules} <- children(pool), is_pid(pid), do: {slot, pid}
+  end
+
+  # Once a public lookup has selected a pool, any exit of that exact supervisor call means the
+  # selected pool disappeared in the lookup/use race and is therefore disconnected. Resource
+  # listings use a different policy because they have no retryable error result.
   defp children(pool) do
     Supervisor.which_children(pool)
   catch
@@ -75,7 +76,7 @@ defmodule Pulsar.Broker.Pool do
       for slot <- 0..(connections_per_broker - 1) do
         %{
           id: {:connection, slot},
-          start: {Pulsar.Broker, :start_link, [broker_url, broker_opts]},
+          start: {Pulsar.Broker, :start_link, [broker_url, Keyword.put(broker_opts, :connection_slot, slot)]},
           restart: :permanent
         }
       end
