@@ -123,6 +123,11 @@ Broker connection options configured on the client seed every pool. When
 call override the client defaults for the new pool. Once the URL has a running or retained pool
 child specification, later calls select or restart that pool without reconfiguring it.
 
+Socket failures reconnect inside their connection process and do not spend the pool supervisor's
+restart budget. A connection process exit does. The pool scales OTP's default restart count by its
+connection count, so increasing the pool does not reduce the number of exits tolerated per
+connection before the pool itself is restarted.
+
 When a partition group is created, its stable topology root assigns its workers connection slots
 round-robin and records those slots in the group's child specification. Each worker's own child
 specification also carries its slot, so worker and group restarts retain the assignment. A worker

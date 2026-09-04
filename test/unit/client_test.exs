@@ -635,6 +635,40 @@ defmodule Pulsar.ClientTest do
       assert sibling in connections
     end
 
+    test "keeps the pool when every connection exits once within its restart window" do
+      client = :pooled_connection_restart_budget
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 4})
+
+      brokers = child_pid(client_pid, :brokers)
+      pool = child_pid(brokers, {:broker_pool, url})
+      pool_ref = Process.monitor(pool)
+
+      pool
+      |> BrokerPool.connections()
+      |> Enum.with_index()
+      |> Enum.each(fn {connection, slot} ->
+        connection_ref = Process.monitor(connection)
+        Process.exit(connection, :kill)
+        assert_receive {:DOWN, ^connection_ref, :process, ^connection, :killed}
+
+        Utils.wait_for(
+          fn -> Client.lookup_broker(url, client: client, connection_slot: slot) end,
+          until: fn
+            {:ok, restarted} -> restarted != connection
+            _unavailable -> false
+          end,
+          description: "broker connection in slot #{slot} to restart"
+        )
+      end)
+
+      assert Process.alive?(pool)
+      refute_received {:DOWN, ^pool_ref, :process, ^pool, _reason}
+      assert child_pid(brokers, {:broker_pool, url}) == pool
+    end
+
     test "carries the connection tunables to the broker with their defaults" do
       start_supervised!({Client, name: :broker_defaults, host: "pulsar://127.0.0.1:1"})
 

@@ -81,6 +81,8 @@ defmodule Pulsar.Broker.Pool do
         }
       end
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # Socket failures reconnect inside Broker and never reach this supervisor. Scale OTP's default
+    # restart budget by pool size so process exits retain the same per-connection tolerance.
+    Supervisor.init(children, strategy: :one_for_one, max_restarts: 3 * connections_per_broker)
   end
 end
