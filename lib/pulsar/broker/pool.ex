@@ -19,8 +19,8 @@ defmodule Pulsar.Broker.Pool do
 
   @spec start_link(String.t(), keyword()) :: Supervisor.on_start()
   def start_link(broker_url, opts) do
-    start_opts = Keyword.take(opts, [:name])
-    Supervisor.start_link(__MODULE__, {broker_url, opts}, start_opts)
+    {name, broker_opts} = Keyword.pop!(opts, :name)
+    Supervisor.start_link(__MODULE__, {broker_url, broker_opts}, name: name)
   end
 
   @doc """
@@ -39,9 +39,13 @@ defmodule Pulsar.Broker.Pool do
   end
 
   def checkout(pool, :random) do
-    case Enum.map(connection_entries(pool), &elem(&1, 1)) do
-      [] -> {:error, :disconnected}
-      connections -> {:ok, Enum.random(connections)}
+    case connection_entries(pool) do
+      [] ->
+        {:error, :disconnected}
+
+      entries ->
+        {_slot, connection} = Enum.random(entries)
+        {:ok, connection}
     end
   end
 
@@ -69,8 +73,7 @@ defmodule Pulsar.Broker.Pool do
 
   @impl true
   def init({broker_url, opts}) do
-    {connections_per_broker, opts} = Keyword.pop!(opts, :connections_per_broker)
-    broker_opts = Keyword.delete(opts, :name)
+    {connections_per_broker, broker_opts} = Keyword.pop!(opts, :connections_per_broker)
 
     children =
       for slot <- 0..(connections_per_broker - 1) do

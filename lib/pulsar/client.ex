@@ -414,15 +414,16 @@ defmodule Pulsar.Client do
   """
   @spec random_broker(atom()) :: pid() | nil
   def random_broker(client_name \\ :default) do
-    client_name
-    |> registered_broker_pools()
-    |> Enum.shuffle()
-    |> Enum.find_value(fn pool ->
-      case BrokerPool.checkout(pool, :random) do
-        {:ok, broker} -> broker
-        {:error, _reason} -> nil
-      end
-    end)
+    case registered_broker_pools(client_name) do
+      [] ->
+        nil
+
+      pools ->
+        case pools |> Enum.random() |> BrokerPool.checkout(:random) do
+          {:ok, broker} -> broker
+          {:error, :disconnected} -> nil
+        end
+    end
   end
 
   defp registered_broker_pools(client_name) do
@@ -467,35 +468,36 @@ defmodule Pulsar.Client do
   def start_broker(broker_url, opts \\ []) do
     client = Keyword.get(opts, :client, :default)
     connection_slot = Keyword.get(opts, :connection_slot, :random)
-    broker_supervisor = broker_supervisor(client)
 
+    with {:ok, pool} <- ensure_broker_pool(broker_url, client, opts) do
+      BrokerPool.checkout(pool, connection_slot)
+    end
+  end
+
+  defp ensure_broker_pool(broker_url, client, opts) do
     case lookup_broker_pool(broker_url, client) do
-      {:ok, pool_pid} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+      {:ok, pool} ->
+        {:ok, pool}
 
       {:error, :not_found} ->
         connection_opts = Keyword.drop(opts, [:client, :connection_slot, :connections_per_broker])
         child_spec = broker_pool_spec(broker_url, client, connection_opts)
-        start_broker_connection(broker_supervisor, child_spec, connection_slot)
+        start_broker_pool(broker_supervisor(client), child_spec)
     end
   end
 
   # A stopped child specification may outlive whichever process terminated it. Restart that
-  # specification regardless of how it became orphaned. One repair attempt is enough: any further
-  # :already_present is a concurrent lifecycle operation for the caller's existing backoff to retry.
-  defp start_broker_connection(supervisor, child_spec, connection_slot, repair? \\ true) do
+  # specification regardless of how it became orphaned.
+  defp start_broker_pool(supervisor, child_spec) do
     case Supervisor.start_child(supervisor, child_spec) do
-      {:ok, pool_pid} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+      {:ok, pool} ->
+        {:ok, pool}
 
-      {:error, {:already_started, pool_pid}} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
-
-      {:error, :already_present} when repair? ->
-        restart_broker_connection(supervisor, child_spec, connection_slot)
+      {:error, {:already_started, pool}} ->
+        {:ok, pool}
 
       {:error, :already_present} ->
-        {:error, :disconnected}
+        restart_broker_pool(supervisor, child_spec.id)
 
       {:error, reason} ->
         {:error, reason}
@@ -505,32 +507,34 @@ defmodule Pulsar.Client do
       {:error, :disconnected}
   end
 
-  defp restart_broker_connection(supervisor, child_spec, connection_slot) do
-    case Supervisor.restart_child(supervisor, child_spec.id) do
-      {:ok, pool_pid} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+  defp restart_broker_pool(supervisor, child_id) do
+    case Supervisor.restart_child(supervisor, child_id) do
+      {:ok, pool} ->
+        {:ok, pool}
 
-      {:ok, pool_pid, _info} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+      {:ok, pool, _info} ->
+        {:ok, pool}
 
-      {:error, {:already_started, pool_pid}} ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+      {:error, {:already_started, pool}} ->
+        {:ok, pool}
 
       {:error, reason} when reason in [:running, :restarting] ->
-        checkout_broker_child(supervisor, child_spec.id, connection_slot)
+        find_broker_pool(supervisor, child_id)
 
       {:error, :not_found} ->
-        start_broker_connection(supervisor, child_spec, connection_slot, false)
+        # The retained specification was deleted between start_child/2 and restart_child/2.
+        # A later call can create it normally.
+        {:error, :disconnected}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp checkout_broker_child(supervisor, child_id, connection_slot) do
+  defp find_broker_pool(supervisor, child_id) do
     case List.keyfind(Supervisor.which_children(supervisor), child_id, 0) do
-      {^child_id, pool_pid, :supervisor, _modules} when is_pid(pool_pid) ->
-        BrokerPool.checkout(pool_pid, connection_slot)
+      {^child_id, pool, :supervisor, _modules} when is_pid(pool) ->
+        {:ok, pool}
 
       _unavailable ->
         {:error, :disconnected}

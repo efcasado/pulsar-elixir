@@ -107,8 +107,9 @@ again. Topic discovery and worker initialization remain asynchronous.
 
 Each broker connection is an independent process with its own TCP stream, mailbox, frame buffer,
 and pending requests. A pool keeps all consumer and producer workers for a broker from contending
-on those serialized resources. Increasing the pool size also opens another process and TCP
-connection to every discovered broker, so it is a throughput setting rather than a worker count.
+on one set of those serialized resources. Increasing the pool size also opens another process and
+TCP connection to every discovered broker, so it is a throughput setting rather than a worker
+count.
 
 The client-configured broker pool starts with the broker supervisor. Pools learned through topic
 lookup are added to the same supervisor. Every pool has a stable URL-based child id and registers

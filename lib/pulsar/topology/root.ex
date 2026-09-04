@@ -213,7 +213,7 @@ defmodule Pulsar.Topology.Root do
 
     %{
       id: id,
-      start: {Group, :start_link, [worker, worker_count, opts]},
+      start: {Group, :start_link, [worker, opts]},
       restart: :permanent,
       type: :supervisor
     }

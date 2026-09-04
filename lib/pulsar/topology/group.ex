@@ -7,26 +7,26 @@ defmodule Pulsar.Topology.Group do
 
   require Logger
 
-  @spec start_link(module(), pos_integer(), keyword()) :: Supervisor.on_start()
-  def start_link(worker, count, opts) when count > 0 do
-    Supervisor.start_link(__MODULE__, {worker, count, opts})
+  @spec start_link(module(), keyword()) :: Supervisor.on_start()
+  def start_link(worker, opts) do
+    Supervisor.start_link(__MODULE__, {worker, opts})
   end
 
   @impl true
-  def init({worker, count, opts}) do
+  def init({worker, opts}) do
     name = Keyword.fetch!(opts, :name)
     client = Keyword.fetch!(opts, :client)
-    connection_slots = Keyword.fetch!(opts, :connection_slots)
-    worker_opts = Keyword.delete(opts, :connection_slots)
+    {[_ | _] = connection_slots, worker_opts} = Keyword.pop!(opts, :connection_slots)
+    count = length(connection_slots)
 
     Logger.debug(
       "Starting #{inspect(worker)} group #{name} for topic #{Keyword.fetch!(opts, :topic)} with #{count} workers"
     )
 
     children =
-      1..count
-      |> Enum.zip(connection_slots)
-      |> Enum.map(fn {i, connection_slot} ->
+      connection_slots
+      |> Enum.with_index(1)
+      |> Enum.map(fn {connection_slot, i} ->
         # Workers need distinct names within a group; producer epochs are keyed by this identity.
         worker_name = "#{name}-#{i}"
 
@@ -58,8 +58,8 @@ defmodule Pulsar.Topology.Group do
     end
   end
 
-  # A broker dropping its connection exits every worker at once, so a group of `count` sees
-  # `count` restarts for one failure. See docs/architecture.md for what scaling trades.
+  # A broker outage can exit every worker at once, so a group of `count` sees `count` restarts for
+  # one failure. See docs/architecture.md for what scaling trades.
   @doc false
   @spec restart_intensity(atom(), pos_integer()) :: keyword()
   def restart_intensity(client, count) do
