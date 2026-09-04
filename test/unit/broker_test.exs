@@ -7,6 +7,25 @@ defmodule Pulsar.BrokerTest do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto
 
+  test "uses the scheme's default port when the broker URL omits it" do
+    for {url, port, socket_module} <- [
+          {"pulsar://localhost", 6650, :gen_tcp},
+          {"pulsar+ssl://localhost", 6651, :ssl}
+        ] do
+      name = "localhost:#{port}#2"
+
+      assert {:ok, :disconnected,
+              %Broker{
+                name: ^name,
+                connection_slot: 2,
+                host: "localhost",
+                port: ^port,
+                socket_module: ^socket_module
+              }, [{:next_event, :internal, :connect}]} =
+               Broker.init(url: url, connection_slot: 2)
+    end
+  end
+
   test "only buffers data from the current socket" do
     broker = %Broker{
       socket: :current_socket,

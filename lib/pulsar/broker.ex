@@ -40,7 +40,7 @@ defmodule Pulsar.Broker do
 
   @type t :: %__MODULE__{
           name: String.t(),
-          connection_slot: non_neg_integer() | nil,
+          connection_slot: non_neg_integer(),
           host: String.t(),
           port: integer(),
           socket_module: :gen_tcp | :ssl,
@@ -194,11 +194,11 @@ defmodule Pulsar.Broker do
     opts = Options.validate!(opts)
     connection_slot = Keyword.fetch!(opts, :connection_slot)
     uri = URI.parse(Keyword.fetch!(opts, :url))
-    host = Map.get(uri, :host, "localhost")
-    port = Map.get(uri, :port, default_port(uri.scheme))
+    host = uri.host
+    port = uri.port || default_port(uri.scheme)
 
     socket_module =
-      case Map.get(uri, :scheme, "pulsar") do
+      case uri.scheme do
         "pulsar+ssl" -> :ssl
         "pulsar" -> :gen_tcp
       end
@@ -207,7 +207,7 @@ defmodule Pulsar.Broker do
     # settings across; only what is derived from the URL is set explicitly.
     broker = %{
       struct(__MODULE__, opts)
-      | name: connection_name(broker_key(to_string(uri)), connection_slot),
+      | name: "#{host}:#{port}##{connection_slot}",
         host: host,
         port: port,
         socket_module: socket_module
@@ -919,13 +919,6 @@ defmodule Pulsar.Broker do
   defp default_port("pulsar+ssl"), do: 6651
   defp default_port("pulsar"), do: 6650
   defp default_port(_), do: 6650
-
-  defp broker_key(broker_url) do
-    %URI{host: host, port: port} = URI.parse(broker_url)
-    "#{host}:#{port}"
-  end
-
-  defp connection_name(name, slot) when is_binary(name) and is_integer(slot) and slot >= 0, do: "#{name}##{slot}"
 
   defp close_socket(%__MODULE__{socket: nil}), do: :ok
 
