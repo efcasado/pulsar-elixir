@@ -129,6 +129,10 @@ restart budget. A connection process exit does. The pool scales OTP's default re
 connection count, so increasing the pool does not reduce the number of exits tolerated per
 connection before the pool itself is restarted.
 
+Each successful broker handshake emits `[:pulsar, :connection, :connected]`, including reconnects.
+Its measurements contain `:system_time` in native time units; metadata contains `:broker` (the
+connection name), `:broker_pid`, `:connection_slot`, and the advertised `:max_message_size`.
+
 When a partition group is created, its stable topology root assigns its workers connection slots
 round-robin and records those slots in the group's child specification. Each worker's own child
 specification also carries its slot, so worker and group restarts retain the assignment. A worker

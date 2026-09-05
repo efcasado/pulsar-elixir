@@ -5,7 +5,6 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
   alias Pulsar.Broker.Pool, as: BrokerPool
   alias Pulsar.Client
   alias Pulsar.Test.Support.System
-  alias Pulsar.Test.Support.Utils
 
   @moduletag :integration
 
@@ -16,17 +15,20 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
     broker = System.broker()
     :ok = System.create_topic(@topic)
 
-    {:ok, _client} =
-      Client.start_link(
-        name: @client,
-        host: broker.service_url,
-        connections_per_broker: 2
-      )
-
-    on_exit(fn -> Client.stop(@client) end)
-
     {:ok, broker: broker}
   end
+
+  setup %{broker: broker} do
+    handler = make_ref()
+    :ok = :telemetry.attach(handler, [:pulsar, :connection, :connected], &__MODULE__.connected/4, self())
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    start_supervised!({Client, name: @client, host: broker.service_url, connections_per_broker: 2})
+
+    :ok
+  end
+
+  def connected(_event, _measurements, metadata, test_pid), do: send(test_pid, {:broker_connected, metadata})
 
   test "every connection in a broker pool completes its handshake and carries requests", %{broker: broker} do
     [{pool, _value}] = Registry.lookup(Client.broker_registry(@client), broker.service_url)
@@ -34,11 +36,11 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
 
     assert length(connections) == 2
 
-    Utils.wait_for(
-      fn -> Enum.map(connections, &Broker.get_max_message_size/1) end,
-      until: &Enum.all?(&1, fn size -> is_integer(size) and size > 0 end),
-      description: "every pooled broker connection to complete its handshake"
-    )
+    for connection <- connections do
+      assert_receive {:broker_connected, %{broker_pid: ^connection, max_message_size: size}}
+      assert is_integer(size) and size > 0
+      assert Broker.get_max_message_size(connection) == size
+    end
 
     assert {:ok, selected} = Client.lookup_broker(broker.service_url, client: @client)
     assert selected in BrokerPool.connections(pool)

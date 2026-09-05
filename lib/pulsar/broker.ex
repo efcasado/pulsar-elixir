@@ -621,6 +621,17 @@ defmodule Pulsar.Broker do
       "Successfully connected to broker #{broker.name}: protocol_version=#{cmd.protocol_version}, server_version=#{cmd.server_version}"
     )
 
+    :telemetry.execute(
+      [:pulsar, :connection, :connected],
+      %{system_time: System.system_time()},
+      %{
+        broker: broker.name,
+        broker_pid: self(),
+        connection_slot: broker.connection_slot,
+        max_message_size: cmd.max_message_size
+      }
+    )
+
     {:keep_state, %{broker | max_message_size: cmd.max_message_size}}
   end
 
