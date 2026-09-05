@@ -623,10 +623,9 @@ defmodule Pulsar.Broker do
 
     :telemetry.execute(
       [:pulsar, :connection, :connected],
-      %{system_time: System.system_time()},
+      %{count: 1},
       %{
         broker: broker.name,
-        broker_pid: self(),
         connection_slot: broker.connection_slot,
         max_message_size: cmd.max_message_size
       }

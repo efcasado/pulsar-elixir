@@ -28,7 +28,7 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
     :ok
   end
 
-  def connected(_event, _measurements, metadata, test_pid), do: send(test_pid, {:broker_connected, metadata})
+  def connected(_event, _measurements, metadata, test_pid), do: send(test_pid, {:broker_connected, self(), metadata})
 
   test "every connection in a broker pool completes its handshake and carries requests", %{broker: broker} do
     [{pool, _value}] = Registry.lookup(Client.broker_registry(@client), broker.service_url)
@@ -37,7 +37,7 @@ defmodule Pulsar.Integration.Client.ConnectionPoolTest do
     assert length(connections) == 2
 
     for connection <- connections do
-      assert_receive {:broker_connected, %{broker_pid: ^connection, max_message_size: size}}
+      assert_receive {:broker_connected, ^connection, %{max_message_size: size}}
       assert is_integer(size) and size > 0
       assert Broker.get_max_message_size(connection) == size
     end

@@ -129,10 +129,6 @@ restart budget. A connection process exit does. The pool scales OTP's default re
 connection count, so increasing the pool does not reduce the number of exits tolerated per
 connection before the pool itself is restarted.
 
-Each successful broker handshake emits `[:pulsar, :connection, :connected]`, including reconnects.
-Its measurements contain `:system_time` in native time units; metadata contains `:broker` (the
-connection name), `:broker_pid`, `:connection_slot`, and the advertised `:max_message_size`.
-
 When a partition group is created, its stable topology root assigns its workers connection slots
 round-robin and records those slots in the group's child specification. Each worker's own child
 specification also carries its slot, so worker and group restarts retain the assignment. A worker
@@ -143,6 +139,16 @@ any live sibling process; if its socket is disconnected, the operation fails fas
 metadata backoff retries. The consumer and producer registries map application-facing names to
 stable topology roots; internal partition groups and broker pools are not exposed as public
 resources.
+
+#### Connection Telemetry
+
+Both connection events use measurements `%{count: 1}` and include `:broker` (the connection name,
+such as `"localhost:6650#2"`) and `:connection_slot` in metadata:
+
+- `[:pulsar, :connection, :connected]` fires after each successful handshake, including reconnects.
+  Metadata also contains the advertised `:max_message_size`.
+- `[:pulsar, :connection, :frame_error]` fires when invalid framing forces the connection to be
+  discarded. Metadata also contains `:reason`.
 
 ## Logical Resources and Stable Roots
 

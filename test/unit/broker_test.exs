@@ -7,6 +7,26 @@ defmodule Pulsar.BrokerTest do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto
 
+  test "reports the completed handshake with its connection identity and advertised limit" do
+    event = [:pulsar, :connection, :connected]
+    handler = make_ref()
+    :ok = :telemetry.attach(handler, event, &__MODULE__.forward_telemetry/4, self())
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    broker = %Broker{name: "localhost:6650#2", connection_slot: 2}
+    command = %Proto.CommandConnected{server_version: "test", protocol_version: 21, max_message_size: 5_242_880}
+
+    assert {:keep_state, updated} = Broker.connected(:internal, {:command, command}, broker)
+    assert updated.max_message_size == 5_242_880
+
+    assert_received {:telemetry, ^event, measurements, metadata}
+    assert measurements == %{count: 1}
+    assert metadata == %{broker: "localhost:6650#2", connection_slot: 2, max_message_size: 5_242_880}
+  end
+
+  def forward_telemetry(event, measurements, metadata, test_pid),
+    do: send(test_pid, {:telemetry, event, measurements, metadata})
+
   test "uses the scheme's default port when the broker URL omits it" do
     for {url, port, socket_module} <- [
           {"pulsar://localhost", 6650, :gen_tcp},
