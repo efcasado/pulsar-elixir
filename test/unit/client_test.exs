@@ -646,24 +646,20 @@ defmodule Pulsar.ClientTest do
       pool = child_pid(brokers, {:broker_pool, url})
       pool_ref = Process.monitor(pool)
 
-      pool
-      |> BrokerPool.connections()
-      |> Enum.with_index()
-      |> Enum.each(fn {connection, slot} ->
-        connection_ref = Process.monitor(connection)
-        Process.exit(connection, :kill)
-        assert_receive {:DOWN, ^connection_ref, :process, ^connection, :killed}
+      connections = BrokerPool.connections(pool)
+      connections_and_refs = Enum.map(connections, &{&1, Process.monitor(&1)})
 
-        Utils.wait_for(
-          fn -> Client.lookup_broker(url, client: client, connection_slot: slot) end,
-          until: fn
-            {:ok, restarted} -> restarted != connection
-            _unavailable -> false
-          end,
-          description: "broker connection in slot #{slot} to restart"
-        )
+      # Deliver every exit before waiting so all four count against the same restart window.
+      Enum.each(connections, &Process.exit(&1, :kill))
+
+      Enum.each(connections_and_refs, fn {connection, ref} ->
+        assert_receive {:DOWN, ^ref, :process, ^connection, :killed}
       end)
 
+      restarted = BrokerPool.connections(pool)
+
+      assert length(restarted) == 4
+      assert Enum.all?(connections, &(&1 not in restarted))
       assert Process.alive?(pool)
       refute_received {:DOWN, ^pool_ref, :process, ^pool, _reason}
       assert child_pid(brokers, {:broker_pool, url}) == pool
