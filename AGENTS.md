@@ -59,6 +59,10 @@ interacts with registries, supervisors, broker connections, topology groups, or 
 expected lifecycle races into the documented public result rather than unexpectedly exiting the
 caller. Do not assume a pid is still alive merely because a registry or supervisor just returned it.
 
+Avoid `Process.alive?/1` prechecks before using a pid: they cannot make lookup followed by use
+safe. Perform the operation and handle expected lifecycle failures at the appropriate public
+boundary. Process liveness does not establish connection readiness.
+
 Prefer changing or extending `Pulsar.Client`, `Pulsar.Consumer`, `Pulsar.Producer`, and
 `Pulsar.Reader` instead of exposing internal topology modules.
 
@@ -78,6 +82,10 @@ ownership or lifecycle change.
 Follow the formatter and existing code style. Prefer explicit ownership, pattern matching, public
 error tuples, and existing project abstractions. Do not add an abstraction solely to remove a small
 amount of duplication.
+
+Validate inputs at boundaries and trust established invariants internally. Before adding guards,
+defaults, or recovery branches, trace the actual callers. Prefer deriving related values from one
+source over validating duplicated state.
 
 Avoid adding runtime dependencies unless they provide clear value that would be difficult or
 inappropriate to implement with Elixir/OTP or an existing dependency. Dependency weight and
@@ -136,6 +144,10 @@ mix test test/integration/consumer --max-cases 2 --warnings-as-errors
 mix test test/integration/producer --max-cases 2 --warnings-as-errors
 ```
 
+Before handing off integration test changes, run the relevant integration directory as well as
+the focused test. Isolated runs can miss randomized test-order dependencies and state retained
+by `setup_all`.
+
 Add or update tests for behavioral changes. Prefer externally observable behavior over internal
 tree assertions unless the tree itself is the behavior under test. For OTP and supervision changes,
 consider startup and shutdown, unexpected child termination, restart exhaustion, transient versus
@@ -144,6 +156,10 @@ between consumer and producer branches.
 
 Avoid tests whose correctness depends mainly on arbitrary sleeps. Prefer messages, monitors,
 telemetry, readiness functions, or other observable synchronization.
+
+Avoid introducing `Utils.wait_for/2` or equivalent polling loops. Synchronize on events or readiness
+APIs that establish the condition being asserted. A child's `:DOWN` establishes its termination,
+not its replacement's readiness.
 
 ## Repository map
 
