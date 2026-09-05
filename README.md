@@ -11,6 +11,7 @@ An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 ## Features
 
 - ⭐ Works with [Broadway](https://github.com/dashbitco/broadway) (see [off_broadway_pulsar](https://github.com/efcasado/off_broadway_pulsar))
+- 🔌 Broker connection pools
 - 🔐 SSL encryption
 - 🔑 Authentication
 - 📥 Consumers (including stream-friendly Reader interface; see [guide](https://hexdocs.pm/pulsar_elixir/reader.html))
@@ -126,6 +127,17 @@ children = [
 ]
 
 Supervisor.start_link(children, strategy: :one_for_one)
+```
+
+When one broker connection becomes a throughput bottleneck, configure a larger pool on the
+client. Logical consumer and producer workers are assigned across the connections round-robin.
+Each extra slot opens another process and TCP connection to every discovered broker, so increase
+it only for workloads with enough concurrent workers to benefit, and benchmark the result:
+
+```elixir
+{Pulsar.Client,
+ host: "pulsar://localhost:6650",
+ connections_per_broker: 4}
 ```
 
 A consumer or producer added at runtime selects its client with `:client`:

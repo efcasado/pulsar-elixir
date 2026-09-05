@@ -1,8 +1,8 @@
 defmodule Pulsar.ClientTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Broker.Pool, as: BrokerPool
   alias Pulsar.Client
-  alias Pulsar.Test.Support.Utils
 
   defmodule StoppingResourceSupervisor do
     @moduledoc false
@@ -17,6 +17,10 @@ defmodule Pulsar.ClientTest do
     def handle_call({:start_child, _child_spec}, _from, reason), do: {:stop, reason, reason}
 
     def handle_call(:which_children, _from, reason), do: {:stop, reason, reason}
+
+    def handle_call({:terminate_child, _child_id}, _from, reason), do: {:reply, :ok, reason}
+
+    def handle_call({:delete_child, _child_id}, _from, reason), do: {:stop, reason, reason}
   end
 
   describe "start_link/1 option validation" do
@@ -186,8 +190,21 @@ defmodule Pulsar.ClientTest do
     # client is down or restarting. The facades promise an error tuple, not an exit.
     test "report not found rather than raising" do
       assert Client.lookup_broker("pulsar://127.0.0.1:6650", client: :never_started) == {:error, :not_found}
+      assert Client.stop_broker("pulsar://127.0.0.1:6650", client: :never_started) == {:error, :not_found}
       assert Client.consumers(:never_started) == []
       assert Client.producers(:never_started) == []
+    end
+
+    test "broker removal reports an abnormal supervisor exit during deletion" do
+      client = :crashing_broker_removal
+
+      {:ok, _supervisor} =
+        StoppingResourceSupervisor.start(
+          Client.broker_supervisor(client),
+          :unexpected
+        )
+
+      assert Client.stop_broker("pulsar://127.0.0.1:6650", client: client) == {:error, :unavailable}
     end
 
     test "send and stop keep their contracts" do
@@ -359,25 +376,290 @@ defmodule Pulsar.ClientTest do
   end
 
   describe "broker options" do
-    test "owns the initial broker in a client-level broker branch" do
+    test "owns the initial broker pool in a client-level broker branch" do
       client = :initial_broker_owner
       url = "pulsar://127.0.0.1:1"
       client_pid = start_supervised!({Client, name: client, host: url})
 
       brokers = child_pid(client_pid, :brokers)
-      dynamic = Process.whereis(Client.broker_supervisor(client))
-      initial = child_pid(brokers, {:broker, url})
+      initial_pool = child_pid(brokers, {:broker_pool, url})
+      [initial] = BrokerPool.connections(initial_pool)
 
-      assert Enum.any?(Supervisor.which_children(brokers), &match?({_id, ^dynamic, :supervisor, _modules}, &1))
-      assert DynamicSupervisor.which_children(dynamic) == []
+      assert brokers == Process.whereis(Client.broker_supervisor(client))
       assert Client.lookup_broker(url, client: client) == {:ok, initial}
       assert Client.random_broker(client) == initial
 
       redirected_url = "pulsar://127.0.0.1:2"
       assert {:ok, redirected} = Client.start_broker(redirected_url, client: client)
-      assert Enum.any?(DynamicSupervisor.which_children(dynamic), &match?({_id, ^redirected, :worker, _modules}, &1))
+      [{redirected_pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+
+      assert Enum.any?(
+               Supervisor.which_children(brokers),
+               &match?({{:broker_pool, ^redirected_url}, ^redirected_pool, :supervisor, _modules}, &1)
+             )
+
+      assert BrokerPool.connections(redirected_pool) == [redirected]
       assert Client.lookup_broker(redirected_url, client: client) == {:ok, redirected}
       assert Client.random_broker(client) in [initial, redirected]
+    end
+
+    test "starts the configured number of connections for every broker" do
+      client = :pooled_brokers
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 3})
+
+      brokers = child_pid(client_pid, :brokers)
+      initial_pool = child_pid(brokers, {:broker_pool, url})
+      initial_connections = BrokerPool.connections(initial_pool)
+
+      assert length(initial_connections) == 3
+      assert Enum.all?(initial_connections, &Process.alive?/1)
+      assert Client.connections_per_broker(client) == 3
+      refute Keyword.has_key?(Client.get_broker_opts(client), :connections_per_broker)
+
+      assert {:ok, initial} = Client.lookup_broker(url, client: client)
+      assert initial in initial_connections
+
+      assert {:ok, redirected} = Client.start_broker(redirected_url, client: client)
+      [{redirected_pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+      redirected_connections = BrokerPool.connections(redirected_pool)
+
+      assert length(redirected_connections) == 3
+      assert redirected in redirected_connections
+
+      assert Enum.map(initial_connections, &broker_identity/1) == [
+               {0, "127.0.0.1:1#0"},
+               {1, "127.0.0.1:1#1"},
+               {2, "127.0.0.1:1#2"}
+             ]
+    end
+
+    test "applies per-call options only when creating a broker pool" do
+      client = :broker_pool_connection_options
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      start_supervised!(
+        {Client, name: client, host: url, connections_per_broker: 2, conn_timeout: 100, request_timeout: 200}
+      )
+
+      assert {:ok, _connection} =
+               Client.start_broker(redirected_url,
+                 client: client,
+                 conn_timeout: 300,
+                 request_timeout: 400
+               )
+
+      [{pool, _value}] = Registry.lookup(Client.broker_registry(client), redirected_url)
+      connections = BrokerPool.connections(pool)
+
+      settings = fn connection ->
+        {_state, broker} = :sys.get_state(connection)
+        {broker.conn_timeout, broker.request_timeout}
+      end
+
+      assert Enum.map(connections, settings) == [{300, 400}, {300, 400}]
+
+      assert {:ok, _connection} =
+               Client.start_broker(redirected_url,
+                 client: client,
+                 conn_timeout: 500,
+                 request_timeout: 600
+               )
+
+      assert Enum.map(connections, settings) == [{300, 400}, {300, 400}]
+    end
+
+    test "rejects unknown per-call broker options" do
+      client = :invalid_broker_pool_connection_options
+      url = "pulsar://127.0.0.1:1"
+      redirected_url = "pulsar://127.0.0.1:2"
+
+      start_supervised!({Client, name: client, host: url})
+
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:conn_timout/, fn ->
+        Client.start_broker(redirected_url, client: client, conn_timout: 300)
+      end
+
+      assert Registry.lookup(Client.broker_registry(client), redirected_url) == []
+    end
+
+    test "checks a worker out by its slot and any connection out for a lookup" do
+      client = :pooled_checkout
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 3})
+
+      brokers = child_pid(client_pid, :brokers)
+      connections = BrokerPool.connections(child_pid(brokers, {:broker_pool, url}))
+
+      for connection_slot <- 0..2 do
+        assert Client.lookup_broker(url, client: client, connection_slot: connection_slot) ==
+                 {:ok, Enum.at(connections, connection_slot)}
+      end
+
+      assert Enum.map(0..2, &Client.lookup_broker(url, client: client, connection_slot: &1)) ==
+               Enum.map(connections, &{:ok, &1})
+
+      assert {:ok, any} = Client.lookup_broker(url, client: client)
+      assert any in connections
+    end
+
+    test "does not remap unavailable slots and classifies an empty pool as disconnected" do
+      client = :unavailable_pool_slot
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 2})
+
+      brokers = child_pid(client_pid, :brokers)
+      pool = child_pid(brokers, {:broker_pool, url})
+      [slot_zero, slot_one] = BrokerPool.connections(pool)
+
+      assert :ok = Supervisor.terminate_child(pool, {:connection, 1})
+      refute Process.alive?(slot_one)
+
+      assert Client.lookup_broker(url, client: client, connection_slot: 0) == {:ok, slot_zero}
+      assert Client.lookup_broker(url, client: client, connection_slot: 1) == {:error, :disconnected}
+
+      assert :ok = Supervisor.terminate_child(pool, {:connection, 0})
+      assert Client.lookup_broker(url, client: client) == {:error, :disconnected}
+
+      assert {:ok, _restarted} = Supervisor.restart_child(pool, {:connection, 0})
+      assert {:ok, restarted} = Supervisor.restart_child(pool, {:connection, 1})
+      assert restarted != slot_one
+      assert Client.lookup_broker(url, client: client, connection_slot: 1) == {:ok, restarted}
+    end
+
+    test "turns an abnormal pool exit during checkout into an unavailable pool" do
+      pool = :abnormally_stopping_pool
+      {:ok, _pid} = StoppingResourceSupervisor.start(pool, :unexpected)
+
+      assert BrokerPool.checkout(pool, :random) == {:error, :disconnected}
+    end
+
+    test "repairs a retained stopped pool before starting it again" do
+      client = :retained_stopped_pool
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid = start_supervised!({Client, name: client, host: url, conn_timeout: 100})
+      brokers = child_pid(client_pid, :brokers)
+      old_pool = child_pid(brokers, {:broker_pool, url})
+      partition = registry_partition(client)
+      :erlang.trace(partition, true, [:receive])
+
+      assert :ok = Supervisor.terminate_child(brokers, {:broker_pool, url})
+      await_exit_handled(partition, old_pool)
+      assert Registry.lookup(Client.broker_registry(client), url) == []
+
+      assert {:ok, connection} = Client.start_broker(url, client: client, conn_timeout: 300)
+
+      new_pool = child_pid(brokers, {:broker_pool, url})
+      assert new_pool != old_pool
+      assert BrokerPool.connections(new_pool) == [connection]
+
+      {_state, broker} = :sys.get_state(connection)
+      assert broker.conn_timeout == 100
+    end
+
+    test "allocates logical worker slots round-robin" do
+      client = :round_robin_slots
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", connections_per_broker: 3})
+
+      assert Client.allocate_connection_slots(client, 5) == [0, 1, 2, 0, 1]
+      assert Client.allocate_connection_slots(client, 2) == [2, 0]
+    end
+
+    test "stopping a broker URL removes its entire pool" do
+      client = :remove_broker_pool
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 2})
+
+      brokers = child_pid(client_pid, :brokers)
+      old_pool = child_pid(brokers, {:broker_pool, url})
+      old_connections = BrokerPool.connections(old_pool)
+      pool_ref = Process.monitor(old_pool)
+      partition = registry_partition(client)
+      :erlang.trace(partition, true, [:receive])
+
+      assert :ok = Client.stop_broker(url, client: client)
+      assert_receive {:DOWN, ^pool_ref, :process, ^old_pool, :shutdown}
+      assert child_pid(brokers, {:broker_pool, url}) == nil
+      assert Enum.all?(old_connections, &(not Process.alive?(&1)))
+
+      await_exit_handled(partition, old_pool)
+      assert Registry.lookup(Client.broker_registry(client), url) == []
+
+      assert Client.lookup_broker(url, client: client) == {:error, :not_found}
+      assert Client.random_broker(client) == nil
+
+      # Starting the URL again adds a new pool under the same owner.
+      assert {:ok, _connection} = Client.start_broker(url, client: client)
+      [{new_pool, _value}] = Registry.lookup(Client.broker_registry(client), url)
+      assert new_pool != old_pool
+      assert child_pid(brokers, {:broker_pool, url}) == new_pool
+    end
+
+    test "restarts one failed pooled connection without replacing its siblings" do
+      client = :pooled_connection_restart
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 2})
+
+      brokers = child_pid(client_pid, :brokers)
+      pool = child_pid(brokers, {:broker_pool, url})
+      [failed, sibling] = BrokerPool.connections(pool)
+      monitor = Process.monitor(failed)
+      :erlang.trace(pool, true, [:receive])
+
+      Process.exit(failed, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^failed, :killed}
+
+      await_exit_handled(pool, failed)
+      connections = BrokerPool.connections(pool)
+
+      assert length(connections) == 2
+      refute failed in connections
+      assert sibling in connections
+    end
+
+    test "keeps the pool when every connection exits once within its restart window" do
+      client = :pooled_connection_restart_budget
+      url = "pulsar://127.0.0.1:1"
+
+      client_pid =
+        start_supervised!({Client, name: client, host: url, connections_per_broker: 4})
+
+      brokers = child_pid(client_pid, :brokers)
+      pool = child_pid(brokers, {:broker_pool, url})
+      pool_ref = Process.monitor(pool)
+      :erlang.trace(pool, true, [:receive])
+
+      connections = BrokerPool.connections(pool)
+      connections_and_refs = Enum.map(connections, &{&1, Process.monitor(&1)})
+
+      # Deliver every exit before waiting so all four count against the same restart window.
+      Enum.each(connections, &Process.exit(&1, :kill))
+
+      Enum.each(connections_and_refs, fn {connection, ref} ->
+        assert_receive {:DOWN, ^ref, :process, ^connection, :killed}
+      end)
+
+      Enum.each(connections, &await_exit_handled(pool, &1))
+      restarted = BrokerPool.connections(pool)
+
+      assert length(restarted) == 4
+      assert Enum.all?(connections, &(&1 not in restarted))
+      assert Process.alive?(pool)
+      refute_received {:DOWN, ^pool_ref, :process, ^pool, _reason}
+      assert child_pid(brokers, {:broker_pool, url}) == pool
     end
 
     test "carries the connection tunables to the broker with their defaults" do
@@ -404,21 +686,16 @@ defmodule Pulsar.ClientTest do
       old_client =
         start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", max_frame_size: 111_111})
 
-      assert :ok = Client.stop(client)
+      {:ok, supervisor} = ExUnit.fetch_test_supervisor()
+      :erlang.trace(supervisor, true, [:receive])
 
-      {restarted_client, broker_opts} =
-        Utils.wait_for(
-          fn ->
-            restarted_client = Process.whereis(client)
-            {restarted_client, Client.get_broker_opts(client)}
-          end,
-          until: fn {pid, opts} ->
-            is_pid(pid) and pid != old_client and opts[:max_frame_size] == 111_111
-          end,
-          description: "supervised client to restart"
-        )
+      assert :ok = Client.stop(client)
+      await_exit_handled(supervisor, old_client)
+      restarted_client = Process.whereis(client)
+      broker_opts = Client.get_broker_opts(client)
 
       assert is_pid(restarted_client)
+      refute restarted_client == old_client
       assert broker_opts[:max_frame_size] == 111_111
     end
 
@@ -464,6 +741,18 @@ defmodule Pulsar.ClientTest do
     end
   end
 
+  describe "connections_per_broker" do
+    test "requires at least one connection" do
+      assert_raise NimbleOptions.ValidationError, ~r/:connections_per_broker/, fn ->
+        Client.start_link(
+          name: :no_broker_connections,
+          host: "pulsar://127.0.0.1:6650",
+          connections_per_broker: 0
+        )
+      end
+    end
+  end
+
   describe "socket options" do
     test "accepts options that are not keyword pairs" do
       # :inet6 and {:raw, ...} are valid for :gen_tcp.connect/4 and :ssl.connect/4,
@@ -482,9 +771,28 @@ defmodule Pulsar.ClientTest do
     end
   end
 
+  # A Registry's monitors live in its partition worker, so that is the process whose mailbox shows
+  # a pool's exit and the cleanup that follows it.
+  defp registry_partition(client) do
+    [{_id, partition, :worker, _modules}] = Supervisor.which_children(Client.broker_registry(client))
+    partition
+  end
+
+  defp await_exit_handled(owner, child) do
+    assert_receive {:trace, ^owner, :receive, {:EXIT, ^child, _reason}}
+    # The exit has reached its owner. This call follows it in the owner's mailbox and only
+    # returns after the synchronous restart or registry cleanup has completed.
+    :sys.get_state(owner)
+  end
+
   defp child_pid(supervisor, id) do
     supervisor
     |> Supervisor.which_children()
     |> Enum.find_value(fn {child_id, pid, _type, _modules} -> child_id == id && pid end)
+  end
+
+  defp broker_identity(connection) do
+    {_state, broker} = :sys.get_state(connection)
+    {broker.connection_slot, broker.name}
   end
 end

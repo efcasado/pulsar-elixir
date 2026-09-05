@@ -39,6 +39,7 @@ defmodule Pulsar.Consumer.Worker do
     :topic,
     :base_topic,
     :partition,
+    :connection_slot,
     :subscription_name,
     :subscription_type,
     :consumer_id,
@@ -78,6 +79,7 @@ defmodule Pulsar.Consumer.Worker do
           topic: String.t(),
           base_topic: String.t(),
           partition: non_neg_integer() | nil,
+          connection_slot: non_neg_integer(),
           subscription_name: String.t(),
           subscription_type: atom(),
           consumer_id: integer(),
@@ -328,7 +330,11 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp subscribe(state) do
-    with {:ok, broker_pid} <- Resolver.lookup_topic(state.topic, client: state.client),
+    with {:ok, broker_pid} <-
+           Resolver.lookup_topic(state.topic,
+             client: state.client,
+             connection_slot: state.connection_slot
+           ),
          :ok <- Pulsar.Broker.register_consumer(broker_pid, state.consumer_id, self()),
          {:ok, _response} <-
            subscribe_to_topic(

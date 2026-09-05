@@ -31,6 +31,7 @@ defmodule Pulsar.Producer.Worker do
     :topic,
     :base_topic,
     :partition,
+    :connection_slot,
     :producer_id,
     :producer_name,
     :broker_pid,
@@ -65,6 +66,7 @@ defmodule Pulsar.Producer.Worker do
           topic: String.t(),
           base_topic: String.t(),
           partition: non_neg_integer() | nil,
+          connection_slot: non_neg_integer(),
           producer_id: integer(),
           producer_name: String.t() | nil,
           broker_pid: pid(),
@@ -208,12 +210,15 @@ defmodule Pulsar.Producer.Worker do
   end
 
   defp register(state) do
-    case Resolver.lookup_topic(state.topic, client: state.client) do
+    case Resolver.lookup_topic(state.topic,
+           client: state.client,
+           connection_slot: state.connection_slot
+         ) do
       {:ok, broker_pid} ->
         register_with_broker(state, broker_pid)
 
       {:error, reason} = error ->
-        Logger.error("Topic lookup failed: #{inspect(reason)}")
+        Logger.error("Producer cannot reach a broker for #{state.topic}: #{inspect(reason)}")
         error
     end
   end

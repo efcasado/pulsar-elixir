@@ -16,6 +16,7 @@ defmodule Pulsar.Broker do
   # Main connection state (unified from Connection)
   defstruct [
     :name,
+    :connection_slot,
     :host,
     :port,
     :socket_module,
@@ -39,6 +40,7 @@ defmodule Pulsar.Broker do
 
   @type t :: %__MODULE__{
           name: String.t(),
+          connection_slot: non_neg_integer(),
           host: String.t(),
           port: integer(),
           socket_module: :gen_tcp | :ssl,
@@ -88,20 +90,8 @@ defmodule Pulsar.Broker do
   #{Options.docs()}
   """
   @spec start_link(String.t(), keyword()) :: {:ok, pid()} | :ignore | {:error, term()}
-  def start_link(broker_url, opts \\ []) do
-    name = Keyword.get(opts, :name, nil)
-
-    args = Keyword.put(opts, :url, broker_url)
-
-    start_opts = Keyword.take(opts, [:name])
-
-    case name do
-      nil ->
-        :gen_statem.start_link(__MODULE__, args, start_opts)
-
-      name ->
-        :gen_statem.start_link(name, __MODULE__, args, start_opts)
-    end
+  def start_link(broker_url, opts) do
+    :gen_statem.start_link(__MODULE__, Keyword.put(opts, :url, broker_url), [])
   end
 
   @doc """
@@ -185,17 +175,6 @@ defmodule Pulsar.Broker do
   @spec get_max_message_size(GenServer.server()) :: pos_integer() | nil
   def get_max_message_size(broker), do: :gen_statem.call(broker, :get_max_message_size)
 
-  @doc """
-  Gracefully stops the broker.
-
-  Registered consumers and producers monitor the connection and let their own supervision
-  decide whether to restart them.
-  """
-  @spec stop(GenServer.server(), term(), timeout()) :: :ok
-  def stop(broker, reason \\ :normal, timeout \\ :infinity) do
-    :gen_statem.stop(broker, reason, timeout)
-  end
-
   ## gen_statem Callbacks
 
   @impl true
@@ -204,7 +183,7 @@ defmodule Pulsar.Broker do
   @impl true
   def terminate(reason, _state, broker) do
     Logger.info(
-      "Broker terminating: #{inspect(reason)}; #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers will observe the connection exit"
+      "Broker #{broker.name} terminating: #{inspect(reason)}; #{map_size(broker.consumers)} consumers and #{map_size(broker.producers)} producers will observe the connection exit"
     )
 
     :ok
@@ -213,22 +192,21 @@ defmodule Pulsar.Broker do
   @impl true
   def init(opts) do
     opts = Options.validate!(opts)
-    name = Keyword.get(opts, :name)
+    connection_slot = Keyword.fetch!(opts, :connection_slot)
     uri = URI.parse(Keyword.fetch!(opts, :url))
-    host = Map.get(uri, :host, "localhost")
-    port = Map.get(uri, :port, default_port(uri.scheme))
+    host = uri.host
 
-    socket_module =
-      case Map.get(uri, :scheme, "pulsar") do
-        "pulsar+ssl" -> :ssl
-        "pulsar" -> :gen_tcp
+    {socket_module, port} =
+      case uri.scheme do
+        "pulsar" -> {:gen_tcp, uri.port || 6650}
+        "pulsar+ssl" -> {:ssl, uri.port || 6651}
       end
 
     # Option names and struct field names are the same, so struct/2 carries the client's
     # settings across; only what is derived from the URL is set explicitly.
     broker = %{
       struct(__MODULE__, opts)
-      | name: name || broker_key(to_string(uri)),
+      | name: "#{host}:#{port}##{connection_slot}",
         host: host,
         port: port,
         socket_module: socket_module
@@ -243,7 +221,7 @@ defmodule Pulsar.Broker do
   # Disconnected state
   def disconnected(:enter, :connected, broker) do
     wait = Backoff.next(broker.prev_backoff)
-    Logger.error("Connection closed. Reconnecting in #{wait}ms.")
+    Logger.error("Broker #{broker.name} connection closed. Reconnecting in #{wait}ms.")
 
     # Explicitly close the socket to ensure the remote broker cleans up consumers/producers.
     # This is safe to call even if the socket is already closed.
@@ -299,14 +277,14 @@ defmodule Pulsar.Broker do
 
     case result do
       {:ok, socket} ->
-        Logger.debug("Connection succeeded")
+        Logger.debug("Broker #{broker.name} connection succeeded")
         actions = [{:next_event, :internal, :handshake}]
         broker = %{reset_connection_state(broker) | socket: socket, prev_backoff: 0}
         {:next_state, :connected, broker, actions}
 
       {:error, error} ->
         wait = Backoff.next(broker.prev_backoff)
-        Logger.error("Connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
+        Logger.error("Broker #{broker.name} connection failed: #{inspect(error)}. Reconnecting in #{wait}ms.")
         actions = [{{:timeout, :reconnect}, wait, nil}]
         {:keep_state, %{broker | prev_backoff: wait}, actions}
     end
@@ -337,7 +315,7 @@ defmodule Pulsar.Broker do
     pending_requests = map_size(broker.requests)
 
     Logger.error(
-      "Socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
+      "Broker #{broker.name} socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
     )
 
     {:next_state, :disconnected, broker}
@@ -347,19 +325,19 @@ defmodule Pulsar.Broker do
     pending_requests = map_size(broker.requests)
 
     Logger.error(
-      "Socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
+      "Broker #{broker.name} socket closed by remote (#{pending_requests} pending requests, #{map_size(broker.consumers)} consumers, #{map_size(broker.producers)} producers)"
     )
 
     {:next_state, :disconnected, broker}
   end
 
   def connected(:info, {:tcp_error, socket, reason}, %__MODULE__{socket: socket} = broker) do
-    Logger.error("TCP error: #{inspect(reason)}")
+    Logger.error("Broker #{broker.name} TCP error: #{inspect(reason)}")
     {:next_state, :disconnected, broker}
   end
 
   def connected(:info, {:ssl_error, socket, reason}, %__MODULE__{socket: socket} = broker) do
-    Logger.error("SSL error: #{inspect(reason)}")
+    Logger.error("Broker #{broker.name} SSL error: #{inspect(reason)}")
     {:next_state, :disconnected, broker}
   end
 
@@ -372,12 +350,12 @@ defmodule Pulsar.Broker do
       {:error, reason} ->
         # The stream cannot be resynchronised, so drop the connection and let the
         # reconnect path re-establish it from a known state.
-        Logger.error("Discarding connection: #{inspect(reason)}")
+        Logger.error("Discarding broker #{broker.name} connection: #{inspect(reason)}")
 
         :telemetry.execute(
           [:pulsar, :connection, :frame_error],
           %{count: 1},
-          %{reason: reason, broker: broker.name}
+          %{reason: reason, broker: broker.name, connection_slot: broker.connection_slot}
         )
 
         {:next_state, :disconnected, broker}
@@ -640,7 +618,17 @@ defmodule Pulsar.Broker do
 
   defp handle_command(%Binary.CommandConnected{} = cmd, broker) do
     Logger.info(
-      "Successfully connected to broker: protocol_version=#{cmd.protocol_version}, server_version=#{cmd.server_version}"
+      "Successfully connected to broker #{broker.name}: protocol_version=#{cmd.protocol_version}, server_version=#{cmd.server_version}"
+    )
+
+    :telemetry.execute(
+      [:pulsar, :connection, :connected],
+      %{count: 1},
+      %{
+        broker: broker.name,
+        connection_slot: broker.connection_slot,
+        max_message_size: cmd.max_message_size
+      }
     )
 
     {:keep_state, %{broker | max_message_size: cmd.max_message_size}}
@@ -936,15 +924,6 @@ defmodule Pulsar.Broker do
   end
 
   defp get_auth_data(_), do: ""
-
-  defp default_port("pulsar+ssl"), do: 6651
-  defp default_port("pulsar"), do: 6650
-  defp default_port(_), do: 6650
-
-  defp broker_key(broker_url) do
-    %URI{host: host, port: port} = URI.parse(broker_url)
-    "#{host}:#{port}"
-  end
 
   defp close_socket(%__MODULE__{socket: nil}), do: :ok
 
