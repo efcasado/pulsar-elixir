@@ -62,9 +62,8 @@ defmodule Pulsar.Broker.Options do
   @doc """
   Fills in the defaults for the connection tunables, leaving every other option alone.
 
-  Anything outside the schema — `:url` and `:name`, and whatever else a caller threads
-  through to `Pulsar.Broker.start_link/2` — passes through untouched, so a broker started
-  on its own is configured the same as one a client starts.
+  Options outside the schema pass through untouched so connection startup can carry internal
+  metadata such as `:url` and `:connection_slot`.
   """
   @spec validate!(keyword()) :: keyword()
   def validate!(opts) do

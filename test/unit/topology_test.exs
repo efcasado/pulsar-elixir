@@ -3,6 +3,7 @@ defmodule Pulsar.TopologyTest do
 
   import TelemetryTest
 
+  alias Pulsar.Client
   alias Pulsar.Topology
   alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Root
@@ -110,6 +111,7 @@ defmodule Pulsar.TopologyTest do
 
   defmodule CrashingWorker do
     @moduledoc false
+    use Agent
 
     # Costs a round trip before failing, the way a real one does: failing instantly exhausts every
     # budget above it, taking milliseconds does not.
@@ -121,6 +123,18 @@ defmodule Pulsar.TopologyTest do
     use Agent
 
     def start_link(opts), do: Agent.start_link(fn -> opts end)
+  end
+
+  defmodule ReportingOptsWorker do
+    @moduledoc false
+    use Agent
+
+    def start_link(opts) do
+      Agent.start_link(fn ->
+        send(Keyword.fetch!(opts, :report_starts_to), {:opts_worker_started, opts})
+        opts
+      end)
+    end
   end
 
   defmodule FacadeWorker do
@@ -617,6 +631,31 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
     end
 
+    test "partition failures share the root's default restart budget" do
+      owner = start_dynamic_supervisor()
+      spec = topology_spec(ReportingOptsWorker)
+      {Root, :start_link, [worker, registry, kind, opts, controller_opts]} = spec.start
+      opts = Keyword.put(opts, :report_starts_to, self())
+      controller_opts = Keyword.put(controller_opts, :resolver, fn _topic, _opts -> {:ok, 4} end)
+      spec = %{spec | start: {Root, :start_link, [worker, registry, kind, opts, controller_opts]}}
+      {:ok, root} = DynamicSupervisor.start_child(owner, spec)
+      :ok = Topology.await_ready(root, 1_000)
+      root_ref = Process.monitor(root)
+      partitions = Topology.partitions(root)
+      for _worker <- 1..4, do: assert_receive({:opts_worker_started, _opts})
+
+      for {_index, worker} <- Enum.take(partitions, 3) do
+        Process.exit(worker, :kill)
+        assert_receive {:opts_worker_started, _opts}
+      end
+
+      assert Process.alive?(root)
+      {_index, worker} = List.last(partitions)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^root_ref, :process, ^root, :shutdown}
+      assert Process.alive?(owner)
+    end
+
     test "a resource that cannot stay up escalates to its client instead of disappearing" do
       Process.flag(:trap_exit, true)
       {:ok, client} = DynamicSupervisor.start_link(strategy: :one_for_one, max_restarts: 1, max_seconds: 5)
@@ -653,6 +692,38 @@ defmodule Pulsar.TopologyTest do
       assert Keyword.fetch!(opts, :base_topic) == @topic
       assert Keyword.fetch!(opts, :partition) == nil
       assert Keyword.fetch!(opts, :name) == "named_worker-1"
+    end
+
+    test "retains round-robin connection slots across partition worker restarts" do
+      client = :topology_connection_slots
+
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", connections_per_broker: 3})
+
+      {root, _registry} =
+        start_async_topology(
+          fn _topic, _opts -> {:ok, 4} end,
+          [client: client, report_starts_to: self()],
+          worker: ReportingOptsWorker
+        )
+
+      :ok = Topology.await_ready(root, 1_000)
+      partitions = Topology.partitions(root)
+      assignments = Map.new(worker_opts(root))
+      assert assignments |> Map.values() |> Enum.map(&Keyword.fetch!(&1, :connection_slot)) |> Enum.sort() == [0, 0, 1, 2]
+
+      for _worker <- 1..4, do: assert_receive({:opts_worker_started, _opts})
+
+      [{index, worker} | _rest] = partitions
+      opts = Map.fetch!(assignments, index)
+      ref = Process.monitor(worker)
+
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^worker, :killed}
+      assert_receive {:opts_worker_started, ^opts}
+
+      assert {^index, restarted} = List.keyfind(Topology.partitions(root), index, 0)
+      assert restarted != worker
+      assert Map.new(worker_opts(root)) == assignments
     end
   end
 

@@ -71,10 +71,9 @@ A client starts the following ownership tree:
 MyApp.Supervisor
 └── Pulsar.Client
     ├── BrokerRegistry
-    ├── brokers
-    │   ├── BrokerSupervisor
-    │   │   └── broker connection(s) learned through lookup
-    │   └── initial broker connection
+    ├── BrokerSupervisor
+    │   └── broker pool(s), including the configured initial pool
+    │       └── broker connection(s)
     └── resources
         ├── consumers
         │   ├── ConsumerRegistry
@@ -92,12 +91,6 @@ MyApp.Supervisor
             └── Bootstrap
 ```
 
-The client-configured broker is a static child of the broker branch. Connections learned
-through topic lookup are children of its dynamic broker supervisor. Both kinds register in
-the broker registry, which maps service URLs to connection processes. The consumer and
-producer registries map application-facing names to stable topology roots; partition workers
-are not registered as public resources.
-
 Consumer and producer branches are siblings. A failure that rebuilds the consumer branch
 does not take runtime producers down with it, and the reverse is also true. If the broker
 infrastructure itself must be rebuilt, the resource subtree is later in the dependency
@@ -107,6 +100,53 @@ workers using that connection rather than restarting every resource branch.
 Each branch also has a <code>Pulsar.Client.Bootstrap</code> process. It registers declared resource
 roots before branch startup completes and recreates those declarations when the branch starts
 again. Topic discovery and worker initialization remain asynchronous.
+
+### Broker Connection Pools
+
+Each broker connection is an independent process with its own TCP stream, mailbox, frame buffer,
+and pending requests. A pool keeps all consumer and producer workers for a broker from contending
+on one set of those serialized resources. Increasing the pool size also opens another process and
+TCP connection to every discovered broker, so it is a throughput setting rather than a worker
+count.
+
+The client-configured broker pool starts with the broker supervisor. Pools learned through topic
+lookup are added to the same supervisor. Every pool has a stable URL-based child id and registers
+in the broker registry, which maps service URLs to pool processes. Each pool owns
+`:connections_per_broker` connection processes, one by default. Explicitly stopping a broker URL
+removes that entire pool from the supervisor; a later lookup may discover and start it again.
+Stopping the final pool also removes the client's discovery path. In that case an application must
+explicitly start a broker URL again, or restart the client to restore its configured bootstrap pool.
+
+Broker connection options configured on the client seed every pool. When
+`Pulsar.Client.start_broker/2` creates a pool for a previously unknown URL, options passed to that
+call override the client defaults for the new pool. Once the URL has a running or retained pool
+child specification, later calls select or restart that pool without reconfiguring it.
+
+Socket failures reconnect inside their connection process and do not spend the pool supervisor's
+restart budget. A connection process exit does. The pool scales OTP's default restart count by its
+connection count, so increasing the pool does not reduce the number of exits tolerated per
+connection before the pool itself is restarted.
+
+When a partition worker is created, its stable topology root assigns it a connection slot
+round-robin and records that slot in the worker's child specification. Worker restarts retain
+the assignment. A worker uses that numbered slot in whichever broker pool owns its topic.
+If the slot is restarting, the
+worker waits for it instead of silently moving to a sibling. Producer and consumer ids are scoped
+to a connection, and commands are never checked out independently. Stateless metadata lookups use
+any live sibling process; if its socket is disconnected, the operation fails fast and the existing
+metadata backoff retries. The consumer and producer registries map application-facing names to
+stable topology roots; internal partition workers and broker pools are not exposed as public
+resources.
+
+#### Connection Telemetry
+
+Both connection events use measurements `%{count: 1}` and include `:broker` (the connection name,
+such as `"localhost:6650#2"`) and `:connection_slot` in metadata:
+
+- `[:pulsar, :connection, :connected]` fires after each successful handshake, including reconnects.
+  Metadata also contains the advertised `:max_message_size`.
+- `[:pulsar, :connection, :frame_error]` fires when invalid framing forces the connection to be
+  discarded. Metadata also contains `:reason`.
 
 ## Logical Resources and Stable Roots
 
@@ -258,8 +298,8 @@ callers do not need to know which supervisor owns the root.
 Recovery happens at the narrowest useful boundary:
 
 - An unexpected worker failure is restarted by its root.
-- A broker connection loss restarts the workers that depended on it while the client remains
-  available.
+- A broker connection loss restarts the workers that depended on it. If their combined exits
+  exhaust the shared root budget, recovery escalates as described below.
 - A broker rejection a restart cannot fix, such as an incompatible schema or an `:exclusive`
   subscription already held, exits the worker like any other failure and is allowed to climb.
   A worker that is *finished* rather than failed is stopped instead, which costs no restart.
@@ -293,11 +333,13 @@ controller, any companion, and all partition workers below one root. When they e
 exits. The client branch restarts that resource until it exhausts the resource budget, then the
 failure reaches the client and whatever supervises it.
 
-Two things keep that from firing on ordinary trouble.
-
-A broker being away cannot spend the worker budget. <code>Pulsar.Backoff</code> holds a starting
-worker for its retry budget before giving up, so a start against an unreachable broker costs seconds
-rather than microseconds and an outage produces far fewer restarts than the window allows.
+Backoff limits repeated failures while a broker remains unavailable. <code>Pulsar.Backoff</code>
+holds a starting worker for its retry budget before giving up, so repeated starts against an
+unreachable broker cost seconds rather than microseconds. It does not absorb the initial wave of
+worker exits when an established broker connection is lost. With the default budget of three
+restarts in five seconds, four partition workers exiting in that window shut down their root.
+Several resources doing this can exhaust their client branch too; runtime resources must then
+be recreated by their owner.
 
 Both budgets are OTP's own by default, and both are configured on `Pulsar.Client`. The root budget
 is deliberately shared: correlated failures across several partitions can rebuild the whole logical

@@ -205,6 +205,10 @@ defmodule Pulsar.Topology.Root do
   end
 
   defp worker_child_spec(id, worker, opts) do
+    # Allocate once per child specification so a worker restart keeps its pool slot.
+    [connection_slot] = Client.allocate_connection_slots(Keyword.fetch!(opts, :client), 1)
+    opts = Keyword.put(opts, :connection_slot, connection_slot)
+
     {worker, opts}
     |> Supervisor.child_spec([])
     |> Map.put(:id, id)

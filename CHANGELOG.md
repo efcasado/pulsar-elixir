@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.1.1](https://github.com/efcasado/pulsar-elixir/compare/v3.1.0...v3.1.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **consumer:** charge chunk permits on arrival ([4cb41db](https://github.com/efcasado/pulsar-elixir/commit/4cb41db7ab358917e24efce95adf76f569a80c04))
+* **reader:** enforce inactivity timeout during permit reports ([fc9bb6f](https://github.com/efcasado/pulsar-elixir/commit/fc9bb6fac289730c31b2dbe9ea3416d219ebcd08))
+
+
+### Dependencies
+
+* bump jdx/mise-action from 4.2.5 to 4.3.0 ([#219](https://github.com/efcasado/pulsar-elixir/issues/219)) ([6308492](https://github.com/efcasado/pulsar-elixir/commit/6308492b4a8a391848106ab4893f98cef90a3146))
+
 ## [3.1.0](https://github.com/efcasado/pulsar-elixir/compare/v3.0.1...v3.1.0) (2026-08-26)
 
 
