@@ -76,8 +76,8 @@ defmodule Pulsar.Client do
               default: 1,
               doc: """
               Connections this client opens to each broker. Consumer and producer workers
-              are assigned slots round-robin and retain their slot across worker and group
-              restarts. Each slot adds one process and TCP connection per discovered broker.
+              are assigned slots round-robin and retain their slot across worker restarts. Each slot
+              adds one process and TCP connection per discovered broker.
               Defaults to one.
               """
             ],
@@ -102,7 +102,8 @@ defmodule Pulsar.Client do
               topology controller, and any companion — may restart before that resource gives up, as
               `[max_restarts: integer, max_seconds: integer]`. OTP's own intensity by default.
 
-              The budget is shared by those children. See
+              The budget is shared by those children and does not automatically scale with partition
+              count. Tune it for the resource size and desired recovery policy. See
               `docs/architecture.md` for the resulting failure granularity and how these numbers
               relate to `Pulsar.Backoff`.
               """

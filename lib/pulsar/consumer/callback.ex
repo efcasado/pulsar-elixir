@@ -118,6 +118,10 @@ defmodule Pulsar.Consumer.Callback do
           name: :orders_2]
        ]}
 
+  Each named resource has its own lifecycle: stopping one leaves the others running. To keep
+  standby consumers for a failover subscription, use the same pattern with `:failover`. An
+  exclusive subscription admits only one consumer per partition across all resources.
+
   Each process has independent callback state. The consumer facade intentionally hides
   those short-lived worker processes, so state that must be shared, queried, or aggregated
   across consumers should live in an application process with its own public API.
