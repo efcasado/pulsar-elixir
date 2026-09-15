@@ -367,11 +367,10 @@ the one that cannot run comes down.
 Whether it travels past the client is the host's to decide, and worth deciding deliberately. A
 resource started at runtime is not put back once the branch is rebuilt, so nothing is left
 failing and the climb ends there; the caller holds the pid and is the one who can notice. A
-declared one is recreated by Bootstrap on every client restart, so it fails again — but a whole
-cascade takes about five seconds, most of it a client reconnecting and bootstrapping. A host
-supervisor on OTP's own three-in-five never fills its budget against a failure every five
-seconds, and rebuilds the client indefinitely instead. Widen the window past one cascade —
-`max_seconds: 60` — and the same failure terminates the host.
+declared one is recreated by Bootstrap on every client restart, so it fails again. Whether those
+failures exhaust the host's budget depends on broker response times, the topology, and the host's
+restart settings. OTP's default three-in-five can be exhausted; it does not guarantee indefinite
+recovery. Configure the host's restart count and window for the desired escalation policy.
 
 ## Implementation Notes for Contributors
 

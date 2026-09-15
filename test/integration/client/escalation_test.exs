@@ -33,8 +33,8 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     host_tree([{Client, name: name, host: System.broker().service_url, consumers: [consumer]}], intensity)
   end
 
-  # A cascade takes about five seconds, most of it a client reconnecting, so a host allowing
-  # three restarts in five never fills its budget. One in sixty fills on the second cascade.
+  # Use an explicit budget large enough to observe repeated cascades without depending on
+  # their broker- and topology-dependent duration.
   @tag timeout: 180_000
   test "a declared resource that cannot run reaches a host whose window outlasts a cascade" do
     host = declared_client(:escalation_wide, max_restarts: 1, max_seconds: 60)
@@ -43,11 +43,35 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     assert_receive {:DOWN, ^ref, :process, ^host, :shutdown}, 150_000
   end
 
-  test "a declared resource that cannot run only rebuilds a host on OTP's own window" do
-    host = declared_client(:escalation_default, max_restarts: 3, max_seconds: 5)
-    ref = Process.monitor(host)
+  test "a declared resource is recreated after its client restarts" do
+    topic = "persistent://public/default/escalation-test-recreated"
+    :ok = System.create_topic(topic)
+    name = :escalation_recreated
+    consumer_name = :declared_recreated
 
-    refute_receive {:DOWN, ^ref, :process, ^host, _reason}, 20_000
+    consumer = [
+      topic: topic,
+      name: consumer_name,
+      subscription_name: "escalation-recreated",
+      callback_module: DummyConsumer
+    ]
+
+    host = host_tree([{Client, name: name, host: System.broker().service_url, consumers: [consumer]}])
+    :ok = Pulsar.Consumer.await_ready(consumer_name, client: name)
+    client = Process.whereis(name)
+    {:ok, root} = Client.lookup(:consumers, consumer_name, name)
+    root_ref = Process.monitor(root)
+    client_ref = Process.monitor(client)
+
+    Process.exit(client, :kill)
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :killed}
+    assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}
+    :ok = Pulsar.Consumer.await_ready(consumer_name, client: name, timeout: 15_000)
+
+    {:ok, replacement} = Client.lookup(:consumers, consumer_name, name)
+    assert replacement != root
+    assert Process.whereis(name) != client
+    assert Process.alive?(host)
   end
 
   # A worker waiting to start still reads its mailbox, so it is not killed after the timeout.
