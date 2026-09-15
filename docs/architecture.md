@@ -130,9 +130,8 @@ connection before the pool itself is restarted.
 When a partition worker is created, its stable topology root assigns it a connection slot
 round-robin and records that slot in the worker's child specification. Worker restarts retain
 the assignment. A worker uses that numbered slot in whichever broker pool owns its topic.
-If the slot is restarting, the
-worker waits for it instead of silently moving to a sibling. Producer and consumer ids are scoped
-to a connection, and commands are never checked out independently. Stateless metadata lookups use
+If the slot is restarting, the worker waits for it instead of silently moving to a sibling.
+Producer and consumer ids are scoped to a connection, and commands are never checked out independently. Stateless metadata lookups use
 any live sibling process; if its socket is disconnected, the operation fails fast and the existing
 metadata backoff retries. The consumer and producer registries map application-facing names to
 stable topology roots; internal partition workers and broker pools are not exposed as public
@@ -169,12 +168,18 @@ consumer topology root (:orders-billing)
 └── consumer worker for partition 1
 ```
 
-Each partition has exactly one worker. For producers that preserves one ordered send lane and
+Each partition has one configured worker slot. For producers that preserves one ordered send lane and
 one sequence-id and batching domain per partition. A consumer that needs several broker-side
 consumers on one shared, key-shared, or failover subscription starts separately named logical
 resources with that subscription. Adding partitions changes the workers below a root, but not
 the root itself. This is why names, stop operations, client listings, and publishing target the
 logical resource instead of a particular worker.
+
+There is no independent worker-count setting or subscription-specific count rule to reason about.
+An exclusive consumer cannot accidentally configure multiple workers for the same partition within
+one resource. Separate resources can still contend for an exclusive subscription; the broker
+continues to enforce subscription ownership. Shared and key-shared subscriptions distribute work
+across separately named consumers, while failover subscriptions keep additional consumers on standby.
 
 The stable root represents that logical resource across worker restarts and broker
 reconnections. It remains registered and appears in client listings while operations report
@@ -342,12 +347,12 @@ Several resources doing this can exhaust their client branch too; runtime resour
 be recreated by their owner.
 
 Both budgets are OTP's own by default, and both are configured on `Pulsar.Client`. The root budget
-is deliberately shared: correlated failures across several partitions can rebuild the whole logical
-resource sooner than one isolated failure. That trades per-partition failure isolation for one direct
-and observable ownership boundary. The two numbers still go together rather than being chosen
-separately: a worker held by <code>Pulsar.Backoff</code> restarts about once per window, so the window
-has to stay small relative to that retry budget. At 3 in 5 seconds that is one restart against three,
-which holds; at 3 in 60 seconds it would be twenty against three, which does not.
+is deliberately shared and does not automatically scale with partition count. Adding partitions
+leaves the configured recovery policy unchanged. Applications can increase `:max_restarts` to
+accommodate the number of workers expected to fail together, including controller and companion
+restarts. Choose `:max_seconds` alongside that count and the worker's backoff duration: a longer
+window also accumulates more repeated failures. Correlated failures can rebuild the whole resource
+sooner than an isolated failure; that is the chosen resource-level recovery boundary.
 
 Stopping contributes to none of this. A resource stopped through the facade is terminated by its
 parent, so it costs no restart and escalates nothing. A consumer callback's normal or shutdown exit
@@ -417,3 +422,5 @@ use `[:pulsar, :topology, :discovery, ...]` and
 6. Declared resources are restored automatically; owners restore runtime resources.
 7. An abnormal worker exit means failure and is passed upward. A deliberate consumer callback
    completion exits normally from a transient worker and remains stopped.
+8. Each logical resource configures one worker per topic partition directly under its root.
+   Additional consumers on the same subscription are separately named resources.
