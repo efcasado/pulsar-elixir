@@ -127,6 +127,18 @@ defmodule Pulsar.TopologyTest do
     def start_link(opts), do: Agent.start_link(fn -> opts end)
   end
 
+  defmodule ReportingOptsWorker do
+    @moduledoc false
+    use Agent
+
+    def start_link(opts) do
+      Agent.start_link(fn ->
+        send(Keyword.fetch!(opts, :report_starts_to), {:opts_worker_started, opts})
+        opts
+      end)
+    end
+  end
+
   defmodule DisappearingSupervisor do
     @moduledoc false
 
@@ -692,6 +704,73 @@ defmodule Pulsar.TopologyTest do
       assert Keyword.fetch!(opts, :topic) == @topic
       assert Keyword.fetch!(opts, :base_topic) == @topic
       assert Keyword.fetch!(opts, :partition) == nil
+    end
+
+    test "retains round-robin connection slots across worker and group restarts" do
+      client = :topology_connection_slots
+
+      start_supervised!({Client, name: client, host: "pulsar://127.0.0.1:1", connections_per_broker: 3})
+
+      {root, _registry} =
+        start_async_topology(
+          fn _topic, _opts -> {:ok, 0} end,
+          [client: client, consumer_count: 4, report_starts_to: self()],
+          worker: ReportingOptsWorker
+        )
+
+      :ok = Topology.await_ready(root, 1_000)
+      [{0, group}] = Topology.groups(root)
+
+      children = Supervisor.which_children(group)
+
+      assignments =
+        Map.new(children, fn {_id, worker, :worker, _modules} ->
+          opts = Agent.get(worker, & &1)
+          refute Keyword.has_key?(opts, :connection_slots)
+          {Keyword.fetch!(opts, :name), Keyword.fetch!(opts, :connection_slot)}
+        end)
+
+      slots =
+        assignments
+        |> Map.values()
+        |> Enum.sort()
+
+      assert slots == [0, 0, 1, 2]
+
+      for _worker <- 1..4 do
+        assert_receive {:opts_worker_started, _opts}
+      end
+
+      [{id, worker, :worker, _modules} | _rest] = children
+      opts = Agent.get(worker, & &1)
+      connection_slot = Keyword.fetch!(opts, :connection_slot)
+      worker_name = Keyword.fetch!(opts, :name)
+      ref = Process.monitor(worker)
+
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^worker, :killed}
+      assert_receive {:opts_worker_started, restarted_opts}
+      assert Keyword.fetch!(restarted_opts, :name) == worker_name
+      assert Keyword.fetch!(restarted_opts, :connection_slot) == connection_slot
+
+      assert {^id, restarted, :worker, _modules} =
+               group |> Supervisor.which_children() |> List.keyfind(id, 0)
+
+      assert restarted != worker
+
+      group_ref = Process.monitor(group)
+      Process.exit(group, :kill)
+      assert_receive {:DOWN, ^group_ref, :process, ^group, :killed}
+
+      restarted_assignments =
+        Map.new(1..4, fn _worker ->
+          assert_receive {:opts_worker_started, restarted_opts}
+          {Keyword.fetch!(restarted_opts, :name), Keyword.fetch!(restarted_opts, :connection_slot)}
+        end)
+
+      assert restarted_assignments == assignments
+      assert [{0, restarted_group}] = Topology.groups(root)
+      assert restarted_group != group
     end
   end
 
