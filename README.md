@@ -44,6 +44,9 @@ Upgrading from 2.x? See the
 `Pulsar.Consumer` and `Pulsar.Producer`, downcases the option atoms, and changes how partition
 keys are routed and chunks are framed.
 
+Upgrading from 3.x to 4.x? See the [4.0 upgrade guide](docs/upgrading_to_4.0.md) for
+removing `consumer_count`, naming additional consumers, and configuring restart budgets.
+
 
 ## Quick Start
 
