@@ -31,7 +31,8 @@ defmodule Pulsar.MixProject do
           "docs/dead_letter_policies.md",
           "docs/schemas.md",
           "docs/reader.md",
-          "docs/upgrading_to_3.0.md"
+          "docs/upgrading_to_3.0.md",
+          "docs/upgrading_to_4.0.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/

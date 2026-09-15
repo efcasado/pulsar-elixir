@@ -147,9 +147,8 @@ Options are validated at startup, so old or misspelled values now raise.
 ### Changes used by some applications
 
 - Remove `:producer_count`. A producer now has one worker per partition. `:consumer_count`
-  remains supported in 3.x; the subsequent flat-topology breaking change removes it. With that
-  change, start separately named consumers on the same shared or key-shared subscription
-  to retain multiple workers per partition.
+  remains supported in 3.x. For its removal in 4.x, see the
+  [4.0 upgrade guide](upgrading_to_4-0.html).
 - Remove `:host` from `Pulsar.Reader.stream/2`. Start a client first and use `:client` to select
   it when necessary:
 
