@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.2.0](https://github.com/efcasado/pulsar-elixir/compare/v3.1.1...v3.2.0) (2026-09-15)
+
+
+### Features
+
+* **client:** broker connection pools ([#221](https://github.com/efcasado/pulsar-elixir/issues/221)) ([8ea9b54](https://github.com/efcasado/pulsar-elixir/commit/8ea9b54e877f636df9af702630e6d4dafedff3c2))
+
+
+### Dependencies
+
+* bump dialyxir from 1.4.7 to 1.4.8 ([#224](https://github.com/efcasado/pulsar-elixir/issues/224)) ([58e653f](https://github.com/efcasado/pulsar-elixir/commit/58e653f954996ad229b9686e3ebd25018af90efb))
+* bump ex_doc from 0.40.3 to 0.40.4 ([#222](https://github.com/efcasado/pulsar-elixir/issues/222)) ([28e6ace](https://github.com/efcasado/pulsar-elixir/commit/28e6ace72ef290e502efa562717b80b1092b0238))
+
 ## [3.1.1](https://github.com/efcasado/pulsar-elixir/compare/v3.1.0...v3.1.1) (2026-08-29)
 
 
