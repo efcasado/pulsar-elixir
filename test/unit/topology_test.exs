@@ -543,9 +543,11 @@ defmodule Pulsar.TopologyTest do
 
       :ok = Topology.await_ready(root, 1_000)
 
-      below = Topology.workers(root)
+      assert [{0, first}, {1, second}] = Enum.sort(Topology.partitions(root))
+      assert is_pid(first)
+      assert is_pid(second)
 
-      refs = Map.new([root | below], &{Process.monitor(&1), &1})
+      refs = Map.new([root, first, second], &{Process.monitor(&1), &1})
 
       assert Topology.stop(root) == :ok
 
