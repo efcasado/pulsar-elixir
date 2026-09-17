@@ -93,14 +93,15 @@ defmodule Pulsar.Client do
             worker_restart_intensity: [
               type: :keyword_list,
               keys: [
-                max_restarts: [type: :non_neg_integer, default: 3],
+                max_restarts: [type: :non_neg_integer, default: 10],
                 max_seconds: [type: :pos_integer, default: 5]
               ],
-              default: [max_restarts: 3, max_seconds: 5],
+              default: [max_restarts: 10, max_seconds: 5],
               doc: """
               How often direct children under one consumer or producer root — workers, the
               topology controller, and any companion — may restart before that resource gives up, as
-              `[max_restarts: integer, max_seconds: integer]`. OTP's own intensity by default.
+              `[max_restarts: integer, max_seconds: integer]`. Defaults to ten restarts in five seconds,
+              allowing a small partitioned resource to recover from simultaneous worker failures.
 
               The budget is shared by those children and does not automatically scale with partition
               count. Tune it for the resource size and desired recovery policy. See

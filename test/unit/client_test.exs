@@ -350,7 +350,8 @@ defmodule Pulsar.ClientTest do
     test "a client that does not configure them, and one that never started, answer the defaults" do
       start_supervised!({Client, name: :intensity_defaults, host: "pulsar://127.0.0.1:1"})
 
-      assert Client.restart_intensity(:intensity_defaults, :worker) == [max_restarts: 3, max_seconds: 5]
+      assert Client.restart_intensity(:intensity_defaults, :worker) == [max_restarts: 10, max_seconds: 5]
+      assert Client.restart_intensity(:never_started, :worker) == [max_restarts: 10, max_seconds: 5]
       assert Client.restart_intensity(:intensity_defaults, :resource) == [max_restarts: 3, max_seconds: 5]
       assert Client.restart_intensity(:never_started, :resource) == [max_restarts: 3, max_seconds: 5]
     end

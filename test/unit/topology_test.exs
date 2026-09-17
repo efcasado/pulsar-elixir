@@ -633,29 +633,40 @@ defmodule Pulsar.TopologyTest do
       assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}, 1_000
     end
 
-    test "partition failures share the root's default restart budget" do
-      owner = start_dynamic_supervisor()
-      spec = topology_spec(ReportingOptsWorker)
-      {Root, :start_link, [worker, registry, kind, opts, controller_opts]} = spec.start
-      opts = Keyword.put(opts, :report_starts_to, self())
-      controller_opts = Keyword.put(controller_opts, :resolver, fn _topic, _opts -> {:ok, 4} end)
-      spec = %{spec | start: {Root, :start_link, [worker, registry, kind, opts, controller_opts]}}
-      {:ok, root} = DynamicSupervisor.start_child(owner, spec)
-      :ok = Topology.await_ready(root, 1_000)
-      root_ref = Process.monitor(root)
-      partitions = Topology.partitions(root)
-      for _worker <- 1..4, do: assert_receive({:opts_worker_started, _opts})
+    for partition_count <- [1, 3] do
+      test "#{partition_count} partition workers recover within the shared budget and escalate on the eleventh restart" do
+        partition_count = unquote(partition_count)
+        owner = start_dynamic_supervisor()
+        spec = topology_spec(ReportingOptsWorker)
+        {Root, :start_link, [worker, registry, kind, opts, controller_opts]} = spec.start
+        opts = Keyword.put(opts, :report_starts_to, self())
+        controller_opts = Keyword.put(controller_opts, :resolver, fn _topic, _opts -> {:ok, partition_count} end)
+        spec = %{spec | start: {Root, :start_link, [worker, registry, kind, opts, controller_opts]}}
+        {:ok, root} = DynamicSupervisor.start_child(owner, spec)
+        :ok = Topology.await_ready(root, 1_000)
+        root_ref = Process.monitor(root)
+        for _worker <- 1..partition_count, do: assert_receive({:opts_worker_started, _opts})
 
-      for {_index, worker} <- Enum.take(partitions, 3) do
+        # Nine isolated failures, or three waves affecting all three partitions. Wait for
+        # replacement starts before beginning another wave, without sleeps or polling.
+        for _wave <- 1..div(9, partition_count) do
+          partitions = Topology.partitions(root)
+          assert length(partitions) == partition_count
+          for {_index, worker} <- partitions, do: Process.exit(worker, :kill)
+          for _worker <- 1..partition_count, do: assert_receive({:opts_worker_started, _opts})
+          assert Process.alive?(root)
+        end
+
+        [{_index, worker} | _] = Topology.partitions(root)
         Process.exit(worker, :kill)
         assert_receive {:opts_worker_started, _opts}
-      end
+        assert Process.alive?(root)
 
-      assert Process.alive?(root)
-      {_index, worker} = List.last(partitions)
-      Process.exit(worker, :kill)
-      assert_receive {:DOWN, ^root_ref, :process, ^root, :shutdown}
-      assert Process.alive?(owner)
+        [{_index, worker} | _] = Topology.partitions(root)
+        Process.exit(worker, :kill)
+        assert_receive {:DOWN, ^root_ref, :process, ^root, :shutdown}
+        assert Process.alive?(owner)
+      end
     end
 
     test "a resource that cannot stay up escalates to its client instead of disappearing" do
