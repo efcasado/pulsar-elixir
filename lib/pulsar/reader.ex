@@ -200,7 +200,6 @@ defmodule Pulsar.Reader do
       client: client_name,
       subscription_type: :exclusive,
       durable: false,
-      consumer_count: 1,
       initial_position: start_position,
       read_compacted: read_compacted,
       flow_policy: {Callback, :report_permits, [self(), reader_ref]},

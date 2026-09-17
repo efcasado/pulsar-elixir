@@ -97,9 +97,9 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
 
     consumer = start_consumer(topic, "partitioned-stopping-sub", create_topic?: false)
 
-    groups = Map.new(Topology.groups(consumer))
-    [ending] = partition_workers(groups, 0)
-    [surviving] = partition_workers(groups, 1)
+    partitions = Map.new(Topology.partitions(consumer))
+    ending = Map.fetch!(partitions, 0)
+    surviving = Map.fetch!(partitions, 1)
 
     drain()
 
@@ -118,9 +118,10 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
 
   test "tells every consumer on a shared subscription" do
     topic = @topic <> "-shared"
-    consumer = start_consumer(topic, "shared-sub", consumer_count: 3, subscription_type: :shared)
-    workers = Topology.workers(consumer)
-    assert length(workers) == 3
+    :ok = System.create_topic(topic)
+    Utils.seed_topic(topic, @messages, client: @client)
+
+    workers = start_subscription_consumers(topic, "shared-sub", :shared, 3)
 
     drain()
     :ok = System.terminate_topic(topic)
@@ -130,9 +131,10 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
 
   test "tells the passive consumer of a failover subscription too" do
     topic = @topic <> "-failover"
-    consumer = start_consumer(topic, "failover-sub", consumer_count: 2, subscription_type: :failover)
-    workers = Topology.workers(consumer)
-    assert length(workers) == 2
+    :ok = System.create_topic(topic)
+    Utils.seed_topic(topic, @messages, client: @client)
+
+    workers = start_subscription_consumers(topic, "failover-sub", :failover, 2)
 
     drain()
     :ok = System.terminate_topic(topic)
@@ -171,8 +173,19 @@ defmodule Pulsar.Integration.Consumer.EndOfTopicTest do
     consumer
   end
 
-  defp partition_workers(groups, index) do
-    for {_id, worker, :worker, _modules} <- Supervisor.which_children(Map.fetch!(groups, index)), do: worker
+  defp start_subscription_consumers(topic, subscription, type, count) do
+    for index <- 1..count do
+      root =
+        start_consumer(topic, subscription,
+          create_topic?: false,
+          seed?: false,
+          name: "#{subscription}-#{index}",
+          subscription_type: type
+        )
+
+      [worker] = Topology.workers(root)
+      worker
+    end
   end
 
   defp drain do
