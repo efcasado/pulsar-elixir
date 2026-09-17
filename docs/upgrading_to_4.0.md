@@ -80,10 +80,13 @@ remains independent per worker.
 workers, topology controller, and companions share the budget. `:resource_restart_intensity`
 applies to resource restarts in the client branch; the intermediate partition supervisors are gone.
 
-Both options remain configurable on `Pulsar.Client`, defaulting to three restarts in five seconds.
-The worker budget does not automatically scale with partition count. For example, four abnormal
-partition-worker exits in five seconds exhaust the default root budget. Tune the count and window
-for the number of workers expected to fail together and your desired recovery policy.
+Both options remain configurable on `Pulsar.Client`. The worker budget now defaults to ten
+restarts in five seconds; the resource budget remains three restarts in five seconds.
+
+The worker budget does not automatically scale with partition count. For three partitions, the
+default allows three complete worker restart waves and one additional restart. An eleventh restart
+in five seconds exhausts it. Tune the count and window for the number of workers expected to fail
+together, including controller and companion restarts, and your desired recovery policy.
 
 Declared resources are recreated after branch or client recovery. Applications remain responsible
 for recreating runtime resources after their branch or client is rebuilt.

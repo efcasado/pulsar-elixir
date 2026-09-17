@@ -341,13 +341,15 @@ failure reaches the client and whatever supervises it.
 Backoff limits repeated failures while a broker remains unavailable. <code>Pulsar.Backoff</code>
 holds a starting worker for its retry budget before giving up, so repeated starts against an
 unreachable broker cost seconds rather than microseconds. It does not absorb the initial wave of
-worker exits when an established broker connection is lost. With the default budget of three
-restarts in five seconds, four partition workers exiting in that window shut down their root.
+worker exits when an established broker connection is lost. The default root budget allows ten
+restarts in five seconds: a three-partition resource can absorb three complete worker restart
+waves and one additional restart. An eleventh restart in that window shuts down the root.
 Several resources doing this can exhaust their client branch too; runtime resources must then
 be recreated by their owner.
 
-Both budgets are OTP's own by default, and both are configured on `Pulsar.Client`. The root budget
-is deliberately shared and does not automatically scale with partition count. Adding partitions
+Both budgets are configured on `Pulsar.Client`. The client branch retains OTP's default of three
+resource restarts in five seconds. The root budget of ten is a starting point for small resources,
+is deliberately shared, and does not automatically scale with partition count. Adding partitions
 leaves the configured recovery policy unchanged. Applications can increase `:max_restarts` to
 accommodate the number of workers expected to fail together, including controller and companion
 restarts. Choose `:max_seconds` alongside that count and the worker's backoff duration: a longer
