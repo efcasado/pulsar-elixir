@@ -893,8 +893,21 @@ defmodule Pulsar.Producer.Worker do
     NimbleLZ4.compress(compressed_payload)
   end
 
+  # OTP 28's one-shot compressor has no clause for empty input. Finish a real empty frame.
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>) do
+    {:ok, context} = :zstd.context(:compress, %{pledgedSrcSize: 0, compressionLevel: 1})
+
+    try do
+      {:done, payload} = :zstd.finish(context, <<>>)
+      IO.iodata_to_binary(payload)
+    after
+      :zstd.close(context)
+    end
+  end
+
   defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
-    :ezstd.compress(compressed_payload)
+    # ezstd.compress/1 used level 1; OTP's default is level 3.
+    compressed_payload |> :zstd.compress(%{compressionLevel: 1}) |> IO.iodata_to_binary()
   end
 
   defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do

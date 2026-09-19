@@ -17,11 +17,6 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
-  # ezstd fills this buffer up to 1000 times per call, so it is what caps how large a zstd
-  # message can be. Sizing it to what the producer declared keeps one round the common case.
-  @zstd_min_buffer_size 64 * 1024
-  @zstd_max_buffer_size 1024 * 1024
-
   # Message.validation_error is client-level. CommandAck accepts Pulsar's narrower enum,
   # so only reasons with a deliberate mapping are sent over the wire.
   @wire_validation_errors %{
@@ -991,13 +986,13 @@ defmodule Pulsar.Consumer.Worker do
     NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload) do
-    buffer_size = metadata.uncompressed_size |> max(@zstd_min_buffer_size) |> min(@zstd_max_buffer_size)
+  # OTP 28's one-shot decoder has no clause for empty input (an empty message still has a frame).
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>), do: {:error, :empty_zstd_payload}
 
-    with context when is_reference(context) <- :ezstd.create_decompression_context(buffer_size),
-         payload when is_list(payload) <- :ezstd.decompress_streaming(context, compressed_payload) do
-      {:ok, IO.iodata_to_binary(payload)}
-    end
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
+    {:ok, compressed_payload |> :zstd.decompress() |> IO.iodata_to_binary()}
+  rescue
+    error in ErlangError -> {:error, error.original}
   end
 
   defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Use OTP's native Zstandard compression and decompression, removing the `ezstd`
+  runtime dependency. Erlang/OTP 28 or newer is now required.
+- Add Benchee producer and consumer compression benchmarks with single-message
+  and batched inputs, memory/reduction measurements, and baseline comparison instructions.
+
 ## [3.2.0](https://github.com/efcasado/pulsar-elixir/compare/v3.1.1...v3.2.0) (2026-09-15)
 
 

@@ -28,6 +28,9 @@ An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 
 ## Installation
 
+Requires Erlang/OTP 28 or newer. Zstandard compression uses OTP's built-in
+`:zstd` module; `:ezstd` is no longer a runtime dependency.
+
 Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 
 ```elixir
