@@ -126,6 +126,7 @@ defmodule Pulsar.MixProject do
     [
       "bench.decode_stream": ["run bench/decode_stream.exs"],
       "bench.compression": ["run bench/compression.exs"],
+      "bench.iodata": ["run bench/iodata.exs"],
       test: ["test"],
       "test.unit": ["test --exclude integration"],
       "test.integration": ["test --only integration"]
