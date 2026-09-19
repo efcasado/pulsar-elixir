@@ -103,7 +103,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
     command = %Binary.CommandMessage{message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
 
-    {:broker_message, {command, metadata, payload, nil}}
+    {:broker_message, {command, metadata, IO.iodata_to_binary(payload), nil}}
   end
 
   defp batch_payload(payloads) do
@@ -392,7 +392,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
     test "decodes a zstd payload larger than one decompression round" do
       payload = :binary.copy(<<"abcdefgh">>, 262_144)
-      delivery = delivery(:ZSTD, IO.iodata_to_binary(:zstd.compress(payload)), uncompressed_size: byte_size(payload))
+      delivery = delivery(:ZSTD, :zstd.compress(payload), uncompressed_size: byte_size(payload))
 
       assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
 
@@ -428,7 +428,7 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
 
     test "rejects zstd output whose size differs from the metadata" do
-      compressed = IO.iodata_to_binary(:zstd.compress("payload"))
+      compressed = :zstd.compress("payload")
       message = delivery(:ZSTD, compressed, uncompressed_size: 8)
 
       assert {:noreply, _state} = Worker.handle_info(message, reporting_state())
@@ -438,7 +438,7 @@ defmodule Pulsar.Consumer.WorkerTest do
 
     test "decodes a zstd frame without a content size" do
       payload = :binary.copy("streamed payload", 10_000)
-      compressed = IO.iodata_to_binary(:zstd.compress(payload, %{contentSizeFlag: false}))
+      compressed = :zstd.compress(payload, %{contentSizeFlag: false})
       message = delivery(:ZSTD, compressed, uncompressed_size: byte_size(payload))
 
       assert {:noreply, _state} = Worker.handle_info(message, reporting_state())
@@ -465,7 +465,7 @@ defmodule Pulsar.Consumer.WorkerTest do
     end
 
     test "a payload that does decompress is delivered as usual" do
-      delivery = delivery(:ZSTD, IO.iodata_to_binary(:zstd.compress(<<"the real payload">>)), uncompressed_size: 16)
+      delivery = delivery(:ZSTD, :zstd.compress(<<"the real payload">>), uncompressed_size: 16)
 
       assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
 
