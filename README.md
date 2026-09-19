@@ -28,6 +28,8 @@ An Elixir client for [Apache Pulsar](https://pulsar.apache.org/).
 
 ## Installation
 
+Requires Erlang/OTP 28 or newer.
+
 Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 
 ```elixir

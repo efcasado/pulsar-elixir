@@ -40,6 +40,14 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
         producer_options("snappy", :snappy)
       )
 
+    # A codec's options are the producer's own: nothing on the wire says which level wrote
+    # the frame, and a consumer reads it the same way.
+    {:ok, _} =
+      Pulsar.Producer.start(
+        @topic,
+        producer_options("zstd-max", {:zstd, level: 22})
+      )
+
     {:ok, consumer_pid} =
       Pulsar.Consumer.start(
         @topic,
@@ -56,8 +64,9 @@ defmodule Pulsar.Integration.Producer.CompressionTest do
     {:ok, _} = Pulsar.Producer.send("zstd", "Hello, world!", client: @client)
     {:ok, _} = Pulsar.Producer.send("zlib", "Hello, world!", client: @client)
     {:ok, _} = Pulsar.Producer.send("snappy", "Hello, world!", client: @client)
+    {:ok, _} = Pulsar.Producer.send("zstd-max", "Hello, world!", client: @client)
 
-    for _codec <- 1..5 do
+    for _codec <- 1..6 do
       assert_receive {:consumer, ^consumer, %{payload: "Hello, world!"}}
     end
   end

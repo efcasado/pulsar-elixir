@@ -28,9 +28,23 @@ defmodule Pulsar.Producer.Options do
       """
     ],
     compression: [
-      type: {:in, [:none, :lz4, :zlib, :snappy, :zstd]},
+      type: {:custom, __MODULE__, :validate_compression, []},
+      type_doc: "`:none | :lz4 | :zlib | :snappy | :zstd | {:zstd, keyword()}`",
       default: :none,
-      doc: "Compression applied to the payload."
+      doc: """
+      Compression applied to the payload, as a codec or a `{codec, options}` tuple.
+
+      Only `:zstd` takes options, and only `:level`, in OTP's documented range of `-22..22`.
+      Positive values select compression levels; negative values favor speed over ratio.
+      Omitting `:level` selects `3`; `0` selects zstd's own default, currently `3`.
+
+      Higher is not reliably smaller: zstd's levels are parameter sets rather than a dial,
+      and on payloads with structure but varied values `1` can beat `3` on both size and
+      time. Measure against your own messages before moving it.
+
+          compression: :zstd
+          compression: {:zstd, level: 1}
+      """
     ],
     hashing_scheme: [
       type: {:in, Hash.schemes()},
@@ -150,6 +164,19 @@ defmodule Pulsar.Producer.Options do
     ]
   ]
 
+  # Follow OTP's documented compressionLevel() range.
+  @zstd_levels -22..22
+
+  @zstd_schema [
+    level: [
+      type: {:in, @zstd_levels},
+      default: 3,
+      doc: "Compression level in `-22..22`. Defaults to `3`; `0` selects zstd's own default."
+    ]
+  ]
+
+  @codecs [:none, :lz4, :zlib, :snappy, :zstd]
+
   @spec schema() :: keyword()
   def schema, do: @schema
 
@@ -172,6 +199,21 @@ defmodule Pulsar.Producer.Options do
     with {:ok, opts} <- NimbleOptions.validate(opts, @schema) do
       validate_chunking(opts)
     end
+  end
+
+  @doc false
+  @spec validate_compression(term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_compression(codec) when codec in @codecs, do: {:ok, codec}
+
+  def validate_compression({:zstd, opts}) when is_list(opts) do
+    case NimbleOptions.validate(opts, @zstd_schema) do
+      {:ok, opts} -> {:ok, {:zstd, opts}}
+      {:error, error} -> {:error, "invalid :zstd options, " <> Exception.message(error)}
+    end
+  end
+
+  def validate_compression(other) do
+    {:error, "expected one of #{inspect(@codecs)} or a {:zstd, options} tuple, got: #{inspect(other)}"}
   end
 
   # A batch is one entry holding many messages and a chunked message is one message spread

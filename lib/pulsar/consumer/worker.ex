@@ -17,10 +17,9 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
-  # ezstd fills this buffer up to 1000 times per call, so it is what caps how large a zstd
-  # message can be. Sizing it to what the producer declared keeps one round the common case.
-  @zstd_min_buffer_size 64 * 1024
-  @zstd_max_buffer_size 1024 * 1024
+  # What a broker accepts unless it says otherwise, so an output ceiling still exists for a
+  # producer that published without recording what it compressed.
+  @default_max_message_size 5 * 1024 * 1024
 
   # Message.validation_error is client-level. CommandAck accepts Pulsar's narrower enum,
   # so only reasons with a deliberate mapping are sent over the wire.
@@ -70,7 +69,9 @@ defmodule Pulsar.Consumer.Worker do
     :expire_incomplete_chunked_message_after,
     :chunk_cleanup_interval,
     :schema,
-    :schema_version
+    :schema_version,
+    :zstd_context,
+    :broker_max_message_size
   ]
 
   @type flow_mfa :: {module(), atom(), [term()]}
@@ -105,6 +106,7 @@ defmodule Pulsar.Consumer.Worker do
           dead_letter_topic: String.t() | nil,
           chunked_message_contexts: %{optional(String.t()) => ChunkedMessageContext.t()},
           max_pending_chunked_messages: non_neg_integer(),
+          broker_max_message_size: pos_integer() | nil,
           expire_incomplete_chunked_message_after: non_neg_integer(),
           schema: Schema.t() | nil,
           schema_version: binary() | nil
@@ -197,7 +199,8 @@ defmodule Pulsar.Consumer.Worker do
         consumer_name: Keyword.get(opts, :name),
         acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled, :ack_type])),
         schema: build_schema(Keyword.get(opts, :schema)),
-        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
+        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy)),
+        zstd_context: new_zstd_context()
     }
 
     Logger.debug("Starting consumer for topic #{state.topic}")
@@ -816,7 +819,9 @@ defmodule Pulsar.Consumer.Worker do
   defp attempt_subscribe(state, init_args, backoff, deadline) do
     case subscribe(state) do
       {:ok, broker_pid} ->
-        {:noreply, %{state | broker_pid: broker_pid}, {:continue, {:seek_subscription, init_args}}}
+        state = %{state | broker_pid: broker_pid, broker_max_message_size: broker_max_message_size(broker_pid)}
+
+        {:noreply, state, {:continue, {:seek_subscription, init_args}}}
 
       {:error, reason} ->
         case Backoff.retry_in(reason, backoff, deadline) do
@@ -973,78 +978,215 @@ defmodule Pulsar.Consumer.Worker do
   defp max_redelivery(nil), do: nil
   defp max_redelivery(policy) when is_list(policy), do: Keyword.fetch!(policy, :max_redelivery)
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload), do: {:ok, payload}
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload, _state), do: {:ok, payload}
 
-  defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload) do
-    with {:ok, payload} <- uncompress(metadata, compressed_payload) do
+  defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload, state) do
+    with {:ok, payload} <- uncompress(metadata, compressed_payload, state) do
       verify_uncompressed_size(payload, metadata.uncompressed_size)
     end
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
-    {:ok, :zlib.uncompress(compressed_payload)}
-  rescue
-    error in ErlangError -> {:error, error.original}
-  end
+  # Every codec here decodes against a ceiling, because the size a payload is checked against
+  # is only known once it has been produced, and producing it is what a compression bomb
+  # attacks. A message declares what it compressed, and a message is the only thing a payload
+  # can be, so one of those two is always an upper bound on honest output.
+  defp output_limit(%Binary.MessageMetadata{uncompressed_size: size}, _state) when size > 0, do: size
+  defp output_limit(_metadata, %{broker_max_message_size: size}) when is_integer(size), do: size
+  defp output_limit(_metadata, _state), do: @default_max_message_size
 
-  defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
-    NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
-  end
+  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB} = metadata, compressed_payload, state) do
+    stream = :zlib.open()
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload) do
-    buffer_size = metadata.uncompressed_size |> max(@zstd_min_buffer_size) |> min(@zstd_max_buffer_size)
-
-    with context when is_reference(context) <- :ezstd.create_decompression_context(buffer_size),
-         payload when is_list(payload) <- :ezstd.decompress_streaming(context, compressed_payload) do
-      {:ok, IO.iodata_to_binary(payload)}
+    try do
+      :zlib.inflateInit(stream)
+      inflate_bounded(stream, compressed_payload, output_limit(metadata, state), [], 0)
+    rescue
+      error in ErlangError -> {:error, error.original}
+    after
+      :zlib.close(stream)
     end
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
-    :snappyer.decompress(compressed_payload)
+  defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload, state) do
+    NimbleLZ4.decompress(compressed_payload, output_limit(metadata, state))
+  end
+
+  # OTP 28's one-shot decoder has no clause for empty input (an empty message still has a frame).
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>, _state), do: {:error, :empty_zstd_payload}
+
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload, state) do
+    context = state.zstd_context
+
+    try do
+      with :ok <- validate_zstd_frames(compressed_payload) do
+        decompress_bounded(context, compressed_payload, output_limit(metadata, state), [], 0)
+      end
+    rescue
+      error in ErlangError -> {:error, error.original}
+    after
+      # A frame that ended early leaves the context mid-stream, where it quietly decodes to
+      # nothing and then reports corruption on the next frame, valid or not. Abandoning one
+      # over the limit leaves it there too.
+      :zstd.reset(context)
+    end
+  end
+
+  # Snappy records what it will expand to in its own header, so the ceiling is enforced before
+  # anything is allocated rather than while it fills.
+  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY} = metadata, compressed_payload, state) do
+    limit = output_limit(metadata, state)
+
+    case :snappyer.uncompressed_length(compressed_payload) do
+      {:ok, size} when size > limit -> {:error, {:uncompressed_size_over_limit, limit}}
+      {:ok, _size} -> :snappyer.decompress(compressed_payload)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Protobuf preserves unknown enum values as integers.
-  defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload) do
+  defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload, _state) do
     {:error, {:unsupported_compression, compression}}
+  end
+
+  defp inflate_bounded(stream, input, limit, acc, produced) do
+    case :zlib.safeInflate(stream, input) do
+      {:continue, output} ->
+        collect_bounded(output, limit, acc, produced, &inflate_bounded(stream, [], limit, &1, &2))
+
+      {:finished, output} ->
+        collect_bounded(output, limit, acc, produced, fn acc, _produced ->
+          :ok = :zlib.inflateEnd(stream)
+          {:ok, finish_bounded(acc)}
+        end)
+
+      {:need_dictionary, _adler, _output} ->
+        {:error, :zlib_dictionary_required}
+    end
+  end
+
+  defp decompress_bounded(context, input, limit, acc, produced) do
+    case :zstd.stream(context, input) do
+      {:continue, remainder, output} ->
+        collect_bounded(output, limit, acc, produced, &decompress_bounded(context, remainder, limit, &1, &2))
+
+      # Input exhaustion is safe here because validate_zstd_frames/1 checked framing.
+      {:continue, output} ->
+        collect_bounded(output, limit, acc, produced, fn acc, _produced -> {:ok, finish_bounded(acc)} end)
+    end
+  end
+
+  # OTP's stream/2 and finish/2 do not distinguish exhausted input from a complete
+  # decompression frame. Walk block lengths without decompressing or copying their
+  # contents, requiring a last block and the optional checksum. OTP still validates
+  # compressed data and checksum values. Frame layout: RFC 8878, sections 3.1.1/3.1.2.
+  defp validate_zstd_frames(<<>>), do: :ok
+
+  defp validate_zstd_frames(input) do
+    case :zstd.get_frame_header(input) do
+      {:ok, %{frameType: :ZSTD_frame, headerSize: size, checksumFlag: checksum}} when size > 0 ->
+        <<_header::binary-size(^size), blocks::binary>> = input
+        validate_zstd_blocks(blocks, if(checksum, do: 4, else: 0))
+
+      {:ok, %{frameType: :ZSTD_skippableFrame, frameContentSize: size}} ->
+        case input do
+          <<_header::binary-size(8), _data::binary-size(^size), rest::binary>> -> validate_zstd_frames(rest)
+          _ -> {:error, :incomplete_zstd_frame}
+        end
+
+      _ ->
+        {:error, :invalid_zstd_frame_header}
+    end
+  end
+
+  defp validate_zstd_blocks(<<header::little-24, data::binary>>, checksum_size) do
+    type = Bitwise.band(Bitwise.bsr(header, 1), 3)
+    size = if type == 1, do: 1, else: Bitwise.bsr(header, 3)
+
+    case data do
+      <<_block::binary-size(^size), rest::binary>> when type != 3 ->
+        if Bitwise.band(header, 1) == 0 do
+          validate_zstd_blocks(rest, checksum_size)
+        else
+          validate_zstd_trailer(rest, checksum_size)
+        end
+
+      _ ->
+        {:error, :invalid_zstd_block}
+    end
+  end
+
+  defp validate_zstd_blocks(_input, _checksum_size), do: {:error, :incomplete_zstd_frame}
+
+  defp validate_zstd_trailer(input, checksum_size) do
+    case input do
+      <<_checksum::binary-size(^checksum_size), frames::binary>> -> validate_zstd_frames(frames)
+      _ -> {:error, :incomplete_zstd_frame}
+    end
+  end
+
+  defp collect_bounded(output, limit, acc, produced, continue) do
+    produced = produced + IO.iodata_length(output)
+
+    if produced > limit do
+      {:error, {:uncompressed_size_over_limit, limit}}
+    else
+      continue.([output | acc], produced)
+    end
+  end
+
+  defp finish_bounded(acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  # One context per worker rather than one per message: its allocation is most of the work of
+  # decoding the small messages a consumer mostly sees. It has to be built here, in the process
+  # that will decode with it, since a context cannot be used from any other.
+  defp broker_max_message_size(broker_pid) do
+    case Pulsar.Broker.get_max_message_size(broker_pid) do
+      size when is_integer(size) and size > 0 -> size
+      _ -> nil
+    end
+  end
+
+  defp new_zstd_context do
+    {:ok, context} = :zstd.context(:decompress)
+    context
   end
 
   # Chunk ids outside the range the producer announced can fill the context without chunk 0
   # ever arriving, leaving nothing that describes the reassembled payload.
-  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx) do
+  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx, _state) do
     {:error, :missing_first_chunk}
   end
 
-  defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx)
+  defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx, state)
        when total_chunk_msg_size in [0, nil] or byte_size(payload) == total_chunk_msg_size do
-    if independently_compressed_chunks?(ctx) do
+    if independently_compressed_chunks?(ctx, state) do
       {:error, :unsupported_chunk_framing}
     else
-      maybe_uncompress(metadata, payload)
+      maybe_uncompress(metadata, payload, state)
     end
   end
 
-  defp uncompress_assembled(_metadata, payload, total_chunk_msg_size, _ctx) do
+  defp uncompress_assembled(_metadata, payload, total_chunk_msg_size, _ctx, _state) do
     {:error, {:total_chunk_msg_size_mismatch, expected: total_chunk_msg_size, actual: byte_size(payload)}}
   end
 
-  defp independently_compressed_chunks?(%ChunkedMessageContext{num_chunks_from_msg: num_chunks} = ctx)
+  defp independently_compressed_chunks?(%ChunkedMessageContext{num_chunks_from_msg: num_chunks} = ctx, state)
        when num_chunks > 1 do
     case ChunkedMessageContext.metadata(ctx, 0) do
       %Binary.MessageMetadata{compression: compression} when compression != :NONE ->
-        Enum.all?(0..(num_chunks - 1), &independently_compressed_chunk?(ctx, &1))
+        Enum.all?(0..(num_chunks - 1), &independently_compressed_chunk?(ctx, &1, state))
 
       _ ->
         false
     end
   end
 
-  defp independently_compressed_chunks?(_ctx), do: false
+  defp independently_compressed_chunks?(_ctx, _state), do: false
 
-  defp independently_compressed_chunk?(ctx, chunk_id) do
+  defp independently_compressed_chunk?(ctx, chunk_id, state) do
     with %Binary.MessageMetadata{} = metadata <- ChunkedMessageContext.metadata(ctx, chunk_id),
          payload when is_binary(payload) <- Map.get(ctx.chunks, chunk_id),
-         {:ok, _uncompressed} <- maybe_uncompress(metadata, payload) do
+         {:ok, _uncompressed} <- maybe_uncompress(metadata, payload, state) do
       true
     else
       _ -> false
@@ -1133,7 +1275,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp build_messages_from_entry(command, metadata, payload, broker_metadata, state) do
-    case maybe_uncompress(metadata, payload) do
+    case maybe_uncompress(metadata, payload, state) do
       {:ok, uncompressed} ->
         case unwrap_messages(metadata, uncompressed) do
           {:ok, unwrapped} ->
@@ -1179,6 +1321,9 @@ defmodule Pulsar.Consumer.Worker do
 
         :missing_first_chunk ->
           {:uncompressed_size_corruption, :missing_first_chunk}
+
+        {:uncompressed_size_over_limit, _} ->
+          {:uncompressed_size_corruption, :uncompressed_size_over_limit}
 
         {:unsupported_compression, _} ->
           {:decompression_failed, :unsupported_compression}
@@ -1347,7 +1492,7 @@ defmodule Pulsar.Consumer.Worker do
     assembled_payload = ChunkedMessageContext.assemble_payload(ctx)
 
     {complete_payload, validation_error} =
-      case uncompress_assembled(metadata, assembled_payload, ctx.total_chunk_msg_size, ctx) do
+      case uncompress_assembled(metadata, assembled_payload, ctx.total_chunk_msg_size, ctx, state) do
         {:ok, payload} ->
           {payload, nil}
 
