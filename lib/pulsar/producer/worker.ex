@@ -84,7 +84,7 @@ defmodule Pulsar.Producer.Worker do
           max_pending_messages: pos_integer() | false | nil,
           access_mode: atom(),
           compression: :none | :lz4 | :zlib | :snappy | :zstd,
-          compression_level: 1..22,
+          compression_level: -22..22,
           ready: boolean(),
           registration_request_id: integer() | nil,
           topic_epoch: integer() | nil,

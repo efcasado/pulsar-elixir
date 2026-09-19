@@ -27,14 +27,21 @@ defmodule Pulsar.Producer.OptionsTest do
       assert validate!(compression: {:zstd, []})[:compression] == {:zstd, [level: 3]}
     end
 
-    test "accepts zstd's fast levels, which are negative" do
-      for level <- [0, -1, -7, -131_072] do
+    test "accepts OTP's documented zstd levels, including zero and both boundaries" do
+      for level <- [-22, -7, -1, 0, 1, 3, 22] do
         assert validate!(compression: {:zstd, level: level})[:compression] == {:zstd, [level: level]}
       end
     end
 
-    test "rejects a codec that takes no options, and a level libzstd would clamp" do
-      for compression <- [:gzip, {:lz4, level: 1}, {:zstd, level: 23}, {:zstd, level: -131_073}, {:zstd, levl: 3}] do
+    test "rejects invalid codecs, options, and levels outside OTP's documented range" do
+      for compression <- [
+            :gzip,
+            {:lz4, level: 1},
+            {:zstd, level: 23},
+            {:zstd, level: -23},
+            {:zstd, level: -131_072},
+            {:zstd, levl: 3}
+          ] do
         assert_raise NimbleOptions.ValidationError, ~r/:compression/, fn ->
           validate!(compression: compression)
         end

@@ -1018,7 +1018,9 @@ defmodule Pulsar.Consumer.Worker do
     context = state.zstd_context
 
     try do
-      decompress_bounded(context, compressed_payload, output_limit(metadata, state), [], 0)
+      with :ok <- validate_zstd_frames(compressed_payload) do
+        decompress_bounded(context, compressed_payload, output_limit(metadata, state), [], 0)
+      end
     rescue
       error in ErlangError -> {:error, error.original}
     after
@@ -1052,7 +1054,13 @@ defmodule Pulsar.Consumer.Worker do
         collect_bounded(output, limit, acc, produced, &inflate_bounded(stream, [], limit, &1, &2))
 
       {:finished, output} ->
-        collect_bounded(output, limit, acc, produced, fn acc, _produced -> {:ok, finish_bounded(acc)} end)
+        collect_bounded(output, limit, acc, produced, fn acc, _produced ->
+          :ok = :zlib.inflateEnd(stream)
+          {:ok, finish_bounded(acc)}
+        end)
+
+      {:need_dictionary, _adler, _output} ->
+        {:error, :zlib_dictionary_required}
     end
   end
 
@@ -1061,9 +1069,58 @@ defmodule Pulsar.Consumer.Worker do
       {:continue, remainder, output} ->
         collect_bounded(output, limit, acc, produced, &decompress_bounded(context, remainder, limit, &1, &2))
 
-      # No remainder means the frame gave up everything it had to give.
+      # Input exhaustion is safe here because validate_zstd_frames/1 checked framing.
       {:continue, output} ->
         collect_bounded(output, limit, acc, produced, fn acc, _produced -> {:ok, finish_bounded(acc)} end)
+    end
+  end
+
+  # OTP's stream/2 and finish/2 do not distinguish exhausted input from a complete
+  # decompression frame. Walk block lengths without decompressing or copying their
+  # contents, requiring a last block and the optional checksum. OTP still validates
+  # compressed data and checksum values. Frame layout: RFC 8878, sections 3.1.1/3.1.2.
+  defp validate_zstd_frames(<<>>), do: :ok
+
+  defp validate_zstd_frames(input) do
+    case :zstd.get_frame_header(input) do
+      {:ok, %{frameType: :ZSTD_frame, headerSize: size, checksumFlag: checksum}} when size > 0 ->
+        <<_header::binary-size(^size), blocks::binary>> = input
+        validate_zstd_blocks(blocks, if(checksum, do: 4, else: 0))
+
+      {:ok, %{frameType: :ZSTD_skippableFrame, frameContentSize: size}} ->
+        case input do
+          <<_header::binary-size(8), _data::binary-size(^size), rest::binary>> -> validate_zstd_frames(rest)
+          _ -> {:error, :incomplete_zstd_frame}
+        end
+
+      _ ->
+        {:error, :invalid_zstd_frame_header}
+    end
+  end
+
+  defp validate_zstd_blocks(<<header::little-24, data::binary>>, checksum_size) do
+    type = Bitwise.band(Bitwise.bsr(header, 1), 3)
+    size = if type == 1, do: 1, else: Bitwise.bsr(header, 3)
+
+    case data do
+      <<_block::binary-size(^size), rest::binary>> when type != 3 ->
+        if Bitwise.band(header, 1) == 0 do
+          validate_zstd_blocks(rest, checksum_size)
+        else
+          validate_zstd_trailer(rest, checksum_size)
+        end
+
+      _ ->
+        {:error, :invalid_zstd_block}
+    end
+  end
+
+  defp validate_zstd_blocks(_input, _checksum_size), do: {:error, :incomplete_zstd_frame}
+
+  defp validate_zstd_trailer(input, checksum_size) do
+    case input do
+      <<_checksum::binary-size(^checksum_size), frames::binary>> -> validate_zstd_frames(frames)
+      _ -> {:error, :incomplete_zstd_frame}
     end
   end
 

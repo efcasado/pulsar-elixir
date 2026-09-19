@@ -310,6 +310,118 @@ defmodule Pulsar.Consumer.WorkerTest do
   end
 
   describe "a payload that cannot be decompressed" do
+    test "rejects a zlib dictionary request and continues processing messages" do
+      payload = "dictionary-compressed payload"
+      compressor = :zlib.open()
+
+      compressed =
+        try do
+          :ok = :zlib.deflateInit(compressor)
+          :zlib.deflateSetDictionary(compressor, "dictionary-compressed")
+          compressor |> :zlib.deflate(payload, :finish) |> IO.iodata_to_binary()
+        after
+          :zlib.close(compressor)
+        end
+
+      state = reporting_state()
+      message = delivery(:ZLIB, compressed, uncompressed_size: byte_size(payload))
+      assert {:noreply, state} = Worker.handle_info(message, state)
+      assert_received {:invalid, %{validation_error: :decompression_failed}}
+      refute_received {:handled, _}
+
+      message = delivery(:ZLIB, :zlib.compress(payload), uncompressed_size: byte_size(payload))
+      assert {:noreply, _state} = Worker.handle_info(message, state)
+      assert_received {:handled, %{payload: ^payload}}
+    end
+
+    for codec <- [:ZLIB, :ZSTD], declared_size <- [0, 22] do
+      test "rejects a truncated #{codec} checksum with advertised size #{declared_size}" do
+        payload = "hello compressed world"
+
+        compressed =
+          case unquote(codec) do
+            :ZLIB -> :zlib.compress(payload)
+            :ZSTD -> IO.iodata_to_binary(:zstd.compress(payload, %{checksumFlag: true}))
+          end
+
+        state = reporting_state()
+
+        for missing <- 1..4 do
+          truncated = binary_part(compressed, 0, byte_size(compressed) - missing)
+          message = delivery(unquote(codec), truncated, uncompressed_size: unquote(declared_size))
+          assert {:noreply, _state} = Worker.handle_info(message, state)
+          assert_received {:invalid, %{validation_error: :decompression_failed}}
+          refute_received {:handled, _}
+        end
+
+        message = delivery(unquote(codec), compressed, uncompressed_size: unquote(declared_size))
+        assert {:noreply, _state} = Worker.handle_info(message, state)
+        assert_received {:handled, %{payload: ^payload}}
+        refute_received {:invalid, _}
+      end
+    end
+
+    test "rejects every incomplete prefix of a zstd frame with unknown output size" do
+      compressed = IO.iodata_to_binary(:zstd.compress("payload", %{checksumFlag: true, contentSizeFlag: false}))
+      state = reporting_state()
+
+      for size <- 0..(byte_size(compressed) - 1) do
+        message = delivery(:ZSTD, binary_part(compressed, 0, size), uncompressed_size: 0)
+        assert {:noreply, _state} = Worker.handle_info(message, state)
+        assert_received {:invalid, %{validation_error: :decompression_failed}}
+        refute_received {:handled, _}
+      end
+    end
+
+    test "validates concatenated zstd frames, including skippable and RLE blocks" do
+      # A three-byte RLE output has a one-byte block body (RFC 8878).
+      rle = <<0xFD2FB528::little-32, 0x20, 3, 27::little-24, ?a>>
+      skip = <<0x184D2A50::little-32, 3::little-32, "tag">>
+      second = IO.iodata_to_binary(:zstd.compress("second", %{checksumFlag: true}))
+      compressed = skip <> rle <> second <> skip
+      state = reporting_state()
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, compressed, uncompressed_size: 9), state)
+      assert_received {:handled, %{payload: "aaasecond"}}
+      refute_received {:invalid, _}
+
+      for input <- [
+            skip <> rle <> binary_part(second, 0, byte_size(second) - 1),
+            compressed <> <<0>>,
+            binary_part(skip, 0, byte_size(skip) - 1)
+          ] do
+        assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, input, uncompressed_size: 0), state)
+        assert_received {:invalid, %{validation_error: :decompression_failed}}
+        refute_received {:handled, _}
+      end
+    end
+
+    test "rejects a corrupt zstd checksum even when the complete trailer is present" do
+      compressed = IO.iodata_to_binary(:zstd.compress("payload", %{checksumFlag: true}))
+      size = byte_size(compressed) - 1
+      <<prefix::binary-size(^size), last>> = compressed
+      corrupt = <<prefix::binary, Bitwise.bxor(last, 1)>>
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, corrupt, uncompressed_size: 7), reporting_state())
+      assert_received {:invalid, %{validation_error: :decompression_failed}}
+      refute_received {:handled, _}
+    end
+
+    test "requires the last zstd block even when all advertised output was produced" do
+      # Raw non-final block containing abc, followed by an empty final block.
+      prefix = <<0xFD2FB528::little-32, 0x20, 3, 24::little-24, "abc">>
+      complete = <<prefix::binary, 1::little-24>>
+      state = reporting_state()
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, prefix, uncompressed_size: 3), state)
+      assert_received {:invalid, %{validation_error: :decompression_failed}}
+      refute_received {:handled, _}
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, complete, uncompressed_size: 3), state)
+      assert_received {:handled, %{payload: "abc"}}
+      refute_received {:invalid, _}
+    end
+
     for compression <- [:ZLIB, :LZ4, :ZSTD, :SNAPPY] do
       test "reaches handle_invalid_message/2 under #{compression}" do
         # Declared large enough that every codec here rejects these bytes for being undecodable
@@ -494,14 +606,14 @@ defmodule Pulsar.Consumer.WorkerTest do
 
     test "rejects a truncated zstd frame without crashing the consumer" do
       compressed = IO.iodata_to_binary(:zstd.compress("a truncated payload"))
-      # OTP 28 can return partial output for truncated frames; the metadata size rejects it.
+      # Reject incomplete framing even before checking the advertised output size.
       truncated = binary_part(compressed, 0, byte_size(compressed) - 1)
       message = delivery(:ZSTD, truncated, uncompressed_size: 19)
 
       assert {:noreply, _state} = Worker.handle_info(message, reporting_state())
-      assert_received {:invalid, %{validation_error: :uncompressed_size_corruption}}
+      assert_received {:invalid, %{validation_error: :decompression_failed}}
       refute_received {:handled, _message}
-      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{validation_error: :UncompressedSizeCorruption}}}
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{validation_error: :DecompressionError}}}
     end
 
     test "rejects zstd output whose size differs from the metadata" do
