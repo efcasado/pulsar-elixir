@@ -102,6 +102,15 @@ defmodule Pulsar.Consumer.WorkerTest do
     )
   end
 
+  defp compress(:ZLIB, payload), do: :zlib.compress(payload)
+  defp compress(:LZ4, payload), do: NimbleLZ4.compress(payload)
+  defp compress(:ZSTD, payload), do: IO.iodata_to_binary(:zstd.compress(payload))
+
+  defp compress(:SNAPPY, payload) do
+    {:ok, compressed} = :snappyer.compress(payload)
+    compressed
+  end
+
   defp delivery(compression, payload, opts) do
     metadata =
       struct(
@@ -303,7 +312,9 @@ defmodule Pulsar.Consumer.WorkerTest do
   describe "a payload that cannot be decompressed" do
     for compression <- [:ZLIB, :LZ4, :ZSTD, :SNAPPY] do
       test "reaches handle_invalid_message/2 under #{compression}" do
-        delivery = delivery(unquote(compression), <<"not a compressed frame">>, uncompressed_size: 64)
+        # Declared large enough that every codec here rejects these bytes for being undecodable
+        # rather than for promising more output than the message claimed.
+        delivery = delivery(unquote(compression), <<"not a compressed frame">>, uncompressed_size: 4096)
 
         assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
 
@@ -312,6 +323,43 @@ defmodule Pulsar.Consumer.WorkerTest do
 
         assert invalid.validation_error == :decompression_failed
       end
+    end
+
+    # A frame's compressed size says nothing about what it expands to, so each codec is held to
+    # what the message declared, and 8 MB never lands in a consumer expecting a kilobyte.
+    for compression <- [:ZLIB, :LZ4, :ZSTD, :SNAPPY] do
+      test "refuses a #{compression} payload that expands past the size the message declared" do
+        bomb = compress(unquote(compression), :binary.copy(<<0>>, 8_000_000))
+        delivery = delivery(unquote(compression), bomb, uncompressed_size: 1024)
+
+        assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+
+        assert_received {:invalid, _invalid}
+        refute_received {:handled, _message}
+      end
+    end
+
+    # LZ4 decodes into a buffer of exactly the declared size, so its own failure stands in for
+    # the ceiling; the codecs stopped by the ceiling itself report why.
+    test "reports a payload stopped at the limit as a size corruption" do
+      bomb = compress(:ZSTD, :binary.copy(<<0>>, 8_000_000))
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, bomb, uncompressed_size: 1024), reporting_state())
+
+      assert_received {:invalid, invalid}
+      assert invalid.validation_error == :uncompressed_size_corruption
+      assert_received {:"$gen_cast", {:send_command, %Binary.CommandAck{validation_error: :UncompressedSizeCorruption}}}
+    end
+
+    test "falls back to the broker's message limit when nothing was declared" do
+      bomb = :zstd.compress(:binary.copy(<<0>>, 8_000_000))
+      state = struct(reporting_state(), broker_max_message_size: 4096)
+
+      assert {:noreply, _state} = Worker.handle_info(delivery(:ZSTD, bomb, uncompressed_size: 0), state)
+
+      assert_received {:invalid, invalid}
+      refute_received {:handled, _message}
+      assert invalid.validation_error == :uncompressed_size_corruption
     end
 
     # CompressionType has no sixth value; this is the worker surviving one anyway.

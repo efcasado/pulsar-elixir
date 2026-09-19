@@ -374,8 +374,12 @@ defmodule Pulsar.Message do
     could not be turned back into the message that was sent. `metadata` is kept and `payload`
     holds the bytes as they arrived, still compressed.
   - `:uncompressed_size_corruption` - the decoded or reassembled payload did not match the
-    size advertised by the producer. `metadata` is kept and `payload` holds the bytes as they
-    arrived, still compressed when compression was enabled.
+    size advertised by the producer, or stopped because it was about to exceed it. A payload
+    is decoded against that advertised size as a ceiling, so a small frame cannot expand into
+    an arbitrarily large one before the mismatch is noticed; a message that advertised nothing
+    is held to the largest the broker said it would accept, or to 5 MiB when the broker did
+    not say. `metadata` is kept and `payload` holds the bytes as they arrived, still
+    compressed when compression was enabled.
   - `:batch_deserialization_failed` - the entry advertised a batch, but its individual message
     frames could not be read. `metadata` is kept and `payload` holds the decompressed batch
     bytes rather than an individual application message.
