@@ -93,13 +93,20 @@ defmodule Pulsar.Protocol do
   after the command and covered by a CRC32C checksum.
   """
   @spec encode(struct()) :: binary()
-  def encode(command), do: frame(encode_base_command(command), <<>>)
+  def encode(command) do
+    command = encode_base_command(command)
+    size = byte_size(command)
+    <<4 + size::32, size::32, command::binary>>
+  end
 
-  @spec encode(struct(), struct(), binary()) :: binary()
+  @doc """
+  Frames a message as iodata, retaining payload binaries through checksum calculation.
+  """
+  @spec encode(struct(), struct(), iodata()) :: iodata()
   def encode(command_send, message_metadata, payload), do: encode_message(command_send, message_metadata, payload, false)
 
   @doc false
-  @spec encode_batch(struct(), struct(), binary()) :: binary()
+  @spec encode_batch(struct(), struct(), iodata()) :: iodata()
   def encode_batch(command_send, message_metadata, payload),
     do: encode_message(command_send, message_metadata, payload, true)
 
@@ -120,9 +127,10 @@ defmodule Pulsar.Protocol do
   # metadata and payload, and nothing else.
   defp message_part(message_metadata, payload, batch?) do
     metadata = encode_message_metadata(message_metadata, batch?)
-    checksummed = <<byte_size(metadata)::32, metadata::binary, payload::binary>>
+    checksummed = [<<byte_size(metadata)::32>>, metadata, payload]
 
-    <<@magic_crc32c::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
+    # nif/1 accepts iodata too, but flattens it before computing the checksum.
+    [<<@magic_crc32c::16, :crc32cer.nif_iolist(checksummed)::32>>, checksummed]
   end
 
   defp encode_message_metadata(%Binary.MessageMetadata{num_messages_in_batch: 1} = metadata, true) do
@@ -134,7 +142,7 @@ defmodule Pulsar.Protocol do
   defp frame(command, rest) do
     command_size = byte_size(command)
 
-    <<4 + command_size + byte_size(rest)::32, command_size::32, command::binary, rest::binary>>
+    [<<4 + command_size + IO.iodata_length(rest)::32, command_size::32>>, command, rest]
   end
 
   @doc """

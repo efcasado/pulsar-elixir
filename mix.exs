@@ -98,7 +98,7 @@ defmodule Pulsar.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:crc32cer, "~> 1.1"},
+      {:crc32cer, "~> 1.1 and >= 1.1.4"},
       {:castore, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:nimble_lz4, "~> 1.1"},

@@ -21,7 +21,7 @@ defmodule Pulsar.Test.Support.BrokerStub do
   def published(acc \\ []) do
     receive do
       {:published, frame} ->
-        {:ok, {command, metadata, payload, _broker_metadata}} = Protocol.decode(frame)
+        {:ok, {command, metadata, payload, _broker_metadata}} = Protocol.decode(IO.iodata_to_binary(frame))
         published([%{command: command, metadata: metadata, payload: payload} | acc])
     after
       0 -> Enum.reverse(acc)

@@ -1,0 +1,366 @@
+{
+  "otp": "29",
+  "elixir": "1.20.0",
+  "results": [
+    {
+      "scenario": "tcp/none/entropy/1x470",
+      "median_ns": 6.45e4,
+      "p95_ns": 96868.84999999995,
+      "p99_ns": 123123.77000000005,
+      "entries_per_second": 14556.922493042197,
+      "producer_allocated_bytes": 4480.0,
+      "producer_reductions": 1588.0,
+      "samples": 28902
+    },
+    {
+      "scenario": "tls/zstd/entropy/100x470",
+      "median_ns": 459687.5,
+      "p95_ns": 568118.7,
+      "p99_ns": 631773.94,
+      "entries_per_second": 2123.6223242345573,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 4242
+    },
+    {
+      "scenario": "sink/none/entropy/1x1048576",
+      "median_ns": 5.3e4,
+      "p95_ns": 68220.59999999982,
+      "p99_ns": 132063.58000000016,
+      "entries_per_second": 17889.220435863954,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 35473
+    },
+    {
+      "scenario": "tcp/none/entropy/1x1048576",
+      "median_ns": 264958.5,
+      "p95_ns": 381056.2499999999,
+      "p99_ns": 517131.23999999993,
+      "entries_per_second": 3556.6849747877823,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 7096
+    },
+    {
+      "scenario": "tls/none/entropy/100x470",
+      "median_ns": 333583.0,
+      "p95_ns": 413541.9,
+      "p99_ns": 464569.9400000003,
+      "entries_per_second": 2995.012547968367,
+      "producer_allocated_bytes": 154208.0,
+      "producer_reductions": 29149.0,
+      "samples": 5981
+    },
+    {
+      "scenario": "sink/zstd/json/1x1048576",
+      "median_ns": 1.6395e6,
+      "p95_ns": 1783816.7999999996,
+      "p99_ns": 1870331.08,
+      "entries_per_second": 603.4618630206427,
+      "producer_allocated_bytes": 5544.0,
+      "producer_reductions": 9450.0,
+      "samples": 1207
+    },
+    {
+      "scenario": "tls/zstd/entropy/1x1048576",
+      "median_ns": 1962334.0,
+      "p95_ns": 2242733.8,
+      "p99_ns": 2400877.74,
+      "entries_per_second": 506.66113191980105,
+      "producer_allocated_bytes": 6440.0,
+      "producer_reductions": 29503.0,
+      "samples": 1013
+    },
+    {
+      "scenario": "tls/zstd/entropy/1x470",
+      "median_ns": 71542.0,
+      "p95_ns": 95792.0,
+      "p99_ns": 122221.29999999997,
+      "entries_per_second": 13520.406792181178,
+      "producer_allocated_bytes": 5032.0,
+      "producer_reductions": 1716.0,
+      "samples": 26869
+    },
+    {
+      "scenario": "tcp/zstd/entropy/1x1048576",
+      "median_ns": 813771.0,
+      "p95_ns": 909123.2,
+      "p99_ns": 979858.9599999997,
+      "entries_per_second": 1282.0851741995925,
+      "producer_allocated_bytes": 6440.0,
+      "producer_reductions": 29503.0,
+      "samples": 2562
+    },
+    {
+      "scenario": "tls/none/json/1x1048576",
+      "median_ns": 1513625.0,
+      "p95_ns": 1705525.0,
+      "p99_ns": 1827509.4400000002,
+      "entries_per_second": 652.8084356656411,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 1305
+    },
+    {
+      "scenario": "tcp/none/json/100x470",
+      "median_ns": 366646.0,
+      "p95_ns": 461935.45,
+      "p99_ns": 511658.97000000015,
+      "entries_per_second": 2700.624274202842,
+      "producer_allocated_bytes": 154208.0,
+      "producer_reductions": 29149.0,
+      "samples": 5390
+    },
+    {
+      "scenario": "tcp/zstd/entropy/1x470",
+      "median_ns": 61417.0,
+      "p95_ns": 75958.95,
+      "p99_ns": 101232.57000000007,
+      "entries_per_second": 15831.12732721061,
+      "producer_allocated_bytes": 5032.0,
+      "producer_reductions": 1716.0,
+      "samples": 31420
+    },
+    {
+      "scenario": "tls/zstd/json/1x470",
+      "median_ns": 73709.0,
+      "p95_ns": 91333.0,
+      "p99_ns": 120703.75000000013,
+      "entries_per_second": 13252.746529816679,
+      "producer_allocated_bytes": 5032.0,
+      "producer_reductions": 1716.0,
+      "samples": 26336
+    },
+    {
+      "scenario": "tls/none/json/100x470",
+      "median_ns": 322875.0,
+      "p95_ns": 403875.0,
+      "p99_ns": 440183.9000000001,
+      "entries_per_second": 3089.0751272314633,
+      "producer_allocated_bytes": 154208.0,
+      "producer_reductions": 29149.0,
+      "samples": 6169
+    },
+    {
+      "scenario": "tcp/zstd/entropy/100x470",
+      "median_ns": 468708.5,
+      "p95_ns": 572525.35,
+      "p99_ns": 655324.86,
+      "entries_per_second": 2114.4828664921442,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 4220
+    },
+    {
+      "scenario": "tcp/zstd/json/100x470",
+      "median_ns": 363125.0,
+      "p95_ns": 459041.0,
+      "p99_ns": 512733.1999999998,
+      "entries_per_second": 2633.8097938320852,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 5259
+    },
+    {
+      "scenario": "tls/none/entropy/1x1048576",
+      "median_ns": 1510791.0,
+      "p95_ns": 1664516.8,
+      "p99_ns": 1788231.0799999994,
+      "entries_per_second": 655.6526624937615,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 1311
+    },
+    {
+      "scenario": "sink/zstd/json/100x470",
+      "median_ns": 201416.0,
+      "p95_ns": 238804.59999999998,
+      "p99_ns": 313388.11,
+      "entries_per_second": 4839.6062391620835,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 9666
+    },
+    {
+      "scenario": "sink/none/json/1x1048576",
+      "median_ns": 53083.0,
+      "p95_ns": 67167.0,
+      "p99_ns": 136201.25000000006,
+      "entries_per_second": 17827.84516445341,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 35338
+    },
+    {
+      "scenario": "tcp/zstd/json/1x470",
+      "median_ns": 66209.0,
+      "p95_ns": 88666.0,
+      "p99_ns": 112439.09999999998,
+      "entries_per_second": 14576.536131759409,
+      "producer_allocated_bytes": 5032.0,
+      "producer_reductions": 1716.0,
+      "samples": 28944
+    },
+    {
+      "scenario": "tls/zstd/json/100x470",
+      "median_ns": 364714.5,
+      "p95_ns": 469357.89999999997,
+      "p99_ns": 539977.32,
+      "entries_per_second": 2616.4769223653852,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 5226
+    },
+    {
+      "scenario": "tcp/none/json/1x470",
+      "median_ns": 58209.0,
+      "p95_ns": 7.95e4,
+      "p99_ns": 106693.03999999989,
+      "entries_per_second": 16475.08535831566,
+      "producer_allocated_bytes": 4480.0,
+      "producer_reductions": 1588.0,
+      "samples": 32678
+    },
+    {
+      "scenario": "sink/zstd/entropy/1x1048576",
+      "median_ns": 239520.5,
+      "p95_ns": 287495.85,
+      "p99_ns": 335455.07999999996,
+      "entries_per_second": 4055.0552366382826,
+      "producer_allocated_bytes": 6440.0,
+      "producer_reductions": 29503.0,
+      "samples": 8100
+    },
+    {
+      "scenario": "tcp/none/entropy/100x470",
+      "median_ns": 306791.0,
+      "p95_ns": 382167.0,
+      "p99_ns": 427416.99999999977,
+      "entries_per_second": 3134.8413103385647,
+      "producer_allocated_bytes": 154208.0,
+      "producer_reductions": 29149.0,
+      "samples": 6259
+    },
+    {
+      "scenario": "sink/none/entropy/100x470",
+      "median_ns": 141042.0,
+      "p95_ns": 165250.0,
+      "p99_ns": 192681.96000000005,
+      "entries_per_second": 6951.69233635991,
+      "producer_allocated_bytes": 154208.0,
+      "producer_reductions": 29149.0,
+      "samples": 13880
+    },
+    {
+      "scenario": "tls/none/json/1x470",
+      "median_ns": 67208.0,
+      "p95_ns": 89166.55,
+      "p99_ns": 120629.62000000002,
+      "entries_per_second": 14389.616990354529,
+      "producer_allocated_bytes": 4480.0,
+      "producer_reductions": 1588.0,
+      "samples": 28588
+    },
+    {
+      "scenario": "sink/zstd/entropy/100x470",
+      "median_ns": 287875.0,
+      "p95_ns": 371708.8,
+      "p99_ns": 443396.7599999999,
+      "entries_per_second": 3336.9022094254537,
+      "producer_allocated_bytes": 154560.0,
+      "producer_reductions": 29417.0,
+      "samples": 6663
+    },
+    {
+      "scenario": "tls/none/entropy/1x470",
+      "median_ns": 67208.0,
+      "p95_ns": 91574.79999999997,
+      "p99_ns": 123698.27999999994,
+      "entries_per_second": 14337.783247065967,
+      "producer_allocated_bytes": 4480.0,
+      "producer_reductions": 1588.0,
+      "samples": 28483
+    },
+    {
+      "scenario": "sink/none/json/100x470",
+      "median_ns": 182167.0,
+      "p95_ns": 227875.0,
+      "p99_ns": 259769.26999999996,
+      "entries_per_second": 5336.051536287058,
+      "producer_allocated_bytes": 154207.85139318884,
+      "producer_reductions": 29149.0,
+      "samples": 10652
+    },
+    {
+      "scenario": "sink/zstd/entropy/1x470",
+      "median_ns": 11667.0,
+      "p95_ns": 1.35e4,
+      "p99_ns": 21042.0,
+      "entries_per_second": 82649.01067782336,
+      "producer_allocated_bytes": 5031.817781966698,
+      "producer_reductions": 1716.0,
+      "samples": 162439
+    },
+    {
+      "scenario": "tcp/zstd/json/1x1048576",
+      "median_ns": 1842167.0,
+      "p95_ns": 2101043.1,
+      "p99_ns": 2210804.659999999,
+      "entries_per_second": 532.3335270624165,
+      "producer_allocated_bytes": 5544.0,
+      "producer_reductions": 9450.0,
+      "samples": 1065
+    },
+    {
+      "scenario": "sink/zstd/json/1x470",
+      "median_ns": 14708.0,
+      "p95_ns": 17042.0,
+      "p99_ns": 24833.0,
+      "entries_per_second": 66012.47881257218,
+      "producer_allocated_bytes": 5031.919500346981,
+      "producer_reductions": 1716.0,
+      "samples": 130111
+    },
+    {
+      "scenario": "tcp/none/json/1x1048576",
+      "median_ns": 266604.5,
+      "p95_ns": 534741.7,
+      "p99_ns": 807927.7899999964,
+      "entries_per_second": 3100.1299178668287,
+      "producer_allocated_bytes": 4520.0,
+      "producer_reductions": 1590.0,
+      "samples": 6180
+    },
+    {
+      "scenario": "sink/none/entropy/1x470",
+      "median_ns": 9084.0,
+      "p95_ns": 9833.0,
+      "p99_ns": 11208.0,
+      "entries_per_second": 107673.0300550918,
+      "producer_allocated_bytes": 4479.981092436975,
+      "producer_reductions": 1588.0,
+      "samples": 210880
+    },
+    {
+      "scenario": "sink/none/json/1x470",
+      "median_ns": 9125.0,
+      "p95_ns": 10625.0,
+      "p99_ns": 22125.0,
+      "entries_per_second": 102986.34533270432,
+      "producer_allocated_bytes": 4480.0,
+      "producer_reductions": 1588.0,
+      "samples": 201767
+    },
+    {
+      "scenario": "tls/zstd/json/1x1048576",
+      "median_ns": 2154523.0,
+      "p95_ns": 2423276.65,
+      "p99_ns": 2578901.4999999986,
+      "entries_per_second": 459.1689004587603,
+      "producer_allocated_bytes": 5544.0,
+      "producer_reductions": 9450.0,
+      "samples": 918
+    }
+  ]
+}

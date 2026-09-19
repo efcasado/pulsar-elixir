@@ -914,14 +914,14 @@ defmodule Pulsar.Producer.Worker do
 
     try do
       {:done, payload} = :zstd.finish(context, <<>>)
-      IO.iodata_to_binary(payload)
+      payload
     after
       :zstd.close(context)
     end
   end
 
   defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload, level) do
-    compressed_payload |> :zstd.compress(%{compressionLevel: level}) |> IO.iodata_to_binary()
+    :zstd.compress(compressed_payload, %{compressionLevel: level})
   end
 
   defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload, _level) do
@@ -1012,7 +1012,7 @@ defmodule Pulsar.Producer.Worker do
   end
 
   defp maybe_chunk(payload, base_metadata, %{chunking_enabled: true} = state) do
-    payload_size = byte_size(payload)
+    payload_size = IO.iodata_length(payload)
 
     case chunk_payload_budget(base_metadata, payload_size, state) do
       # The metadata on its own fills the broker's limit, and smaller chunks would only
@@ -1021,7 +1021,7 @@ defmodule Pulsar.Producer.Worker do
         {:error, :metadata_too_large}
 
       chunk_size when payload_size > chunk_size ->
-        {:ok, split_into_chunks(payload, payload_size, chunk_size, state)}
+        {:ok, split_into_chunks(IO.iodata_to_binary(payload), payload_size, chunk_size, state)}
 
       _ ->
         {:ok, [{payload, nil}]}

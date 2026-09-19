@@ -130,8 +130,9 @@ defmodule Pulsar.Broker do
   @doc """
   Publishes a message to the broker.
   It expects the message to be already encoded in the Pulsar binary protocol format.
+  Encoded frames may be iodata; size limits apply to their complete byte length.
   """
-  @spec publish_message(GenServer.server(), binary()) :: :ok | {:error, term()}
+  @spec publish_message(GenServer.server(), iodata()) :: :ok | {:error, term()}
   def publish_message(broker, encoded_message) do
     :gen_statem.call(broker, {:publish_message, encoded_message})
   end
@@ -483,18 +484,17 @@ defmodule Pulsar.Broker do
 
   # An oversized frame is answered by closing the connection, which would take down every
   # consumer and producer registered here.
-  def connected({:call, from}, {:publish_message, encoded_message}, %__MODULE__{max_message_size: limit} = broker)
-      when is_integer(limit) and byte_size(encoded_message) > limit do
-    {:keep_state, broker, [{:reply, from, {:error, :message_too_large}}]}
-  end
-
   def connected({:call, from}, {:publish_message, encoded_message}, broker) do
-    %__MODULE__{socket_module: mod, socket: socket} = broker
+    %__MODULE__{socket_module: mod, socket: socket, max_message_size: limit} = broker
 
     result =
-      case mod do
-        :gen_tcp -> :gen_tcp.send(socket, encoded_message)
-        :ssl -> :ssl.send(socket, encoded_message)
+      if is_integer(limit) and IO.iodata_length(encoded_message) > limit do
+        {:error, :message_too_large}
+      else
+        case mod do
+          :gen_tcp -> :gen_tcp.send(socket, encoded_message)
+          :ssl -> :ssl.send(socket, encoded_message)
+        end
       end
 
     case result do

@@ -8,6 +8,36 @@ defmodule Pulsar.Producer.CompressionTest do
   alias Pulsar.Test.Support.BrokerStub
   alias Pulsar.Test.Support.ProducerState
 
+  test "zstd output stays valid with chunking enabled, with and without a split" do
+    broker = start_supervised!({BrokerStub, self()})
+    payload = for index <- 1..256, into: <<>>, do: :crypto.hash(:sha256, <<index::32>>)
+
+    for limit <- [128, 100_000] do
+      state =
+        ProducerState.new(broker,
+          compression: :zstd,
+          chunking_enabled: true,
+          max_message_size: limit,
+          send_timeout: false
+        )
+
+      assert {:noreply, _state} = Worker.handle_cast({:send_message, payload, [], {self(), make_ref()}}, state)
+      entries = BrokerStub.published()
+      assert Enum.all?(entries, &(byte_size(&1.payload) <= limit))
+
+      if limit == 128 do
+        assert length(entries) > 1
+        assert Enum.map(entries, & &1.metadata.chunk_id) == Enum.to_list(0..(length(entries) - 1))
+      else
+        assert length(entries) == 1
+        assert hd(entries).metadata.chunk_id == nil
+      end
+
+      compressed = entries |> Enum.map(& &1.payload) |> IO.iodata_to_binary()
+      assert compressed |> :zstd.decompress() |> IO.iodata_to_binary() == payload
+    end
+  end
+
   for batched <- [false, true] do
     test "native zstd produces a binary wire payload (batching: #{batched})" do
       broker = start_supervised!({BrokerStub, self()})
