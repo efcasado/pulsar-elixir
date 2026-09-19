@@ -74,8 +74,16 @@ defmodule Pulsar.Consumer.WorkerTest do
       subscription_name: "order-service",
       subscription_type: :shared,
       consumer_name: "orders-order-service-partition-2-1",
-      callback_module: Callback
+      callback_module: Callback,
+      zstd_context: zstd_context()
     )
+  end
+
+  # A worker builds this in init/1; these tests drive the callbacks directly, so they build
+  # their own in the process that will decode with it.
+  defp zstd_context do
+    {:ok, context} = :zstd.context(:decompress)
+    context
   end
 
   # This path only casts to the broker, so the test process can stand in for one.
@@ -388,6 +396,27 @@ defmodule Pulsar.Consumer.WorkerTest do
       assert_received {:telemetry, %{count: 1}, %{reason: :decompression_failed} = metadata}
       assert metadata.decompression_reason == :decompression_error
       assert metadata.topic == "persistent://public/default/orders-partition-2"
+    end
+
+    test "a truncated zstd frame does not spoil the messages after it" do
+      payload = :binary.copy(<<"abcdefgh">>, 4096)
+      compressed = IO.iodata_to_binary(:zstd.compress(payload))
+      truncated = binary_part(compressed, 0, div(byte_size(compressed), 2))
+
+      # One state, so these share a decompression context as a running worker's messages do.
+      # A frame that ended early leaves that context mid-stream, and without a reset it
+      # reports corruption on every message that follows.
+      state = reporting_state()
+
+      Worker.handle_info(delivery(:ZSTD, truncated, uncompressed_size: byte_size(payload)), state)
+
+      for _ <- 1..3 do
+        delivery = delivery(:ZSTD, compressed, uncompressed_size: byte_size(payload))
+        assert {:noreply, _state} = Worker.handle_info(delivery, state)
+
+        assert_received {:handled, message}
+        assert message.payload == payload
+      end
     end
 
     test "decodes a zstd payload larger than one decompression round" do

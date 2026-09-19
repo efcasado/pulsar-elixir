@@ -61,7 +61,7 @@ defmodule Pulsar.Bench.Compression do
       {:ok, {_send, metadata, compressed, nil}} = Protocol.decode(frame)
       command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
       delivery = {:broker_message, {command, metadata, compressed, nil}}
-      consumer = consumer_state(input.count)
+      consumer = %{consumer_state(input.count) | zstd_context: own_context()}
       validating = %{consumer | callback_state: {:validate, input.payloads, 0}}
       {:noreply, checked} = Consumer.handle_info(delivery, validating)
       {:validate, [], count} = checked.callback_state
@@ -95,9 +95,24 @@ defmodule Pulsar.Bench.Compression do
   end
 
   def consume(input) do
-    {:noreply, state} = Consumer.handle_info(input.delivery, input.consumer)
+    {:noreply, state} = Consumer.handle_info(input.delivery, worker(input))
     if state.callback_state != input.count, do: raise("consumer dropped messages")
     state
+  end
+
+  # A decompression context belongs to the process that created it, and Benchee measures time,
+  # memory and reductions from three processes of its own. So each is given a worker of its own
+  # the first time it runs one, which is what a worker holds anyway: one context, reused.
+  defp worker(input) do
+    case Process.get(:bench_consumer) do
+      nil ->
+        state = %{input.consumer | zstd_context: own_context()}
+        Process.put(:bench_consumer, state)
+        state
+
+      state ->
+        state
+    end
   end
 
   defp producer_state(broker, input) do
@@ -136,6 +151,11 @@ defmodule Pulsar.Bench.Compression do
       flow_threshold: 0,
       flow_refill: count
     }
+  end
+
+  defp own_context do
+    {:ok, context} = :zstd.context(:decompress)
+    context
   end
 
   # A CloudEvents-shaped domain event, which is what these systems mostly carry: field names

@@ -65,7 +65,8 @@ defmodule Pulsar.Consumer.Worker do
     :expire_incomplete_chunked_message_after,
     :chunk_cleanup_interval,
     :schema,
-    :schema_version
+    :schema_version,
+    :zstd_context
   ]
 
   @type flow_mfa :: {module(), atom(), [term()]}
@@ -192,7 +193,8 @@ defmodule Pulsar.Consumer.Worker do
         consumer_name: Keyword.get(opts, :name),
         acks: Ack.new(Keyword.take(opts, [:batch_index_ack_enabled, :ack_type])),
         schema: build_schema(Keyword.get(opts, :schema)),
-        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy))
+        max_redelivery: max_redelivery(Keyword.get(opts, :dead_letter_policy)),
+        zstd_context: new_zstd_context()
     }
 
     Logger.debug("Starting consumer for topic #{state.topic}")
@@ -968,78 +970,90 @@ defmodule Pulsar.Consumer.Worker do
   defp max_redelivery(nil), do: nil
   defp max_redelivery(policy) when is_list(policy), do: Keyword.fetch!(policy, :max_redelivery)
 
-  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload), do: {:ok, payload}
+  defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload, _zstd_context), do: {:ok, payload}
 
-  defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload) do
-    with {:ok, payload} <- uncompress(metadata, compressed_payload) do
+  defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload, zstd_context) do
+    with {:ok, payload} <- uncompress(metadata, compressed_payload, zstd_context) do
       verify_uncompressed_size(payload, metadata.uncompressed_size)
     end
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload, _zstd_context) do
     {:ok, :zlib.uncompress(compressed_payload)}
   rescue
     error in ErlangError -> {:error, error.original}
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
+  defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload, _zstd_context) do
     NimbleLZ4.decompress(compressed_payload, metadata.uncompressed_size)
   end
 
   # OTP 28's one-shot decoder has no clause for empty input (an empty message still has a frame).
-  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>), do: {:error, :empty_zstd_payload}
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>, _context), do: {:error, :empty_zstd_payload}
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
-    {:ok, compressed_payload |> :zstd.decompress() |> IO.iodata_to_binary()}
+  defp uncompress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload, context) do
+    {:ok, compressed_payload |> :zstd.decompress(context) |> IO.iodata_to_binary()}
   rescue
     error in ErlangError -> {:error, error.original}
+  after
+    # A frame that ended early leaves the context mid-stream, where it quietly decodes to
+    # nothing and then reports corruption on the next frame, valid or not.
+    :zstd.reset(context)
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload, _zstd_context) do
     :snappyer.decompress(compressed_payload)
   end
 
   # Protobuf preserves unknown enum values as integers.
-  defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload) do
+  defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload, _zstd_context) do
     {:error, {:unsupported_compression, compression}}
+  end
+
+  # One context per worker rather than one per message: its allocation is most of the work of
+  # decoding the small messages a consumer mostly sees. It has to be built here, in the process
+  # that will decode with it, since a context cannot be used from any other.
+  defp new_zstd_context do
+    {:ok, context} = :zstd.context(:decompress)
+    context
   end
 
   # Chunk ids outside the range the producer announced can fill the context without chunk 0
   # ever arriving, leaving nothing that describes the reassembled payload.
-  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx) do
+  defp uncompress_assembled(nil, _payload, _total_chunk_msg_size, _ctx, _zstd_context) do
     {:error, :missing_first_chunk}
   end
 
-  defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx)
+  defp uncompress_assembled(metadata, payload, total_chunk_msg_size, ctx, zstd_context)
        when total_chunk_msg_size in [0, nil] or byte_size(payload) == total_chunk_msg_size do
-    if independently_compressed_chunks?(ctx) do
+    if independently_compressed_chunks?(ctx, zstd_context) do
       {:error, :unsupported_chunk_framing}
     else
-      maybe_uncompress(metadata, payload)
+      maybe_uncompress(metadata, payload, zstd_context)
     end
   end
 
-  defp uncompress_assembled(_metadata, payload, total_chunk_msg_size, _ctx) do
+  defp uncompress_assembled(_metadata, payload, total_chunk_msg_size, _ctx, _zstd_context) do
     {:error, {:total_chunk_msg_size_mismatch, expected: total_chunk_msg_size, actual: byte_size(payload)}}
   end
 
-  defp independently_compressed_chunks?(%ChunkedMessageContext{num_chunks_from_msg: num_chunks} = ctx)
+  defp independently_compressed_chunks?(%ChunkedMessageContext{num_chunks_from_msg: num_chunks} = ctx, zstd_context)
        when num_chunks > 1 do
     case ChunkedMessageContext.metadata(ctx, 0) do
       %Binary.MessageMetadata{compression: compression} when compression != :NONE ->
-        Enum.all?(0..(num_chunks - 1), &independently_compressed_chunk?(ctx, &1))
+        Enum.all?(0..(num_chunks - 1), &independently_compressed_chunk?(ctx, &1, zstd_context))
 
       _ ->
         false
     end
   end
 
-  defp independently_compressed_chunks?(_ctx), do: false
+  defp independently_compressed_chunks?(_ctx, _zstd_context), do: false
 
-  defp independently_compressed_chunk?(ctx, chunk_id) do
+  defp independently_compressed_chunk?(ctx, chunk_id, zstd_context) do
     with %Binary.MessageMetadata{} = metadata <- ChunkedMessageContext.metadata(ctx, chunk_id),
          payload when is_binary(payload) <- Map.get(ctx.chunks, chunk_id),
-         {:ok, _uncompressed} <- maybe_uncompress(metadata, payload) do
+         {:ok, _uncompressed} <- maybe_uncompress(metadata, payload, zstd_context) do
       true
     else
       _ -> false
@@ -1128,7 +1142,7 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp build_messages_from_entry(command, metadata, payload, broker_metadata, state) do
-    case maybe_uncompress(metadata, payload) do
+    case maybe_uncompress(metadata, payload, state.zstd_context) do
       {:ok, uncompressed} ->
         case unwrap_messages(metadata, uncompressed) do
           {:ok, unwrapped} ->
@@ -1342,7 +1356,7 @@ defmodule Pulsar.Consumer.Worker do
     assembled_payload = ChunkedMessageContext.assemble_payload(ctx)
 
     {complete_payload, validation_error} =
-      case uncompress_assembled(metadata, assembled_payload, ctx.total_chunk_msg_size, ctx) do
+      case uncompress_assembled(metadata, assembled_payload, ctx.total_chunk_msg_size, ctx, state.zstd_context) do
         {:ok, payload} ->
           {payload, nil}
 
