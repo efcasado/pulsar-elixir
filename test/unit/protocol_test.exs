@@ -108,7 +108,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "lays out command, magic, checksum, metadata and payload", ctx do
-      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
+      frame = ctx.command |> Protocol.encode(ctx.metadata, ctx.payload) |> IO.iodata_to_binary()
 
       assert <<total_size::32, command_size::32, command::bytes-size(command_size), @magic_message::16, _checksum::32,
                metadata_size::32, metadata::bytes-size(metadata_size), payload::binary>> = frame
@@ -120,14 +120,14 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "carries is_chunk, which no consumer-facing struct exposes", ctx do
-      frame = Protocol.encode(%{ctx.command | is_chunk: true}, ctx.metadata, ctx.payload)
+      frame = %{ctx.command | is_chunk: true} |> Protocol.encode(ctx.metadata, ctx.payload) |> IO.iodata_to_binary()
 
       assert {:ok, {command, _metadata, _payload, nil}} = Protocol.decode(frame)
       assert command.is_chunk
     end
 
     test "checksum covers the metadata size, metadata and payload", ctx do
-      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
+      frame = ctx.command |> Protocol.encode(ctx.metadata, ctx.payload) |> IO.iodata_to_binary()
 
       <<_total_size::32, command_size::32, _command::bytes-size(command_size), @magic_message::16, checksum::32,
         checksummed::binary>> = frame
@@ -136,7 +136,7 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "round-trips through decode/1", ctx do
-      frame = Protocol.encode(ctx.command, ctx.metadata, ctx.payload)
+      frame = ctx.command |> Protocol.encode(ctx.metadata, ctx.payload) |> IO.iodata_to_binary()
 
       assert {:ok, {command, metadata, payload, nil}} = Protocol.decode(frame)
       assert command == ctx.command
@@ -145,21 +145,45 @@ defmodule Pulsar.ProtocolTest do
     end
 
     test "preserves an explicit one-message batch marker", ctx do
-      frame = Protocol.encode_batch(ctx.command, ctx.metadata, ctx.payload)
+      frame = ctx.command |> Protocol.encode_batch(ctx.metadata, ctx.payload) |> IO.iodata_to_binary()
 
       assert {:ok, {_command, metadata, _payload, nil}} = Protocol.decode(frame)
       assert metadata.num_messages_in_batch == 1
     end
 
     test "handles an empty payload", ctx do
-      frame = Protocol.encode(ctx.command, ctx.metadata, "")
+      frame = ctx.command |> Protocol.encode(ctx.metadata, "") |> IO.iodata_to_binary()
 
       assert {:ok, {_command, _metadata, "", nil}} = Protocol.decode(frame)
     end
 
+    test "iodata has the same wire bytes and CRC as contiguous framing", ctx do
+      command = BaseCommand.encode(%BaseCommand{type: :SEND, send: ctx.command})
+
+      for payload <- [[], ["hello", [32, "world"]], [<<1>>, [<<2>> | <<3>>]], [:binary.copy("x", 100_000)]],
+          batch? <- [false, true] do
+        metadata = Binary.MessageMetadata.encode(ctx.metadata)
+        metadata = if batch?, do: metadata <> <<0x58, 0x01>>, else: metadata
+        binary = IO.iodata_to_binary(payload)
+        checksummed = <<byte_size(metadata)::32, metadata::binary, binary::binary>>
+        rest = <<@magic_message::16, :crc32cer.nif(checksummed)::32, checksummed::binary>>
+
+        expected =
+          <<4 + byte_size(command) + byte_size(rest)::32, byte_size(command)::32, command::binary, rest::binary>>
+
+        frame =
+          if batch?,
+            do: Protocol.encode_batch(ctx.command, ctx.metadata, payload),
+            else: Protocol.encode(ctx.command, ctx.metadata, payload)
+
+        assert IO.iodata_to_binary(frame) == expected
+        assert IO.iodata_length(frame) == byte_size(expected)
+      end
+    end
+
     test "handles a payload large enough to need multi-byte varints", ctx do
       payload = :binary.copy("x", 100_000)
-      frame = Protocol.encode(ctx.command, ctx.metadata, payload)
+      frame = ctx.command |> Protocol.encode(ctx.metadata, payload) |> IO.iodata_to_binary()
 
       assert {:ok, {_command, _metadata, ^payload, nil}} = Protocol.decode(frame)
     end

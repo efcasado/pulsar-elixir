@@ -42,9 +42,9 @@ defmodule Pulsar.Bench.Compression do
     end
   end
 
-  def input(size, kind, count, sink, level \\ @default_level) do
+  def input(size, kind, count, sink, level \\ @default_level, compression \\ :zstd) do
     payloads = Enum.map(1..count, &payload(kind, div(size, count), &1))
-    input = %{payloads: payloads, count: count, level: level}
+    input = %{payloads: payloads, count: count, level: level, compression: compression}
     {:ok, capture} = GenServer.start_link(Sink, {:capture, self()})
 
     try do
@@ -58,7 +58,7 @@ defmodule Pulsar.Bench.Compression do
           1000 -> raise "producer did not publish a complete frame"
         end
 
-      {:ok, {_send, metadata, compressed, nil}} = Protocol.decode(frame)
+      {:ok, {_send, metadata, compressed, nil}} = Protocol.decode(IO.iodata_to_binary(frame))
       command = %Binary.CommandMessage{consumer_id: 1, message_id: %Binary.MessageIdData{ledgerId: 1, entryId: 1}}
       delivery = {:broker_message, {command, metadata, compressed, nil}}
       consumer = %{consumer_state(input.count) | zstd_context: own_context()}
@@ -123,7 +123,7 @@ defmodule Pulsar.Bench.Compression do
       producer_name: "bench",
       broker_pid: broker,
       ready: true,
-      compression: :zstd,
+      compression: input.compression,
       compression_level: input.level,
       chunking_enabled: false,
       batch_enabled: input.count > 1,

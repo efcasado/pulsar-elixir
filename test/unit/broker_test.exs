@@ -7,6 +7,29 @@ defmodule Pulsar.BrokerTest do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto
 
+  test "checks the complete iodata size before publishing and accepts the exact limit" do
+    {client, server} = socket_pair()
+    on_exit(fn -> :gen_tcp.close(client) end)
+    on_exit(fn -> :gen_tcp.close(server) end)
+    from = {self(), make_ref()}
+    frame = [<<0, 0>>, [<<0>>, 1] | <<7>>]
+    broker = %Broker{socket_module: :gen_tcp, socket: client, max_message_size: 4}
+
+    assert {:keep_state, ^broker, [{:reply, ^from, {:error, :message_too_large}}]} =
+             Broker.connected({:call, from}, {:publish_message, frame}, broker)
+
+    broker = %{broker | max_message_size: 5}
+
+    assert {:keep_state, ^broker, [{:reply, ^from, :ok}]} =
+             Broker.connected({:call, from}, {:publish_message, frame}, broker)
+
+    # Reading exactly the accepted bytes followed by closure also proves the rejected frame
+    # was never written to the socket.
+    :ok = :gen_tcp.close(client)
+    assert {:ok, <<0, 0, 0, 1, 7>>} = :gen_tcp.recv(server, 5, 1_000)
+    assert {:error, :closed} = :gen_tcp.recv(server, 1, 1_000)
+  end
+
   test "reports the completed handshake with its connection identity and advertised limit" do
     event = [:pulsar, :connection, :connected]
     handler = make_ref()
