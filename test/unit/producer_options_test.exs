@@ -18,6 +18,23 @@ defmodule Pulsar.Producer.OptionsTest do
       assert opts[:hashing_scheme] == :murmur3_32
     end
 
+    test "accepts every codec, with zstd options" do
+      for codec <- [:none, :lz4, :zlib, :snappy, :zstd] do
+        assert validate!(compression: codec)[:compression] == codec
+      end
+
+      assert validate!(compression: {:zstd, level: 1})[:compression] == {:zstd, [level: 1]}
+      assert validate!(compression: {:zstd, []})[:compression] == {:zstd, [level: 3]}
+    end
+
+    test "rejects a codec that takes no options, and a level outside zstd's range" do
+      for compression <- [:gzip, {:lz4, level: 1}, {:zstd, level: 0}, {:zstd, level: 23}, {:zstd, levl: 3}] do
+        assert_raise NimbleOptions.ValidationError, ~r/:compression/, fn ->
+          validate!(compression: compression)
+        end
+      end
+    end
+
     test "accepts every hashing scheme" do
       for scheme <- Pulsar.Hash.schemes() do
         assert validate!(hashing_scheme: scheme)[:hashing_scheme] == scheme

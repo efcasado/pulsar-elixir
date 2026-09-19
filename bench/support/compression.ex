@@ -7,6 +7,9 @@ defmodule Pulsar.Bench.Compression do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
+  # The producer's own default, so an unparameterised run measures what a producer publishes at.
+  @default_level 3
+
   # Keep broker handoff synchronous, like production, without a socket or unbounded mailbox.
   defmodule Sink do
     @moduledoc false
@@ -74,11 +77,11 @@ defmodule Pulsar.Bench.Compression do
     end
   end
 
-  def produce(input) do
+  def produce(input, level \\ @default_level) do
     from = {self(), make_ref()}
 
     state =
-      Enum.reduce(input.payloads, input.producer, fn payload, state ->
+      Enum.reduce(input.payloads, %{input.producer | compression_level: level}, fn payload, state ->
         {:noreply, next} = Producer.handle_cast({:send_message, payload, [], from}, state)
         next
       end)

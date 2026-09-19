@@ -6,6 +6,10 @@ Code.require_file("support/compression.ex", __DIR__)
 # for producers, decompression and callback dispatch for consumers. The broker is
 # a sink, so network and persistence are outside the measurement. Each input is
 # round-tripped before timing to verify that every payload reaches the callback.
+#
+# Producers run at the default level and at the cheapest one, since that is the
+# trade-off a `{:zstd, level: n}` option is chosen against. Decompression does not
+# depend on the level the frame was written at, so consumers run once.
 {:ok, sink} = GenServer.start_link(Compression.Sink, :discard)
 
 try do
@@ -19,7 +23,8 @@ try do
 
   Benchee.run(
     %{
-      "producer" => &Compression.produce/1,
+      "producer (zstd level 3)" => &Compression.produce(&1, 3),
+      "producer (zstd level 1)" => &Compression.produce(&1, 1),
       "consumer" => &Compression.consume/1
     },
     inputs: inputs,

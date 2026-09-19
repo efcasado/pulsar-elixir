@@ -28,9 +28,21 @@ defmodule Pulsar.Producer.Options do
       """
     ],
     compression: [
-      type: {:in, [:none, :lz4, :zlib, :snappy, :zstd]},
+      type: {:custom, __MODULE__, :validate_compression, []},
+      type_doc: "`:none | :lz4 | :zlib | :snappy | :zstd | {:zstd, keyword()}`",
       default: :none,
-      doc: "Compression applied to the payload."
+      doc: """
+      Compression applied to the payload, as a codec or a `{codec, options}` tuple.
+
+      Only `:zstd` takes options, and only `:level`: from `1` (fastest) to `22` (smallest),
+      defaulting to `3`. That is zstd's own default and what the Java, C++ and Rust clients
+      publish at, so a topic stays comparable across languages. Lowering it spends less CPU
+      per message, which mostly shows up on payloads large enough for compression to matter
+      in a send's latency.
+
+          compression: :zstd
+          compression: {:zstd, level: 1}
+      """
     ],
     hashing_scheme: [
       type: {:in, Hash.schemes()},
@@ -150,6 +162,16 @@ defmodule Pulsar.Producer.Options do
     ]
   ]
 
+  @zstd_schema [
+    level: [
+      type: {:in, 1..22},
+      default: 3,
+      doc: "How hard zstd works, from `1` (fastest) to `22` (smallest)."
+    ]
+  ]
+
+  @codecs [:none, :lz4, :zlib, :snappy, :zstd]
+
   @spec schema() :: keyword()
   def schema, do: @schema
 
@@ -172,6 +194,21 @@ defmodule Pulsar.Producer.Options do
     with {:ok, opts} <- NimbleOptions.validate(opts, @schema) do
       validate_chunking(opts)
     end
+  end
+
+  @doc false
+  @spec validate_compression(term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_compression(codec) when codec in @codecs, do: {:ok, codec}
+
+  def validate_compression({:zstd, opts}) when is_list(opts) do
+    case NimbleOptions.validate(opts, @zstd_schema) do
+      {:ok, opts} -> {:ok, {:zstd, opts}}
+      {:error, error} -> {:error, "invalid :zstd options, " <> Exception.message(error)}
+    end
+  end
+
+  def validate_compression(other) do
+    {:error, "expected one of #{inspect(@codecs)} or a {:zstd, options} tuple, got: #{inspect(other)}"}
   end
 
   # A batch is one entry holding many messages and a chunked message is one message spread
