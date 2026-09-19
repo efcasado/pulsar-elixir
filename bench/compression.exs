@@ -15,7 +15,7 @@ Code.require_file("support/compression.ex", __DIR__)
 try do
   inputs =
     for size <- [100, 1024, 10_240, 102_400, 1_048_576, 5_242_880],
-        kind <- ["text", "entropy"],
+        kind <- ["json", "entropy"],
         count <- [1, 100],
         into: %{} do
       {"#{kind}: #{count} x #{div(size, count)}B", Compression.input(size, kind, count, sink)}

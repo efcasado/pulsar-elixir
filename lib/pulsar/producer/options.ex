@@ -34,11 +34,15 @@ defmodule Pulsar.Producer.Options do
       doc: """
       Compression applied to the payload, as a codec or a `{codec, options}` tuple.
 
-      Only `:zstd` takes options, and only `:level`: from `1` (fastest) to `22` (smallest),
-      defaulting to `3`. That is zstd's own default and what the Java, C++ and Rust clients
-      publish at, so a topic stays comparable across languages. Lowering it spends less CPU
-      per message, which mostly shows up on payloads large enough for compression to matter
-      in a send's latency.
+      Only `:zstd` takes options, and only `:level`. `1` to `22` are its compression levels,
+      lowest to highest; `0` selects zstd's own default; and negative values down to
+      `-131072` are its "fast" levels, which give up ratio for speed. The default is `3`,
+      what the Java, C++ and Rust clients publish at, so a topic stays comparable across
+      languages.
+
+      Higher is not reliably smaller: zstd's levels are parameter sets rather than a dial,
+      and on payloads with structure but varied values `1` can beat `3` on both size and
+      time. Measure against your own messages before moving it.
 
           compression: :zstd
           compression: {:zstd, level: 1}
@@ -162,9 +166,13 @@ defmodule Pulsar.Producer.Options do
     ]
   ]
 
+  # What libzstd itself honours: it clamps anything above ZSTD_maxCLevel() silently, so a
+  # level it would not apply is refused here instead.
+  @zstd_levels -131_072..22
+
   @zstd_schema [
     level: [
-      type: {:in, 1..22},
+      type: {:in, @zstd_levels},
       default: 3,
       doc: "How hard zstd works, from `1` (fastest) to `22` (smallest)."
     ]

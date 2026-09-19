@@ -7,7 +7,7 @@ defmodule Pulsar.Bench.Compression do
   alias Pulsar.Protocol
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
 
-  # The producer's own default, so an unparameterised run measures what a producer publishes at.
+  # The producer's own default, so a plain run measures what a producer publishes at.
   @default_level 3
 
   # Keep broker handoff synchronous, like production, without a socket or unbounded mailbox.
@@ -42,14 +42,14 @@ defmodule Pulsar.Bench.Compression do
     end
   end
 
-  def input(size, kind, count, sink) do
+  def input(size, kind, count, sink, level \\ @default_level) do
     payloads = Enum.map(1..count, &payload(kind, div(size, count), &1))
-    input = %{payloads: payloads, count: count}
+    input = %{payloads: payloads, count: count, level: level}
     {:ok, capture} = GenServer.start_link(Sink, {:capture, self()})
 
     try do
       producer = producer_state(capture, input)
-      produce(Map.put(input, :producer, producer))
+      produce(Map.put(input, :producer, producer), level)
 
       frame =
         receive do
@@ -77,7 +77,7 @@ defmodule Pulsar.Bench.Compression do
     end
   end
 
-  def produce(input, level \\ @default_level) do
+  def produce(input, level) do
     from = {self(), make_ref()}
 
     state =
@@ -109,6 +109,7 @@ defmodule Pulsar.Bench.Compression do
       broker_pid: broker,
       ready: true,
       compression: :zstd,
+      compression_level: input.level,
       chunking_enabled: false,
       batch_enabled: input.count > 1,
       batch_size: input.count,
@@ -137,9 +138,13 @@ defmodule Pulsar.Bench.Compression do
     }
   end
 
-  defp payload("text", size, _message_index) do
-    record = ~s({"event":"order.updated","account":"customer-1234","amount":19.95,"currency":"EUR"}\n)
-    binary_part(:binary.copy(record, div(size, byte_size(record)) + 1), 0, size)
+  # A CloudEvents-shaped domain event, which is what these systems mostly carry: field names
+  # and enum values repeat across records, while ids, amounts and timestamps do not. A payload
+  # of one repeated record compresses to almost nothing and one of random bytes not at all, so
+  # neither shows what a codec or a level is worth on real traffic.
+  defp payload("json", size, message_index) do
+    :rand.seed(:exsss, {message_index, 20_260_919, size})
+    records(size, message_index * 1_000_000, [])
   end
 
   defp payload("entropy", size, message_index) do
@@ -147,4 +152,39 @@ defmodule Pulsar.Bench.Compression do
     bytes = for index <- 1..(div(size, 32) + 1), into: <<>>, do: :crypto.hash(:sha256, <<message_index::32, index::64>>)
     binary_part(bytes, 0, size)
   end
+
+  @statuses ~w(created paid shipped delivered refunded cancelled)
+  @currencies ~w(EUR USD GBP SEK)
+  @countries ~w(ES DE FR SE US GB)
+
+  defp records(size, index, acc) do
+    if IO.iodata_length(acc) >= size do
+      acc |> IO.iodata_to_binary() |> binary_part(0, size)
+    else
+      records(size, index + 1, [acc, record(index)])
+    end
+  end
+
+  defp record(index) do
+    id = :sha256 |> :crypto.hash(<<index::64>>) |> Base.encode16(case: :lower)
+    order = binary_part(id, 0, 12)
+    customer = binary_part(id, 12, 10)
+    minute = rem(index, 60)
+    second = rem(index * 7, 60)
+
+    items =
+      Enum.map_join(1..:rand.uniform(3), ",", fn item ->
+        ~s({"sku":"SKU-#{:rand.uniform(99_999)}","qty":#{:rand.uniform(5)},"price":#{:rand.uniform(19_999) / 100},"line":#{item}})
+      end)
+
+    ~s({"specversion":"1.0","type":"com.example.order.updated","source":"/orders/api",) <>
+      ~s("id":"#{binary_part(id, 22, 32)}","time":"2026-09-19T10:#{pad(minute)}:#{pad(second)}.#{rem(index, 1000)}Z",) <>
+      ~s("subject":"order-#{order}","datacontenttype":"application/json",) <>
+      ~s("data":{"orderId":"ord_#{order}","customerId":"cus_#{customer}",) <>
+      ~s("status":"#{Enum.random(@statuses)}","currency":"#{Enum.random(@currencies)}",) <>
+      ~s("total":#{:rand.uniform(250_000) / 100},"items":[#{items}],) <>
+      ~s("shipping":{"country":"#{Enum.random(@countries)}","postalCode":"#{:rand.uniform(89_999) + 10_000}"}}}\n)
+  end
+
+  defp pad(value), do: value |> Integer.to_string() |> String.pad_leading(2, "0")
 end
