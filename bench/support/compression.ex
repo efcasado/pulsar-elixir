@@ -1,5 +1,5 @@
 defmodule Pulsar.Bench.Compression do
-  @moduledoc false
+  @moduledoc "Builders and worker callbacks for the native Zstandard benchmark."
 
   alias Pulsar.Consumer.Ack
   alias Pulsar.Consumer.Worker, as: Consumer
@@ -39,21 +39,9 @@ defmodule Pulsar.Bench.Compression do
     end
   end
 
-  def inputs do
-    for size <- integers("BENCH_SIZES", "100,1024,10240,102400,1048576,5242880"),
-        kind <- ["text", "entropy"],
-        count <- integers("BENCH_BATCHES", "1,100"),
-        codec <- [:none, :zstd],
-        into: %{} do
-      # Size is the total application payload per operation, split over count messages.
-      message_size = max(div(size, count), 1)
-      payloads = Enum.map(1..count, &payload(kind, message_size, &1))
-      label = "#{codec}/#{kind}/#{count} x #{message_size}B"
-      {label, %{payloads: payloads, count: count, codec: codec}}
-    end
-  end
-
-  def prepare(input, sink) do
+  def input(size, kind, count, sink) do
+    payloads = Enum.map(1..count, &payload(kind, div(size, count), &1))
+    input = %{payloads: payloads, count: count}
     {:ok, capture} = GenServer.start_link(Sink, {:capture, self()})
 
     try do
@@ -79,9 +67,7 @@ defmodule Pulsar.Bench.Compression do
       Map.merge(input, %{
         producer: producer_state(sink, input),
         consumer: consumer,
-        delivery: delivery,
-        uncompressed_bytes: metadata.uncompressed_size,
-        compressed_bytes: byte_size(compressed)
+        delivery: delivery
       })
     after
       GenServer.stop(capture)
@@ -119,7 +105,7 @@ defmodule Pulsar.Bench.Compression do
       producer_name: "bench",
       broker_pid: broker,
       ready: true,
-      compression: input.codec,
+      compression: :zstd,
       chunking_enabled: false,
       batch_enabled: input.count > 1,
       batch_size: input.count,
@@ -157,9 +143,5 @@ defmodule Pulsar.Bench.Compression do
     # Stable across branches and runs; generation is outside the measured functions.
     bytes = for index <- 1..(div(size, 32) + 1), into: <<>>, do: :crypto.hash(:sha256, <<message_index::32, index::64>>)
     binary_part(bytes, 0, size)
-  end
-
-  defp integers(name, default) do
-    name |> System.get_env(default) |> String.split(",") |> Enum.map(&String.to_integer/1)
   end
 end

@@ -124,7 +124,7 @@ defmodule Pulsar.MixProject do
 
   defp aliases do
     [
-      bench: ["run bench/decode_stream.exs"],
+      "bench.decode_stream": ["run bench/decode_stream.exs"],
       "bench.compression": ["run bench/compression.exs"],
       test: ["test"],
       "test.unit": ["test --exclude integration"],
