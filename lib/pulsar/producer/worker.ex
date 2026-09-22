@@ -44,6 +44,7 @@ defmodule Pulsar.Producer.Worker do
     :max_pending_messages,
     :access_mode,
     :compression,
+    :compression_level,
     {:ready, false},
     :registration_request_id,
     :topic_epoch,
@@ -79,6 +80,7 @@ defmodule Pulsar.Producer.Worker do
           max_pending_messages: pos_integer() | false | nil,
           access_mode: atom(),
           compression: :none | :lz4 | :zlib | :snappy | :zstd,
+          compression_level: -22..22 | nil,
           ready: boolean(),
           registration_request_id: integer() | nil,
           topic_epoch: integer() | nil,
@@ -129,6 +131,8 @@ defmodule Pulsar.Producer.Worker do
         :error -> nil
       end
 
+    {compression, compression_level} = split_compression(Keyword.fetch!(opts, :compression))
+
     # Option names and struct field names are the same, so struct/2 carries them across
     # and ignores the group-level options that are not part of a producer's state.
     state = %{
@@ -136,6 +140,8 @@ defmodule Pulsar.Producer.Worker do
       | producer_id: producer_id,
         producer_name: name,
         topic_epoch: topic_epoch,
+        compression: compression,
+        compression_level: compression_level,
         schema: build_schema(Keyword.get(opts, :schema))
     }
 
@@ -154,6 +160,9 @@ defmodule Pulsar.Producer.Worker do
       {:ok, state, {:continue, :register_producer}}
     end
   end
+
+  defp split_compression({:zstd, opts}), do: {:zstd, Keyword.fetch!(opts, :level)}
+  defp split_compression(codec), do: {codec, nil}
 
   # By timer rather than by sleeping: a worker that traps exits is only shut down while it is
   # reading its mailbox, and one asleep in a callback is killed after the shutdown timeout.
@@ -320,7 +329,7 @@ defmodule Pulsar.Producer.Worker do
     # Compression covers the whole message and the split comes after it, so a chunk is a slice
     # of compressed bytes rather than compressed on its own.
     base_metadata = build_message_metadata(payload, opts, state)
-    compressed_payload = maybe_compress(base_metadata, payload)
+    compressed_payload = maybe_compress(base_metadata, payload, state.compression_level)
 
     case maybe_chunk(compressed_payload, base_metadata, state) do
       {:ok, messages} -> publish_messages(messages, base_metadata, from, state)
@@ -586,7 +595,7 @@ defmodule Pulsar.Producer.Worker do
       schema_version: state.schema_version
     }
 
-    compressed_payload = maybe_compress(message_metadata, single_messages_payload)
+    compressed_payload = maybe_compress(message_metadata, single_messages_payload, state.compression_level)
 
     encoded_frame = Protocol.encode_batch(command_send, message_metadata, compressed_payload)
 
@@ -881,23 +890,27 @@ defmodule Pulsar.Producer.Worker do
     Pulsar.Broker.send_request(broker_pid, producer_command)
   end
 
-  defp maybe_compress(%Binary.MessageMetadata{compression: :NONE}, payload) do
+  defp maybe_compress(%Binary.MessageMetadata{compression: :NONE}, payload, _level) do
     payload
   end
 
-  defp maybe_compress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload, _level) do
     :zlib.compress(compressed_payload)
   end
 
-  defp maybe_compress(%Binary.MessageMetadata{compression: :LZ4}, compressed_payload) do
+  defp maybe_compress(%Binary.MessageMetadata{compression: :LZ4}, compressed_payload, _level) do
     NimbleLZ4.compress(compressed_payload)
   end
 
-  defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload) do
-    :ezstd.compress(compressed_payload)
+  # OTP 28 cannot compress empty input. This is a complete empty zstd frame.
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, <<>>, _level),
+    do: <<0xFD2FB528::little-32, 0x20, 0, 1::little-24>>
+
+  defp maybe_compress(%Binary.MessageMetadata{compression: :ZSTD}, compressed_payload, level) do
+    compressed_payload |> :zstd.compress(%{compressionLevel: level}) |> IO.iodata_to_binary()
   end
 
-  defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
+  defp maybe_compress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload, _level) do
     {:ok, payload} = :snappyer.compress(compressed_payload)
     payload
   end

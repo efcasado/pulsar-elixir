@@ -2,10 +2,14 @@ defmodule Pulsar.MixProject do
   use Mix.Project
 
   def project do
+    if String.to_integer(System.otp_release()) < 28 do
+      Mix.raise("pulsar requires Erlang/OTP 28 or newer for native Zstandard support")
+    end
+
     [
       app: :pulsar,
       version: "3.2.0",
-      elixir: "~> 1.15",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -96,7 +100,6 @@ defmodule Pulsar.MixProject do
     [
       {:crc32cer, "~> 1.1"},
       {:castore, "~> 1.0"},
-      {:ezstd, "~> 1.2"},
       {:jason, "~> 1.4"},
       {:nimble_lz4, "~> 1.1"},
       {:nimble_options, "~> 1.1"},
