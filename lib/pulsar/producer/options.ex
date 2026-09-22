@@ -28,9 +28,13 @@ defmodule Pulsar.Producer.Options do
       """
     ],
     compression: [
-      type: {:in, [:none, :lz4, :zlib, :snappy, :zstd]},
+      type: {:custom, __MODULE__, :validate_compression, []},
+      type_doc: "`:none | :lz4 | :zlib | :snappy | :zstd | {:zstd, keyword()}`",
       default: :none,
-      doc: "Compression applied to the payload."
+      doc: """
+      Compression applied to the payload. For zstd, use `:zstd` or
+      `{:zstd, level: n}`. Levels range from `-22` to `22`; the default is `3`.
+      """
     ],
     hashing_scheme: [
       type: {:in, Hash.schemes()},
@@ -150,6 +154,10 @@ defmodule Pulsar.Producer.Options do
     ]
   ]
 
+  @zstd_schema [level: [type: {:in, -22..22}, default: 3]]
+
+  @codecs [:none, :lz4, :zlib, :snappy, :zstd]
+
   @spec schema() :: keyword()
   def schema, do: @schema
 
@@ -172,6 +180,26 @@ defmodule Pulsar.Producer.Options do
     with {:ok, opts} <- NimbleOptions.validate(opts, @schema) do
       validate_chunking(opts)
     end
+  end
+
+  @doc false
+  @spec validate_compression(term()) :: {:ok, term()} | {:error, String.t()}
+  def validate_compression(:zstd), do: validate_compression({:zstd, []})
+  def validate_compression(codec) when codec in @codecs, do: {:ok, codec}
+
+  def validate_compression({:zstd, opts}) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case NimbleOptions.validate(opts, @zstd_schema) do
+        {:ok, opts} -> {:ok, {:zstd, opts}}
+        {:error, error} -> {:error, "invalid :zstd options, " <> Exception.message(error)}
+      end
+    else
+      {:error, "expected :zstd options to be a keyword list, got: #{inspect(opts)}"}
+    end
+  end
+
+  def validate_compression(other) do
+    {:error, "expected one of #{inspect(@codecs)} or a {:zstd, options} tuple, got: #{inspect(other)}"}
   end
 
   # A batch is one entry holding many messages and a chunked message is one message spread

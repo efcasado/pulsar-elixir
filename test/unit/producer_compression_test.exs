@@ -2,6 +2,7 @@ defmodule Pulsar.Producer.CompressionTest do
   @moduledoc false
   use ExUnit.Case, async: true
 
+  alias Pulsar.Producer.Options
   alias Pulsar.Producer.Worker
   alias Pulsar.Protocol.Binary.Pulsar.Proto, as: Binary
   alias Pulsar.Test.Support.BrokerStub
@@ -14,6 +15,7 @@ defmodule Pulsar.Producer.CompressionTest do
       state =
         ProducerState.new(broker,
           compression: :zstd,
+          compression_level: 3,
           batch_enabled: unquote(batched),
           batch_size: 1,
           send_timeout: false
@@ -37,6 +39,31 @@ defmodule Pulsar.Producer.CompressionTest do
         else
           assert plain == payload
         end
+      end
+    end
+  end
+
+  describe "zstd level" do
+    test "defaults to 3 and follows a {:zstd, level: n} option" do
+      for {compression, level} <- [{:zstd, 3}, {{:zstd, [level: 1]}, 1}, {{:zstd, [level: 22]}, 22}] do
+        opts = Options.validate!(topic: "persistent://public/default/level", compression: compression)
+
+        assert {:ok, state, _continue} = Worker.init(opts)
+        assert state.compression == :zstd
+        assert state.compression_level == level
+      end
+    end
+
+    test "is what the payload is compressed at" do
+      broker = start_supervised!({BrokerStub, self()})
+      payload = :binary.copy("abcdefgh", 262_144)
+
+      for level <- [1, 3, 22] do
+        state = ProducerState.new(broker, compression: :zstd, compression_level: level, send_timeout: false)
+
+        assert {:noreply, _state} = Worker.handle_cast({:send_message, payload, [], {self(), make_ref()}}, state)
+        assert [entry] = BrokerStub.published()
+        assert entry.payload == IO.iodata_to_binary(:zstd.compress(payload, %{compressionLevel: level}))
       end
     end
   end
