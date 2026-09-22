@@ -17,11 +17,6 @@ defmodule Pulsar.Consumer.Worker do
 
   require Logger
 
-  # ezstd fills this buffer up to 1000 times per call, so it is what caps how large a zstd
-  # message can be. Sizing it to what the producer declared keeps one round the common case.
-  @zstd_min_buffer_size 64 * 1024
-  @zstd_max_buffer_size 1024 * 1024
-
   # Message.validation_error is client-level. CommandAck accepts Pulsar's narrower enum,
   # so only reasons with a deliberate mapping are sent over the wire.
   @wire_validation_errors %{
@@ -975,16 +970,25 @@ defmodule Pulsar.Consumer.Worker do
 
   defp maybe_uncompress(%Binary.MessageMetadata{compression: :NONE}, payload), do: {:ok, payload}
 
+  # The declared size is the ceiling every codec decodes against, as in the Java client.
   defp maybe_uncompress(%Binary.MessageMetadata{} = metadata, compressed_payload) do
-    with {:ok, payload} <- uncompress(metadata, compressed_payload) do
-      verify_uncompressed_size(payload, metadata.uncompressed_size)
+    case uncompress(metadata, compressed_payload) do
+      {:ok, payload} -> verify_uncompressed_size(payload, metadata.uncompressed_size)
+      error -> error
     end
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB}, compressed_payload) do
-    {:ok, :zlib.uncompress(compressed_payload)}
-  rescue
-    error in ErlangError -> {:error, error.original}
+  defp uncompress(%Binary.MessageMetadata{compression: :ZLIB} = metadata, compressed_payload) do
+    stream = :zlib.open()
+
+    try do
+      :zlib.inflateInit(stream)
+      inflate_bounded(stream, compressed_payload, metadata.uncompressed_size, [], 0)
+    catch
+      :error, :data_error -> {:error, :data_error}
+    after
+      :zlib.close(stream)
+    end
   end
 
   defp uncompress(%Binary.MessageMetadata{compression: :LZ4} = metadata, compressed_payload) do
@@ -992,21 +996,79 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp uncompress(%Binary.MessageMetadata{compression: :ZSTD} = metadata, compressed_payload) do
-    buffer_size = metadata.uncompressed_size |> max(@zstd_min_buffer_size) |> min(@zstd_max_buffer_size)
+    {:ok, context} = :zstd.context(:decompress)
 
-    with context when is_reference(context) <- :ezstd.create_decompression_context(buffer_size),
-         payload when is_list(payload) <- :ezstd.decompress_streaming(context, compressed_payload) do
-      {:ok, IO.iodata_to_binary(payload)}
+    try do
+      decompress_bounded(context, compressed_payload, metadata.uncompressed_size, [], 0)
+    catch
+      :error, {:zstd_error, _} = reason -> {:error, reason}
+    after
+      :zstd.close(context)
     end
   end
 
-  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY}, compressed_payload) do
-    :snappyer.decompress(compressed_payload)
+  defp uncompress(%Binary.MessageMetadata{compression: :SNAPPY} = metadata, compressed_payload) do
+    limit = metadata.uncompressed_size
+
+    case :snappyer.uncompressed_length(compressed_payload) do
+      {:ok, size} when size > limit -> {:error, {:uncompressed_size_over_limit, limit}}
+      {:ok, _size} -> :snappyer.decompress(compressed_payload)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Protobuf preserves unknown enum values as integers.
   defp uncompress(%Binary.MessageMetadata{compression: compression}, _compressed_payload) do
     {:error, {:unsupported_compression, compression}}
+  end
+
+  defp inflate_bounded(stream, input, limit, acc, produced) do
+    case :zlib.safeInflate(stream, input) do
+      {:continue, output} ->
+        case collect_bounded(output, limit, acc, produced) do
+          {:ok, acc, produced} -> inflate_bounded(stream, [], limit, acc, produced)
+          error -> error
+        end
+
+      {:finished, output} ->
+        case collect_bounded(output, limit, acc, produced) do
+          {:ok, acc, _produced} ->
+            :ok = :zlib.inflateEnd(stream)
+            {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+
+          error ->
+            error
+        end
+
+      {:need_dictionary, _adler, _output} ->
+        {:error, :zlib_dictionary_required}
+    end
+  end
+
+  defp decompress_bounded(context, input, limit, acc, produced) do
+    case :zstd.stream(context, input) do
+      {:continue, remainder, output} ->
+        case collect_bounded(output, limit, acc, produced) do
+          {:ok, acc, produced} -> decompress_bounded(context, remainder, limit, acc, produced)
+          error -> error
+        end
+
+      {:continue, output} ->
+        case collect_bounded(output, limit, acc, produced) do
+          {:ok, acc, _produced} -> {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+          error -> error
+        end
+    end
+  end
+
+  defp collect_bounded(output, limit, acc, produced) do
+    produced = produced + IO.iodata_length(output)
+
+    if produced > limit do
+      {:error, {:uncompressed_size_over_limit, limit}}
+    else
+      {:ok, [output | acc], produced}
+    end
   end
 
   # Chunk ids outside the range the producer announced can fill the context without chunk 0
@@ -1053,7 +1115,6 @@ defmodule Pulsar.Consumer.Worker do
 
   # A payload the codec accepted is only whole if it is the size the producer recorded
   # before compressing.
-  defp verify_uncompressed_size(payload, 0), do: {:ok, payload}
   defp verify_uncompressed_size(payload, size) when byte_size(payload) == size, do: {:ok, payload}
 
   defp verify_uncompressed_size(payload, size) do
@@ -1179,6 +1240,9 @@ defmodule Pulsar.Consumer.Worker do
 
         :missing_first_chunk ->
           {:uncompressed_size_corruption, :missing_first_chunk}
+
+        {:uncompressed_size_over_limit, _} ->
+          {:uncompressed_size_corruption, :uncompressed_size_over_limit}
 
         {:unsupported_compression, _} ->
           {:decompression_failed, :unsupported_compression}

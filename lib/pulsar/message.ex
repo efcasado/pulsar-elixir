@@ -374,8 +374,10 @@ defmodule Pulsar.Message do
     could not be turned back into the message that was sent. `metadata` is kept and `payload`
     holds the bytes as they arrived, still compressed.
   - `:uncompressed_size_corruption` - the decoded or reassembled payload did not match the
-    size advertised by the producer. `metadata` is kept and `payload` holds the bytes as they
-    arrived, still compressed when compression was enabled.
+    size advertised by the producer. Decoding stops once output exceeds that size, which, as
+    in the Java client, is trusted as given. LZ4 reports an overrun as `:decompression_failed`,
+    since its decoder does not tell one apart from corruption. `metadata` is kept and `payload`
+    holds the bytes as they arrived, still compressed when compression was enabled.
   - `:batch_deserialization_failed` - the entry advertised a batch, but its individual message
     frames could not be read. `metadata` is kept and `payload` holds the decompressed batch
     bytes rather than an individual application message.
