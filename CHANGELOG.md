@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/efcasado/pulsar-elixir/compare/v3.2.0...v3.3.0) (2026-09-22)
+
+
+### Features
+
+* replace ezstd with OTP's native zstd ([#225](https://github.com/efcasado/pulsar-elixir/issues/225)) ([99450f8](https://github.com/efcasado/pulsar-elixir/commit/99450f87ce2809dbfa8b58acb3af9aadbd801fe6))
+
 ## [3.2.0](https://github.com/efcasado/pulsar-elixir/compare/v3.1.1...v3.2.0) (2026-09-15)
 
 
