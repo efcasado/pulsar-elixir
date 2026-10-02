@@ -164,7 +164,7 @@ A dead letter topic that cannot be published to — it does not exist and auto-c
 unreachable, the payload exceeds its maximum message size — takes the consumer worker down:
 
 - The refused message is not acknowledged, so the subscription still owes it
-- The worker crashes, and its group restarts it and retries the whole delivery
+- The worker crashes, and its topology root restarts it and retries the whole delivery
 - A dead letter topic that stays unavailable exhausts the restart budget, and the failure reaches whatever
   supervises the client
 

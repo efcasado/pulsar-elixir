@@ -256,8 +256,8 @@ defmodule Pulsar.Producer do
   @doc """
   Stops a producer, given its pid or its name.
 
-  A pid must be the stable root returned by `start/1` or `start_link/1`. Group and worker pids
-  are not producer roots and return `{:error, :not_found}` here.
+  A pid must be the stable root returned by `start/1` or `start_link/1`. Worker pids are not
+  producer roots and return `{:error, :not_found}` here.
 
   A root started as a static child is `:permanent`, but stopping it goes through its supervisor
   rather than exiting it, so it stays stopped; its child spec remains in that tree as
@@ -284,8 +284,8 @@ defmodule Pulsar.Producer do
     end
   end
 
-  # Resolving the partition here keeps topology knowledge in one module: the partition
-  # supervisors below only build child specs.
+  # Resolving the partition here keeps routing knowledge in one module: the topology root
+  # only builds worker child specs.
   # Use the monitor alias as the reply tag so `await/2` receives either the reply or `:DOWN`.
   # Demonitoring deactivates the alias, which drops replies that arrive after a timeout.
   defp publish_async(producer, message, opts) do
@@ -312,38 +312,35 @@ defmodule Pulsar.Producer do
       :worker ->
         {:ok, producer}
 
-      :group ->
-        {:error, :not_found}
-
       :root ->
-        {groups, hashing_scheme} = Topology.routing(producer)
-        route(groups, hashing_scheme, opts)
+        {partitions, hashing_scheme} = Topology.routing(producer)
+        route(partitions, hashing_scheme, opts)
     end
   end
 
   defp route([], _hashing_scheme, _opts), do: {:error, :not_ready}
 
-  defp route(groups, hashing_scheme, opts) do
+  defp route(partitions, hashing_scheme, opts) do
     # Missing partitions are added highest-first, so the contiguous width stays at the old
-    # modulus until every new slot exists. Restarting groups remain present and retain their
+    # modulus until every new slot exists. Restarting workers remain present and retain their
     # slot, avoiding a temporary key remap during either growth or recovery.
-    case routing_width(groups) do
+    case routing_width(partitions) do
       0 ->
         {:error, :not_ready}
 
-      partitions ->
-        index = select_partition(opts, hashing_scheme, partitions)
+      width ->
+        index = select_partition(opts, hashing_scheme, width)
 
-        case List.keyfind(groups, index, 0) do
-          {_index, group} when is_pid(group) -> pick_worker(Topology.workers(group))
+        case List.keyfind(partitions, index, 0) do
+          {_index, worker} when is_pid(worker) -> {:ok, worker}
           {_index, _restarting} -> {:error, :not_ready}
           nil -> {:error, {:partition_not_found, index}}
         end
     end
   end
 
-  defp routing_width(groups) do
-    groups
+  defp routing_width(partitions) do
+    partitions
     |> Enum.map(&elem(&1, 0))
     |> Enum.sort()
     |> Enum.reduce_while(0, fn index, width ->
@@ -357,9 +354,6 @@ defmodule Pulsar.Producer do
       partition_key -> Hash.partition(hashing_scheme, partition_key, partitions)
     end
   end
-
-  defp pick_worker([]), do: {:error, :not_ready}
-  defp pick_worker([worker | _rest]), do: {:ok, worker}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.

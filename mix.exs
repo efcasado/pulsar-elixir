@@ -35,7 +35,8 @@ defmodule Pulsar.MixProject do
           "docs/dead_letter_policies.md",
           "docs/schemas.md",
           "docs/reader.md",
-          "docs/upgrading_to_3.0.md"
+          "docs/upgrading_to_3.0.md",
+          "docs/upgrading_to_4.0.md"
         ],
         groups_for_extras: [
           Guides: ~r/docs\/.*/
@@ -63,10 +64,9 @@ defmodule Pulsar.MixProject do
           "Pulsar.Topology",
           "Pulsar.Topology.Root",
           "Pulsar.Topology.Controller",
-          "Pulsar.Topology.Group",
           "Pulsar.Topology.Resolver",
-          "Pulsar.Topology.groups/1",
           "Pulsar.Topology.kind/1",
+          "Pulsar.Topology.partitions/1",
           "Pulsar.Topology.workers/1"
         ]
       ]
