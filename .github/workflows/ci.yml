@@ -146,7 +146,7 @@ jobs:
       run: mix coveralls.github ${{ matrix.args }} --parallel --warnings-as-errors
 
     - name: Publish Test Report
-      uses: dorny/test-reporter@v3.0.0
+      uses: dorny/test-reporter@v3.2.0
       if: always()
       with:
         name: Test Results - ${{ matrix.suite }}
