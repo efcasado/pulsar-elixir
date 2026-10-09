@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.3.0](https://github.com/efcasado/pulsar-elixir/compare/v3.2.0...v3.3.0) (2026-10-09)
+
+
+### Features
+
+* replace ezstd with OTP's native zstd ([#225](https://github.com/efcasado/pulsar-elixir/issues/225)) ([99450f8](https://github.com/efcasado/pulsar-elixir/commit/99450f87ce2809dbfa8b58acb3af9aadbd801fe6))
+
+
+### Dependencies
+
+* bump dorny/test-reporter from 3.0.0 to 3.2.0 ([#232](https://github.com/efcasado/pulsar-elixir/issues/232)) ([8775083](https://github.com/efcasado/pulsar-elixir/commit/877508352b19e0003843a2f31fe6c574828cf326))
+* bump jdx/mise-action from 4.3.0 to 5.0.0 ([#230](https://github.com/efcasado/pulsar-elixir/issues/230)) ([c7a6b95](https://github.com/efcasado/pulsar-elixir/commit/c7a6b959c46a14a61b670a630d7da92bd3544667))
+* bump jdx/mise-action from 5.0.0 to 5.0.1 ([#231](https://github.com/efcasado/pulsar-elixir/issues/231)) ([8a70496](https://github.com/efcasado/pulsar-elixir/commit/8a70496cc61df2fe49b419fea7a2fb4129bac220))
+* bump jdx/mise-action from 5.0.1 to 5.1.1 ([#233](https://github.com/efcasado/pulsar-elixir/issues/233)) ([43ee024](https://github.com/efcasado/pulsar-elixir/commit/43ee0248b3e20ceec863ccb8cd5b4597e43c038c))
+
 ## [3.2.0](https://github.com/efcasado/pulsar-elixir/compare/v3.1.1...v3.2.0) (2026-09-15)
 
 
