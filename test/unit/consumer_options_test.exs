@@ -14,7 +14,6 @@ defmodule Pulsar.Consumer.OptionsTest do
 
       assert opts[:client] == :default
       assert opts[:subscription_type] == :shared
-      assert opts[:consumer_count] == 1
       assert opts[:flow_initial] == 100
       assert opts[:initial_position] == :latest
       assert opts[:durable] == true
@@ -75,13 +74,10 @@ defmodule Pulsar.Consumer.OptionsTest do
       end
     end
 
-    test "rejects more than one consumer on an exclusive subscription" do
-      assert_raise ArgumentError, ~r/admits a single consumer/, fn ->
-        validate!(subscription_type: :exclusive, consumer_count: 2)
+    test "rejects the removed consumer count option" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:consumer_count/, fn ->
+        validate!(consumer_count: 2)
       end
-
-      assert validate!(subscription_type: :exclusive, consumer_count: 1)[:consumer_count] == 1
-      assert validate!(subscription_type: :failover, consumer_count: 2)[:consumer_count] == 2
     end
 
     test "accepts a start_message_id as a ledger and entry pair" do
