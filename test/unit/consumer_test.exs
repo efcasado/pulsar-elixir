@@ -2,7 +2,6 @@ defmodule Pulsar.ConsumerTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Consumer
-  alias Pulsar.Topology.Group
 
   describe "await_ready/2" do
     test "reports a missing named consumer after the wait" do
@@ -27,10 +26,6 @@ defmodule Pulsar.ConsumerTest do
 
       assert Consumer.topic(consumer) == {:error, :not_found}
     end
-
-    test "rejects an internal group pid" do
-      assert Consumer.topic(group_pid()) == {:error, :not_found}
-    end
   end
 
   describe "send_flow/3" do
@@ -48,10 +43,6 @@ defmodule Pulsar.ConsumerTest do
 
     test "returns an error for a stale worker pid" do
       assert {:error, _reason} = Consumer.send_flow(dead_pid(), 1)
-    end
-
-    test "rejects an internal group pid" do
-      assert Consumer.send_flow(group_pid(), 1) == {:error, :not_found}
     end
   end
 
@@ -72,24 +63,6 @@ defmodule Pulsar.ConsumerTest do
     pid = spawn(fn -> :ok end)
     ref = Process.monitor(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
-    pid
-  end
-
-  defp group_pid do
-    caller = self()
-
-    pid =
-      spawn(fn ->
-        caller_ref = Process.monitor(caller)
-        Process.put(:"$initial_call", {:supervisor, Group, 1})
-        send(caller, {:ready, self()})
-
-        receive do
-          {:DOWN, ^caller_ref, :process, ^caller, _reason} -> :ok
-        end
-      end)
-
-    assert_receive {:ready, ^pid}
     pid
   end
 end

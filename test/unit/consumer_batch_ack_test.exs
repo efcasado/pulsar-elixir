@@ -38,7 +38,7 @@ defmodule Pulsar.Consumer.BatchAckTest do
   end
 
   # Stands in for the dead letter producer. `Pulsar.Producer.send/3` routes a bare pid through
-  # `Topology.kind/1`, which calls anything that is not a topology or group supervisor a worker,
+  # `Topology.kind/1`, which calls anything that is not a topology root a worker,
   # so answering `{:send_message, ...}` is all it takes to be one.
   defmodule DeadLetterProducer do
     @moduledoc false
