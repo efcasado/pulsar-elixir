@@ -33,7 +33,7 @@ Add `:pulsar_elixir` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pulsar, "~> 3.2.0", hex: :pulsar_elixir} <!-- x-release-please-version -->
+    {:pulsar, "~> 3.3.0", hex: :pulsar_elixir} <!-- x-release-please-version -->
   ]
 end
 ```
