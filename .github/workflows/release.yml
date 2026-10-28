@@ -24,7 +24,7 @@ jobs:
 
       - name: Install mise
         if: ${{ steps.release.outputs.release_created }}
-        uses: jdx/mise-action@v5.2.1
+        uses: jdx/mise-action@v5.2.3
         with:
           experimental: true
 
