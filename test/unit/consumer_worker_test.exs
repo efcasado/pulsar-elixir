@@ -238,6 +238,57 @@ defmodule Pulsar.Consumer.WorkerTest do
     assert invalid.message_id == command.message_id
   end
 
+  describe "batch metadata" do
+    # Batch metadata is read by hand for the two fields a batch entry normally carries, and by
+    # the generated decoder for everything else. The two must not disagree: a payload size read
+    # wrongly moves every message boundary after it.
+    test "reads batch metadata exactly as the generated decoder does" do
+      metadatas =
+        for payload_size <- [0, 1, 127, 128, 300, 16_383, 16_384, 2_000_000],
+            sequence_id <- [0, 1, 127, 128, 300_000],
+            extra <- [
+              [],
+              [compacted_out: true],
+              [event_time: 1_700_000_000],
+              [partition_key: "orders-42"],
+              [ordering_key: <<7, 8, 9>>],
+              [properties: [%Binary.KeyValue{key: "k", value: "v"}]],
+              [null_value: true, partition_key_b64_encoded: true]
+            ] do
+          struct(Binary.SingleMessageMetadata, [payload_size: payload_size, sequence_id: sequence_id] ++ extra)
+        end
+
+      payload = :binary.copy("x", 2_000_000)
+
+      entries =
+        Enum.map(metadatas, fn metadata ->
+          encoded = IO.iodata_to_binary(Binary.SingleMessageMetadata.encode(metadata))
+          {encoded, binary_part(payload, 0, metadata.payload_size)}
+        end)
+
+      batch =
+        entries
+        |> Enum.map(fn {encoded, body} -> <<byte_size(encoded)::32, encoded::binary, body::binary>> end)
+        |> IO.iodata_to_binary()
+
+      delivery = delivery(:NONE, batch, num_messages_in_batch: length(entries))
+
+      assert {:noreply, _state} = Worker.handle_info(delivery, reporting_state())
+
+      for {encoded, body} <- entries do
+        expected = Binary.SingleMessageMetadata.decode(encoded)
+
+        if expected.compacted_out do
+          refute_received {:handled, %{raw: %{single_metadata: ^expected}}}
+        else
+          assert_received {:handled, message}
+          assert message.raw.single_metadata == expected
+          assert message.payload == body
+        end
+      end
+    end
+  end
+
   describe "a batch whose framing cannot be read" do
     setup do
       payload = <<"not two framed messages">>
