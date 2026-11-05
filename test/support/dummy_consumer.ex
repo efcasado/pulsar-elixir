@@ -81,7 +81,7 @@ defmodule Pulsar.Test.Support.DummyConsumer do
         {:stop, :normal, state}
 
       state.stop_at_end_of_topic ->
-        root = self() |> Pulsar.Topology.owning_supervisor() |> Pulsar.Topology.owning_supervisor()
+        root = Pulsar.Topology.owning_supervisor(self())
         Task.start(fn -> Pulsar.Consumer.stop(root) end)
         {:ok, state}
 
