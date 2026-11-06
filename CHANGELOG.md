@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.3.1](https://github.com/efcasado/pulsar-elixir/compare/v3.3.0...v3.3.1) (2026-11-06)
+
+
+### Dependencies
+
+* bump jdx/mise-action from 5.2.4 to 5.2.5 ([#242](https://github.com/efcasado/pulsar-elixir/issues/242)) ([3dbfd3e](https://github.com/efcasado/pulsar-elixir/commit/3dbfd3e5aa0cceeb70fb9e1b71f20f42deba47e6))
+* bump jdx/mise-action from 5.2.5 to 5.2.6 ([#244](https://github.com/efcasado/pulsar-elixir/issues/244)) ([55c44ad](https://github.com/efcasado/pulsar-elixir/commit/55c44adc95bfb0e1db586808777697ec06d48f5f))
+
 ## [3.3.0](https://github.com/efcasado/pulsar-elixir/compare/v3.2.0...v3.3.0) (2026-11-01)
 
 
