@@ -30,6 +30,21 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     assert :ok = Pulsar.Producer.stop(producer, client: @client)
   end
 
+  # The second client stands in for another node running the same producer.
+  test "a producer with the default name runs on several nodes", %{broker: broker} do
+    other = :"#{@client}.other"
+    start_supervised!({Pulsar.Client, name: other, host: broker.service_url})
+    topic = @topic <> "-default-name"
+
+    for client <- [@client, other] do
+      {:ok, producer} = Pulsar.Producer.start(topic, client: client)
+      on_exit(fn -> Pulsar.Producer.stop(producer) end)
+
+      assert :ok = Pulsar.Producer.await_ready(producer)
+      assert {:ok, _message_id} = Pulsar.Producer.send("#{topic}-producer", "hello", client: client)
+    end
+  end
+
   @tag telemetry_listen: [@opened, @closed, @published]
   test "reports opening, publishing and closing as it goes" do
     producer_group_name = "my-producer"

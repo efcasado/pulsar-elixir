@@ -88,9 +88,8 @@ defmodule Pulsar.Consumer.DeadLetter do
     # topic that will not take a message is fatal rather than something to carry on from.
     case Producer.send(producer, message.payload, opts) do
       # {:ok, :deduplicated} is acknowledged along with the rest. An error would nack the message
-      # into a divert that is still over the redelivery threshold, so it would divert again, and
-      # this producer's name is shared by every node running the consumer -- a collision between
-      # them need not clear. The producer already logs and reports what the broker discarded.
+      # into a divert that is still over the redelivery threshold, so it would divert again. The
+      # producer already logs and reports what the broker discarded.
       {:ok, _message_id} -> :ok
       {:error, _reason} = error -> error
     end
@@ -148,11 +147,12 @@ defmodule Pulsar.Consumer.DeadLetter do
   end
 
   # Named after the consumer, not the dead letter topic: two subscriptions may be configured to
-  # divert into the same topic, and the name keys this one's producer epochs and telemetry.
+  # divert into the same topic, and the name keys this one's producer epochs and telemetry. The
+  # suffix keeps nodes running the same consumer from clashing on the broker.
   defp producer_name(opts) do
     case topic(opts) do
       nil -> nil
-      _topic -> "#{Keyword.fetch!(opts, :name)}-dead-letter-producer"
+      _topic -> "#{Keyword.fetch!(opts, :name)}-dead-letter-producer-#{Producer.unique_suffix()}"
     end
   end
 end

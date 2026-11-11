@@ -706,6 +706,18 @@ defmodule Pulsar.TopologyTest do
       assert Keyword.fetch!(opts, :partition) == nil
     end
 
+    test "puts a name suffix between the group's name and the worker's index" do
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 2} end, [name_suffix: "a3f9c1"], worker: OptsWorker)
+
+      :ok = Topology.await_ready(root, 1_000)
+
+      for {index, opts} <- worker_opts(root) do
+        assert Keyword.fetch!(opts, :name) == "#{Pulsar.Topic.partition(@name, index)}-a3f9c1-1"
+        refute Keyword.has_key?(opts, :name_suffix)
+      end
+    end
+
     test "retains round-robin connection slots across worker and group restarts" do
       client = :topology_connection_slots
 

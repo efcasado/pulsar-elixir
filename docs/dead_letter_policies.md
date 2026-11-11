@@ -279,4 +279,5 @@ because the worker does not survive it: the signal there is the consumer going d
 `[:pulsar, :producer, ...]` events below it explaining why.
 
 The dead letter producer is otherwise an ordinary producer, so the `[:pulsar, :producer, …]` events
-fire for it too, with `producer_name` set to `"<consumer name>-dead-letter-producer"`.
+fire for it too, with `producer_name` set to `"<consumer name>-dead-letter-producer-<suffix>-<n>"`, where
+`<suffix>` is random so that several nodes can run the same consumer.
