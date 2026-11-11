@@ -16,7 +16,15 @@ defmodule Pulsar.Producer.Options do
     ],
     name: [
       type: {:or, [:string, :atom]},
-      doc: "Name the producer is registered under. Defaults to `\"<topic>-producer\"`."
+      doc: """
+      Name the producer is registered under. Defaults to `"<topic>-producer"`.
+
+      The broker sees each worker as `"<name>-<n>"`, and admits one producer per name on a
+      topic. An explicit name is therefore stable across restarts, which broker-side
+      deduplication relies on, but must be unique to one node. Without one, the name the broker
+      sees also carries a random suffix chosen when the producer starts, so the same producer
+      can run on several nodes.
+      """
     ],
     access_mode: [
       type: {:in, [:shared, :exclusive, :wait_for_exclusive, :exclusive_with_fencing]},
