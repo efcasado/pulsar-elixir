@@ -147,9 +147,8 @@ defmodule Pulsar.Consumer.DeadLetter do
   end
 
   # Named after the consumer, not the dead letter topic: two subscriptions may be configured to
-  # divert into the same topic, and the name keys this one's producer epochs and telemetry. Every
-  # node running the consumer derives the same base, and the broker admits one producer per name
-  # on a topic, so each instance carries a suffix of its own.
+  # divert into the same topic, and the name keys this one's producer epochs and telemetry. The
+  # suffix keeps nodes running the same consumer from clashing on the broker.
   defp producer_name(opts) do
     case topic(opts) do
       nil -> nil

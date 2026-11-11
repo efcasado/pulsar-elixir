@@ -48,8 +48,6 @@ defmodule Pulsar.Topology.Group do
     Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity(client, count))
   end
 
-  # A suffix keeps the broker-side names of one node's workers apart from another node's that
-  # share the logical name. See Pulsar.Producer's default name.
   defp worker_name(name, nil, i), do: "#{name}-#{i}"
   defp worker_name(name, suffix, i), do: "#{name}-#{suffix}-#{i}"
 

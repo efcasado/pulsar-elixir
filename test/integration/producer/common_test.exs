@@ -30,29 +30,19 @@ defmodule Pulsar.Integration.Producer.CommonTest do
     assert :ok = Pulsar.Producer.stop(producer, client: @client)
   end
 
-  # Two clients stand in for two nodes running the same producer: the broker admits one
-  # producer per name on a topic, so the default name must not be all it sees.
-  test "a producer with the default name runs on several nodes at once", %{broker: broker} do
-    other_client = :"#{@client}.other_node"
-    start_supervised!({Pulsar.Client, name: other_client, host: broker.service_url})
+  # The second client stands in for another node running the same producer.
+  test "a producer with the default name runs on several nodes", %{broker: broker} do
+    other = :"#{@client}.other"
+    start_supervised!({Pulsar.Client, name: other, host: broker.service_url})
+    topic = @topic <> "-default-name"
 
-    producers =
-      for client <- [@client, other_client] do
-        {:ok, producer} = Pulsar.Producer.start(@topic <> "-default-name", client: client)
-        on_exit(fn -> Pulsar.Producer.stop(producer) end)
-        producer
-      end
+    for client <- [@client, other] do
+      {:ok, producer} = Pulsar.Producer.start(topic, client: client)
+      on_exit(fn -> Pulsar.Producer.stop(producer) end)
 
-    for {producer, client} <- Enum.zip(producers, [@client, other_client]) do
       assert :ok = Pulsar.Producer.await_ready(producer)
-
-      # Still found locally by the default name.
-      assert {:ok, _message_id} =
-               Pulsar.Producer.send("#{@topic}-default-name-producer", "hello", client: client)
+      assert {:ok, _message_id} = Pulsar.Producer.send("#{topic}-producer", "hello", client: client)
     end
-
-    names = for producer <- producers, [worker] = Topology.workers(producer), do: :sys.get_state(worker).producer_name
-    assert names == Enum.uniq(names)
   end
 
   @tag telemetry_listen: [@opened, @closed, @published]

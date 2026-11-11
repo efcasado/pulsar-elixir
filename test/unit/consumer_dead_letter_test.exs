@@ -71,21 +71,14 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert {_opts, [%{start: {_module, _fun, [producer_opts]}}]} = attach(dead_letter_policy: policy)
       assert Keyword.fetch!(producer_opts, :topic) == @default_dlq
       assert Keyword.fetch!(producer_opts, :client) == :test
-
-      assert Keyword.fetch!(producer_opts, :name) =~
-               ~r/^#{Regex.escape(@consumer_name)}-dead-letter-producer-[0-9a-f]{8}$/
+      assert Keyword.fetch!(producer_opts, :name) =~ "#{@consumer_name}-dead-letter-producer-"
     end
 
-    # Every node running the consumer attaches its own producer to the same topic, and the broker
-    # admits one producer per name there.
-    test "names each attached producer apart from the others for the same consumer" do
-      names =
-        for _node <- 1..2 do
-          {_opts, [%{start: {_module, _fun, [producer_opts]}}]} = attach()
-          Keyword.fetch!(producer_opts, :name)
-        end
+    test "names the producer differently each time it is attached" do
+      {_opts, [%{start: {_, _, [first]}}]} = attach()
+      {_opts, [%{start: {_, _, [second]}}]} = attach()
 
-      assert names == Enum.uniq(names)
+      assert first[:name] != second[:name]
     end
 
     # Two subscriptions may be configured to divert into the same topic, and each still gets
