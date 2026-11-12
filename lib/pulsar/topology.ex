@@ -234,16 +234,22 @@ defmodule Pulsar.Topology do
   end
 
   # Groups and the configured hashing scheme from one traversal, for a producer that needs both
-  # to route a keyed message and would otherwise pay a second call per send.
+  # to route a keyed message and would otherwise pay a second call per send. The controller entry
+  # that carries the scheme also says whose root this is, so a consumer's is refused for free.
   #
-  # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root, and answers a
-  # group or a worker as though it had no groups. Use groups/1 for anything else.
+  # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root. Use groups/1 for
+  # anything else.
   @doc false
-  @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
+  @spec routing(pid()) ::
+          {:ok, [{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
+          | {:error, :not_found}
   def routing(root) do
     children = supervisor_children(root)
 
-    {groups_from(children), hashing_scheme_from(children)}
+    case controller_child(children) do
+      %{kind: :producers, scheme: scheme} -> {:ok, groups_from(children), scheme}
+      _not_a_producer -> {:error, :not_found}
+    end
   end
 
   defp topology_groups(root), do: root |> supervisor_children() |> groups_from()
@@ -254,13 +260,6 @@ defmodule Pulsar.Topology do
       {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
     end)
-  end
-
-  defp hashing_scheme_from(children) do
-    case controller_child(children) do
-      %{scheme: scheme} -> scheme
-      nil -> nil
-    end
   end
 
   @doc false

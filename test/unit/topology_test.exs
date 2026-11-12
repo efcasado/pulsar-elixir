@@ -512,7 +512,7 @@ defmodule Pulsar.TopologyTest do
         assert Task.yield(operations, 500) ==
                  {:ok,
                   {
-                    {:error, :not_ready},
+                    {:error, :not_found},
                     {:error, :no_consumers_available},
                     @topic
                   }}
