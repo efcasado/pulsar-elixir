@@ -31,8 +31,9 @@ defmodule Pulsar.Topology do
     readiness = fn resolve, deadline -> resource_readiness(resolve, kind, deadline) end
 
     case resource do
+      # A root of the other kind would answer its workers' readiness all the same.
       root when is_pid(root) ->
-        await_resource(root, timeout, readiness)
+        if resource?(root, kind), do: await_resource(root, timeout, readiness), else: {:error, :not_found}
 
       name when is_binary(name) or is_atom(name) ->
         resolve = fn -> Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
@@ -196,6 +197,11 @@ defmodule Pulsar.Topology do
       {_id, pid, :worker, [module]} when module in @worker_modules ->
         if is_pid(pid), do: [pid], else: []
 
+      # A nested topology root owns its own workers, which are not this resource's. A consumer's
+      # dead letter producer is one, and its producer workers must not read as consumer workers.
+      {_id, pid, :supervisor, _modules} when is_pid(pid) ->
+        if kind(pid) == :root, do: [], else: workers(pid)
+
       _child ->
         []
     end)
@@ -215,16 +221,20 @@ defmodule Pulsar.Topology do
   @spec partitions(pid()) :: [{non_neg_integer(), pid() | :restarting | :undefined}]
   def partitions(root) do
     case kind(root) do
-      :root -> topology_partitions(root)
-      :worker -> []
+      :root ->
+        for {index, partition} <- root |> supervisor_children() |> partitions_from(),
+            do: {index, partition_worker(partition)}
+
+      _not_a_root ->
+        []
     end
   end
 
-  # Partitions and the configured hashing scheme from one traversal, for a producer that needs both
-  # to route a keyed message and would otherwise pay a second call per send.
+  # Each partition's supervisor and the configured hashing scheme from one traversal, for a
+  # producer that needs both to route a keyed message. It resolves only the partition it picks
+  # through partition_worker/1, so a send costs two calls whatever the partition count.
   #
-  # Unlike partitions/1 this does not dispatch on kind/1: it assumes a topology root, and answers
-  # a worker as though it had no partitions. Use partitions/1 for anything else.
+  # Unlike partitions/1 this does not dispatch on kind/1: it assumes a topology root.
   @doc false
   @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
   def routing(root) do
@@ -233,12 +243,21 @@ defmodule Pulsar.Topology do
     {partitions_from(children), hashing_scheme_from(children)}
   end
 
-  defp topology_partitions(root), do: root |> supervisor_children() |> partitions_from()
+  @doc false
+  @spec partition_worker(pid() | :restarting | :undefined) :: pid() | :restarting | :undefined
+  def partition_worker(partition) when is_pid(partition) do
+    case supervisor_children(partition) do
+      [{_id, worker, :worker, _modules}] -> worker
+      [] -> :restarting
+    end
+  end
+
+  def partition_worker(not_running), do: not_running
 
   defp partitions_from(children) do
     Enum.flat_map(children, fn
-      {{:topic, :non_partitioned}, pid, :worker, _modules} -> [{0, pid}]
-      {{:partition, index}, pid, :worker, _modules} -> [{index, pid}]
+      {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
+      {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
       _child -> []
     end)
   end
@@ -262,15 +281,17 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
-  Which level of a topology `pid` is: its stable root or a worker.
+  Which level of a topology `pid` is: its stable root, a worker, or another supervisor, such as
+  the one each partition's worker runs under.
 
   Uses `:proc_lib.initial_call/1` rather than traversal, so supervisors are never sent calls
   intended for workers.
   """
-  @spec kind(pid()) :: :root | :worker
+  @spec kind(pid()) :: :root | :supervisor | :worker
   def kind(pid) do
     case :proc_lib.initial_call(pid) do
       {:supervisor, Root, _args} -> :root
+      {:supervisor, _module, _args} -> :supervisor
       _worker -> :worker
     end
   end

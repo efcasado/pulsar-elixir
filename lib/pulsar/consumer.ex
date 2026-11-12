@@ -264,6 +264,9 @@ defmodule Pulsar.Consumer do
       :worker ->
         grant(consumer, permits)
 
+      :supervisor ->
+        {:error, :not_found}
+
       :root ->
         case topology_workers(consumer) do
           :initializing -> {:error, :not_ready}
@@ -321,6 +324,9 @@ defmodule Pulsar.Consumer do
     case Topology.kind(consumer) do
       :worker ->
         Worker.topic(consumer)
+
+      :supervisor ->
+        {:error, :not_found}
 
       :root ->
         Topology.topic(consumer)

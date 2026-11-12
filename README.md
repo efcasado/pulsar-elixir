@@ -39,9 +39,8 @@ end
 ```
 
 Upgrading from 3.x? See the
-[upgrade guide](docs/upgrading_to_4.0.md). 4.0 removes `consumer_count`, uses separately
-named consumers for additional workers on a subscription, and shares the restart budget
-across each consumer or producer resource.
+[upgrade guide](docs/upgrading_to_4.0.md). 4.0 removes `consumer_count`; additional consumers
+on a subscription are separately named resources.
 
 
 ## Quick Start

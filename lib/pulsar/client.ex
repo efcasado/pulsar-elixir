@@ -93,20 +93,18 @@ defmodule Pulsar.Client do
             worker_restart_intensity: [
               type: :keyword_list,
               keys: [
-                max_restarts: [type: :non_neg_integer, default: 10],
+                max_restarts: [type: :non_neg_integer, default: 3],
                 max_seconds: [type: :pos_integer, default: 5]
               ],
-              default: [max_restarts: 10, max_seconds: 5],
+              default: [max_restarts: 3, max_seconds: 5],
               doc: """
-              How often direct children under one consumer or producer root — workers, the
-              topology controller, and any companion — may restart before that resource gives up, as
-              `[max_restarts: integer, max_seconds: integer]`. Defaults to ten restarts in five seconds,
-              allowing a small partitioned resource to recover from simultaneous worker failures.
+              How often a consumer or producer worker under this client may be restarted before
+              its partition gives up, as `[max_restarts: integer, max_seconds: integer]`. OTP's
+              own intensity by default.
 
-              The budget is shared by those children and does not automatically scale with partition
-              count. Tune it for the resource size and desired recovery policy. See
-              `docs/architecture.md` for the resulting failure granularity and how these numbers
-              relate to `Pulsar.Backoff`.
+              Each partition has its own budget, so a broker dropping every worker registered
+              with it at once costs each partition one restart. See `docs/architecture.md` for
+              how the two numbers relate to `Pulsar.Backoff`.
               """
             ],
             resource_restart_intensity: [
@@ -117,8 +115,9 @@ defmodule Pulsar.Client do
               ],
               default: [max_restarts: 3, max_seconds: 5],
               doc: """
-              How many consumer or producer resources may give up before their client branch
-              does. The failure then reaches the client and whatever supervises it.
+              How many times a partition may give up before the consumer or producer it belongs
+              to does, and how many resources may do that before the client does. The failure
+              then reaches whatever supervises the client.
               """
             ],
             producers: [

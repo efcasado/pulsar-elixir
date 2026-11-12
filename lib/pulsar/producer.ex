@@ -285,7 +285,7 @@ defmodule Pulsar.Producer do
   end
 
   # Resolving the partition here keeps routing knowledge in one module: the topology root
-  # only builds worker child specs.
+  # only builds child specs.
   # Use the monitor alias as the reply tag so `await/2` receives either the reply or `:DOWN`.
   # Demonitoring deactivates the alias, which drops replies that arrive after a timeout.
   defp publish_async(producer, message, opts) do
@@ -312,6 +312,9 @@ defmodule Pulsar.Producer do
       :worker ->
         {:ok, producer}
 
+      :supervisor ->
+        {:error, :not_found}
+
       :root ->
         {partitions, hashing_scheme} = Topology.routing(producer)
         route(partitions, hashing_scheme, opts)
@@ -322,7 +325,7 @@ defmodule Pulsar.Producer do
 
   defp route(partitions, hashing_scheme, opts) do
     # Missing partitions are added highest-first, so the contiguous width stays at the old
-    # modulus until every new slot exists. Restarting workers remain present and retain their
+    # modulus until every new slot exists. Restarting partitions remain present and retain their
     # slot, avoiding a temporary key remap during either growth or recovery.
     case routing_width(partitions) do
       0 ->
@@ -332,8 +335,7 @@ defmodule Pulsar.Producer do
         index = select_partition(opts, hashing_scheme, width)
 
         case List.keyfind(partitions, index, 0) do
-          {_index, worker} when is_pid(worker) -> {:ok, worker}
-          {_index, _restarting} -> {:error, :not_ready}
+          {_index, partition} -> partition |> Topology.partition_worker() |> available()
           nil -> {:error, {:partition_not_found, index}}
         end
     end
@@ -354,6 +356,9 @@ defmodule Pulsar.Producer do
       partition_key -> Hash.partition(hashing_scheme, partition_key, partitions)
     end
   end
+
+  defp available(worker) when is_pid(worker), do: {:ok, worker}
+  defp available(_not_running), do: {:error, :not_ready}
 
   # Two producers in one static supervision tree need distinct ids, so the id follows
   # the same default as the producer's name.

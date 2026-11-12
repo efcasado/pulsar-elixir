@@ -60,7 +60,7 @@ defmodule Pulsar.Topology.Root do
     # their own brokers, so none delays this root coming up.
     children = companions ++ [controller]
 
-    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker))
+    Supervisor.init(children, [strategy: :one_for_one] ++ Client.restart_intensity(client, :resource))
   end
 
   # `:companions` configures this root, and is not part of what a worker is started with.
@@ -76,7 +76,7 @@ defmodule Pulsar.Topology.Root do
   end
 
   # On the child id rather than in the registry, so routing reads it from the same
-  # which_children the workers come from and a send costs one call. Producer.send/3 takes a pid
+  # which_children the partitions come from and a send costs one call. Producer.send/3 takes a pid
   # without consulting the registry, and start_link_unregistered/1 has no registry entry at all.
   defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
@@ -103,11 +103,11 @@ defmodule Pulsar.Topology.Root do
   end
 
   defp reconcile_children(root, children, desired, config) do
-    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :worker, _}, &1))
+    topic? = Enum.any?(children, &match?({{:topic, :non_partitioned}, _, :supervisor, _}, &1))
 
     partitions =
       Enum.flat_map(children, fn
-        {{:partition, index}, _pid, :worker, _modules} -> [index]
+        {{:partition, index}, _pid, :supervisor, _modules} -> [index]
         _child -> []
       end)
 
@@ -143,7 +143,7 @@ defmodule Pulsar.Topology.Root do
   end
 
   defp reconcile_shape(:empty, root, 0, config) do
-    with :ok <- start_worker(root, topic_child_spec(config)), do: {:ok, 0, [0]}
+    with :ok <- start_partition(root, topic_child_spec(config)), do: {:ok, 0, [0]}
   end
 
   defp reconcile_shape(:empty, root, desired, config) do
@@ -159,14 +159,14 @@ defmodule Pulsar.Topology.Root do
     |> Enum.reject(&(&1 in existing))
     |> Enum.sort(:desc)
     |> Enum.reduce_while({:ok, []}, fn index, {:ok, added} ->
-      case start_worker(root, partition_child_spec(index, config)) do
+      case start_partition(root, partition_child_spec(index, config)) do
         :ok -> {:cont, {:ok, [index | added]}}
         {:error, reason} -> {:halt, {:error, {:partition_start_failed, index, reason}}}
       end
     end)
   end
 
-  defp start_worker(root, child_spec) do
+  defp start_partition(root, child_spec) do
     case Supervisor.start_child(root, child_spec) do
       {:ok, _pid} -> :ok
       {:ok, _pid, _info} -> :ok
@@ -180,14 +180,9 @@ defmodule Pulsar.Topology.Root do
 
   # Both topics, so a callback can tell which partition it handles without reading the tree.
   defp topic_child_spec(%{worker: worker, opts: opts}) do
-    topic_opts =
-      Keyword.merge(opts,
-        base_topic: Keyword.fetch!(opts, :topic),
-        partition: nil,
-        name: worker_name(Keyword.fetch!(opts, :name))
-      )
+    topic_opts = Keyword.merge(opts, base_topic: Keyword.fetch!(opts, :topic), partition: nil)
 
-    worker_child_spec({:topic, :non_partitioned}, worker, topic_opts)
+    partition_supervisor_spec({:topic, :non_partitioned}, worker, topic_opts)
   end
 
   defp partition_child_spec(partition_index, %{worker: worker, opts: opts}) do
@@ -198,23 +193,30 @@ defmodule Pulsar.Topology.Root do
         topic: Topic.partition(base_topic, partition_index),
         base_topic: base_topic,
         partition: partition_index,
-        name: opts |> Keyword.fetch!(:name) |> Topic.partition(partition_index) |> worker_name()
+        name: Topic.partition(Keyword.fetch!(opts, :name), partition_index)
       )
 
-    worker_child_spec({:partition, partition_index}, worker, partition_opts)
+    partition_supervisor_spec({:partition, partition_index}, worker, partition_opts)
   end
 
-  defp worker_child_spec(id, worker, opts) do
-    # Allocate once per child specification so a worker restart keeps its pool slot.
-    [connection_slot] = Client.allocate_connection_slots(Keyword.fetch!(opts, :client), 1)
-    opts = Keyword.put(opts, :connection_slot, connection_slot)
+  # A supervisor of its own gives each partition its own restart budget, so a broker dropping
+  # every worker at once costs each partition one restart rather than exhausting the root's.
+  defp partition_supervisor_spec(id, worker, opts) do
+    client = Keyword.fetch!(opts, :client)
 
-    {worker, opts}
-    |> Supervisor.child_spec([])
-    |> Map.put(:id, id)
+    # Allocated once per child specification, so restarts at either level keep the pool slot.
+    [connection_slot] = Client.allocate_connection_slots(client, 1)
+
+    # The broker deduplicates by producer name and orders failover consumers by consumer name, so
+    # the worker keeps the name it had when a partition could hold several.
+    worker_opts = Keyword.merge(opts, connection_slot: connection_slot, name: "#{Keyword.fetch!(opts, :name)}-1")
+    supervisor_opts = [strategy: :one_for_one] ++ Client.restart_intensity(client, :worker)
+
+    %{
+      id: id,
+      start: {Supervisor, :start_link, [[{worker, worker_opts}], supervisor_opts]},
+      restart: :permanent,
+      type: :supervisor
+    }
   end
-
-  # Preserve the broker-visible identity used when a group held the sole worker. Besides limiting
-  # a compatibility change, producer epochs are keyed by this name.
-  defp worker_name(name), do: "#{name}-1"
 end
