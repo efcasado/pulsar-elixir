@@ -14,8 +14,8 @@ review even after the application starts:
 
 - Replacing a consumer with several named resources changes how you stop, wait for, and grant
   flow to those consumers.
-- Restart budgets now cover the whole resource. Review them for the number of partitions and
-  your recovery policy.
+- Reconciliation telemetry renames `:added_groups` to `:added_partitions`, which a handler
+  matching the old key misses silently.
 
 ## 1. Remove `:consumer_count`
 
@@ -74,33 +74,30 @@ should receive them. Pass the same `:client` option used at startup when using a
 `Pulsar.Client.consumers/1` now lists each replacement resource separately. Callback state
 remains independent per worker.
 
-## 3. Review restart budgets
+## 3. Update reconciliation telemetry handlers
 
-`:worker_restart_intensity` now applies to the whole consumer or producer root: its partition
-workers, topology controller, and companions share the budget. `:resource_restart_intensity`
-applies to resource restarts in the client branch; the intermediate partition supervisors are gone.
+The `[:pulsar, :topology, :reconciliation, :stop]` event reports the partitions it started as
+`:added_partitions`. It was `:added_groups` in 3.x, so a handler that matches the old key no
+longer matches, and nothing reports the mismatch:
 
-Both options remain configurable on `Pulsar.Client`. The worker budget now defaults to ten
-restarts in five seconds; the resource budget remains three restarts in five seconds.
+```elixir
+# 3.x
+def handle_event([:pulsar, :topology, :reconciliation, :stop], _measurements, %{added_groups: added}, _config)
 
-The worker budget does not automatically scale with partition count. For three partitions, the
-default allows three complete worker restart waves and one additional restart. An eleventh restart
-in five seconds exhausts it. Tune the count and window for the number of workers expected to fail
-together, including controller and companion restarts, and your desired recovery policy.
-
-Declared resources are recreated after branch or client recovery. Applications remain responsible
-for recreating runtime resources after their branch or client is rebuilt.
+# 4.0
+def handle_event([:pulsar, :topology, :reconciliation, :stop], _measurements, %{added_partitions: added}, _config)
+```
 
 ## Final checklist
 
 - Remove every `consumer_count` option, even when its value is `1`.
 - Replace higher counts with uniquely named consumers on the same subscription.
 - Update lifecycle and manual-flow operations to address the replacement resources.
-- Review the shared restart budget for both consumers and producers.
+- Rename `:added_groups` to `:added_partitions` in reconciliation telemetry handlers.
 
 ## Where to look next
 
-- `Pulsar.Client` documents restart budgets and declared resources.
+- `Pulsar.Client` documents declared resources.
 - `Pulsar.Consumer` documents startup, readiness, flow control, and stopping.
 - `Pulsar.Consumer.Callback` documents scaling consumers and callback lifecycle events.
 - The [architecture guide](architecture.html) covers ownership, startup, and recovery.

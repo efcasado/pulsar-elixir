@@ -54,6 +54,13 @@ defmodule Pulsar.ProducerTest do
         assert_raise FunctionClauseError, fn -> send_message(Producer, producer, %{value: 1}) end
       end
     end
+
+    test "rejects a supervisor pid without calling it" do
+      supervisor = supervisor_pid()
+
+      assert Producer.send(supervisor, "payload") == {:error, :not_found}
+      assert Process.alive?(supervisor)
+    end
   end
 
   describe "stop/2" do
@@ -70,7 +77,7 @@ defmodule Pulsar.ProducerTest do
       root = start_routing_topology()
 
       for index <- [0, 1, 2, 3, 5] do
-        assert {:ok, _worker} = Supervisor.start_child(root, routing_worker_spec(index))
+        assert {:ok, _partition} = Supervisor.start_child(root, routing_partition_spec(index))
       end
 
       partition_key = key_for_partition(4, 5, :murmur3_32)
@@ -78,7 +85,7 @@ defmodule Pulsar.ProducerTest do
       assert Producer.send(root, "payload", partition_key: partition_key) ==
                {:ok, partition_for(partition_key, 4, :murmur3_32)}
 
-      assert {:ok, _worker} = Supervisor.start_child(root, routing_worker_spec(4))
+      assert {:ok, _partition} = Supervisor.start_child(root, routing_partition_spec(4))
 
       assert Producer.send(root, "payload", partition_key: partition_key) ==
                {:ok, partition_for(partition_key, 6, :murmur3_32)}
@@ -132,6 +139,14 @@ defmodule Pulsar.ProducerTest do
 
   defp send_message(module, producer, message), do: module.send(producer, message, [])
 
+  defp supervisor_pid do
+    start_supervised!(%{
+      id: :supervisor,
+      start: {Supervisor, :start_link, [[], [strategy: :one_for_one]]},
+      type: :supervisor
+    })
+  end
+
   defp start_routing_topology(extra_opts \\ []) do
     test_pid = self()
     registry = :"producer-routing-registry-#{System.unique_integer([:positive])}"
@@ -167,18 +182,25 @@ defmodule Pulsar.ProducerTest do
     root
   end
 
-  defp routing_worker_spec(index) do
-    %{
-      id: {:partition, index},
+  defp routing_partition_spec(index) do
+    worker = %{
+      id: {:routing_worker, index},
       start: {RoutingWorker, :start_link, [index]},
       type: :worker,
       modules: [Pulsar.Producer.Worker]
+    }
+
+    %{
+      id: {:partition, index},
+      start: {Supervisor, :start_link, [[worker], [strategy: :one_for_one]]},
+      restart: :transient,
+      type: :supervisor
     }
   end
 
   defp start_partitions(root, count) do
     for index <- 0..(count - 1) do
-      assert {:ok, _worker} = Supervisor.start_child(root, routing_worker_spec(index))
+      assert {:ok, _partition} = Supervisor.start_child(root, routing_partition_spec(index))
     end
   end
 

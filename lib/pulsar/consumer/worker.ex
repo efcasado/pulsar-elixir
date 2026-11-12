@@ -1,8 +1,8 @@
 defmodule Pulsar.Consumer.Worker do
   @moduledoc false
 
-  # The GenServer behind a single consumer. Pulsar.Consumer starts one under its topology root
-  # for the topic or for each partition.
+  # The GenServer behind a single consumer. Pulsar.Consumer starts one for the
+  # topic or for each partition, each under a supervisor of its own.
 
   use GenServer
 
