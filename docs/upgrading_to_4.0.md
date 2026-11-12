@@ -56,6 +56,13 @@ Give every resource a unique name within its client. The same pattern works with
 and with `:failover` for standby consumers. An `:exclusive` subscription admits only one consumer
 per partition across all resources.
 
+Each named consumer with a `:dead_letter_policy` starts its own dead letter producer, named after
+it. For the consumers above, that is `orders-dead-letter-producer` and
+`orders_2-dead-letter-producer`, where 3.x had only the first. They publish to the same dead
+letter topic, which the default `:shared` access mode allows. Keep it that way: under
+`dead_letter_policy: [producer: [access_mode: :exclusive]]` the broker refuses the second
+producer, and that failure climbs through the consumer that owns it.
+
 ## 2. Update consumer lifecycle operations
 
 Each named consumer has its own lifecycle. Stopping `:orders` no longer stops the additional
@@ -92,6 +99,7 @@ def handle_event([:pulsar, :topology, :reconciliation, :stop], _measurements, %{
 
 - Remove every `consumer_count` option, even when its value is `1`.
 - Replace higher counts with uniquely named consumers on the same subscription.
+- Leave dead letter producers of those consumers on the default `:shared` access mode.
 - Update lifecycle and manual-flow operations to address the replacement resources.
 - Rename `:added_groups` to `:added_partitions` in reconciliation telemetry handlers.
 
