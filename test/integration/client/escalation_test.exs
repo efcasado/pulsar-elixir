@@ -50,6 +50,37 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     refute_receive {:DOWN, ^ref, :process, ^host, _reason}, 20_000
   end
 
+  test "a declared resource is recreated after its client restarts" do
+    topic = "persistent://public/default/escalation-test-recreated"
+    :ok = System.create_topic(topic)
+    name = :escalation_recreated
+    consumer_name = :declared_recreated
+
+    consumer = [
+      topic: topic,
+      name: consumer_name,
+      subscription_name: "escalation-recreated",
+      callback_module: DummyConsumer
+    ]
+
+    host = host_tree([{Client, name: name, host: System.broker().service_url, consumers: [consumer]}])
+    :ok = Pulsar.Consumer.await_ready(consumer_name, client: name)
+    client = Process.whereis(name)
+    {:ok, root} = Client.lookup(:consumers, consumer_name, name)
+    root_ref = Process.monitor(root)
+    client_ref = Process.monitor(client)
+
+    Process.exit(client, :kill)
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :killed}
+    assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}
+    :ok = Pulsar.Consumer.await_ready(consumer_name, client: name, timeout: 15_000)
+
+    {:ok, replacement} = Client.lookup(:consumers, consumer_name, name)
+    assert replacement != root
+    assert Process.whereis(name) != client
+    assert Process.alive?(host)
+  end
+
   # A worker waiting to start still reads its mailbox, so it is not killed after the timeout.
   test "a consumer still in its startup delay stops promptly" do
     host_tree([{Client, name: :escalation_delay, host: System.broker().service_url}])

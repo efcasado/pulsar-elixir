@@ -9,7 +9,6 @@ defmodule Pulsar.Topology do
   alias Pulsar.Hash
   alias Pulsar.Producer.Worker, as: ProducerWorker
   alias Pulsar.Topology.Controller
-  alias Pulsar.Topology.Group
   alias Pulsar.Topology.Root
 
   @await_options_schema [
@@ -32,8 +31,9 @@ defmodule Pulsar.Topology do
     readiness = fn resolve, deadline -> resource_readiness(resolve, kind, deadline) end
 
     case resource do
+      # A root of the other kind would answer its workers' readiness all the same.
       root when is_pid(root) ->
-        await_resource(root, timeout, readiness)
+        if resource?(root, kind), do: await_resource(root, timeout, readiness), else: {:error, :not_found}
 
       name when is_binary(name) or is_atom(name) ->
         resolve = fn -> Client.lookup(kind, name, Keyword.fetch!(opts, :client)) end
@@ -81,25 +81,21 @@ defmodule Pulsar.Topology do
   end
 
   defp workers_readiness(root, kind, deadline) do
-    groups = groups(root)
+    partitions = partitions(root)
     worker_module = worker_module(kind)
 
-    if groups != [] and Enum.all?(groups, &group_ready?(&1, worker_module, deadline)) do
+    if partitions != [] and Enum.all?(partitions, &partition_ready?(&1, worker_module, deadline)) do
       :ok
     else
       {:error, :not_ready}
     end
   end
 
-  defp group_ready?({_index, group}, worker_module, deadline) when is_pid(group) do
-    children = supervisor_children(group)
-
-    workers = for {_id, worker, :worker, [^worker_module]} <- children, do: worker
-
-    workers != [] and Enum.all?(workers, &(is_pid(&1) and worker_ready?(worker_module, &1, deadline)))
+  defp partition_ready?({_index, worker}, worker_module, deadline) when is_pid(worker) do
+    worker_ready?(worker_module, worker, deadline)
   end
 
-  defp group_ready?({_index, _not_running}, _worker_module, _deadline), do: false
+  defp partition_ready?({_index, _not_running}, _worker_module, _deadline), do: false
 
   defp worker_ready?(worker_module, worker, deadline) do
     worker_module.ready?(worker, remaining(deadline))
@@ -212,42 +208,53 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
-  Returns `{index, pid}` for each group under `root`.
+  Returns `{index, pid}` for each partition worker under `root`.
 
-  A non-partitioned topology answers its one internal group at index zero. A `Pulsar.Topology.Group`
-  passed directly is treated the same way and answers itself, so callers routing over either
-  shape need no special case. Workers and stale pids have no groups and answer an empty list.
+  A non-partitioned topology answers its worker at index zero. Workers and stale pids have no
+  partitions and answer an empty list.
 
-  Partition indexes come from the integer child ids rather than a group's position in the list.
+  Partition indexes come from the child ids rather than a worker's position in the list.
 
-  A partition between lives is reported as `:restarting` or `:undefined` instead of a pid,
+  A worker between lives is reported as `:restarting` or `:undefined` instead of a pid,
   which is a distinct answer from having no such partition at all.
   """
-  @spec groups(pid()) :: [{non_neg_integer(), pid() | :restarting | :undefined}]
-  def groups(root) do
+  @spec partitions(pid()) :: [{non_neg_integer(), pid() | :restarting | :undefined}]
+  def partitions(root) do
     case kind(root) do
-      :group -> [{0, root}]
-      :root -> topology_groups(root)
-      :worker -> []
+      :root ->
+        for {index, partition} <- root |> supervisor_children() |> partitions_from(),
+            do: {index, partition_worker(partition)}
+
+      _not_a_root ->
+        []
     end
   end
 
-  # Groups and the configured hashing scheme from one traversal, for a producer that needs both
-  # to route a keyed message and would otherwise pay a second call per send.
+  # Each partition's supervisor and the configured hashing scheme from one traversal, for a
+  # producer that needs both to route a keyed message. It resolves only the partition it picks
+  # through partition_worker/1, so a send costs two calls whatever the partition count.
   #
-  # Unlike groups/1 this does not dispatch on kind/1: it assumes a topology root, and answers a
-  # group or a worker as though it had no groups. Use groups/1 for anything else.
+  # Unlike partitions/1 this does not dispatch on kind/1: it assumes a topology root.
   @doc false
   @spec routing(pid()) :: {[{non_neg_integer(), pid() | :restarting | :undefined}], Hash.scheme() | nil}
   def routing(root) do
     children = supervisor_children(root)
 
-    {groups_from(children), hashing_scheme_from(children)}
+    {partitions_from(children), hashing_scheme_from(children)}
   end
 
-  defp topology_groups(root), do: root |> supervisor_children() |> groups_from()
+  @doc false
+  @spec partition_worker(pid() | :restarting | :undefined) :: pid() | :restarting | :undefined
+  def partition_worker(partition) when is_pid(partition) do
+    case supervisor_children(partition) do
+      [{_id, worker, :worker, _modules}] -> worker
+      [] -> :restarting
+    end
+  end
 
-  defp groups_from(children) do
+  def partition_worker(not_running), do: not_running
+
+  defp partitions_from(children) do
     Enum.flat_map(children, fn
       {{:topic, :non_partitioned}, pid, :supervisor, _modules} -> [{0, pid}]
       {{:partition, index}, pid, :supervisor, _modules} -> [{index, pid}]
@@ -274,16 +281,17 @@ defmodule Pulsar.Topology do
   end
 
   @doc """
-  Which level of a topology `pid` is: its stable root, one of its groups, or a worker.
+  Which level of a topology `pid` is: its stable root, a worker, or another supervisor, such as
+  the one each partition's worker runs under.
 
   Uses `:proc_lib.initial_call/1` rather than traversal, so supervisors are never sent calls
   intended for workers.
   """
-  @spec kind(pid()) :: :root | :group | :worker
+  @spec kind(pid()) :: :root | :supervisor | :worker
   def kind(pid) do
     case :proc_lib.initial_call(pid) do
       {:supervisor, Root, _args} -> :root
-      {:supervisor, Group, _args} -> :group
+      {:supervisor, _module, _args} -> :supervisor
       _worker -> :worker
     end
   end
@@ -293,7 +301,7 @@ defmodule Pulsar.Topology do
 
   Removal rather than an exit, which no restart type undoes, so an exit is left to mean one
   thing only: something went wrong. The resource is gone by the time this returns, and its
-  groups and workers with it.
+  workers with it.
   """
   @spec stop(pid()) :: :ok
   def stop(root) when is_pid(root) do

@@ -73,6 +73,41 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     end
   end
 
+  for {facade, kind, extra_opts} <- [
+        {Pulsar.Consumer, :consumers, [subscription_name: "restart-budget", callback_module: DummyConsumer]},
+        {Pulsar.Producer, :producers, []}
+      ] do
+    test "#{inspect(facade)} keeps a four-partition resource and its client through connection loss" do
+      facade = unquote(facade)
+      kind = unquote(kind)
+      client = :"#{__MODULE__}.#{kind}"
+      topic = "persistent://public/default/restart-budget-#{kind}"
+      :ok = System.create_topic(topic, 4)
+      client_pid = start_supervised!({Pulsar.Client, name: client, host: System.broker().service_url})
+      branch = Process.whereis(Pulsar.Client.resource_supervisor(kind, client))
+
+      opts = [topic: topic, name: :partitioned, client: client] ++ unquote(extra_opts)
+
+      {:ok, root} = facade.start(opts)
+      :ok = facade.await_ready(root)
+      workers = Topology.workers(root)
+      assert length(workers) == 4
+      refs = Map.new(workers, &{Process.monitor(&1), &1})
+      connections = workers |> Enum.map(&broker/1) |> Enum.uniq()
+
+      for connection <- connections, do: Process.exit(connection, :kill)
+      for {ref, worker} <- refs, do: assert_receive({:DOWN, ^ref, :process, ^worker, _reason})
+
+      assert :ok = facade.await_ready(root, timeout: 15_000)
+      replacements = Topology.workers(root)
+      assert length(replacements) == 4
+      assert Enum.all?(replacements, &(&1 not in workers))
+      assert Pulsar.Client.lookup(kind, :partitioned, client) == {:ok, root}
+      assert Process.whereis(client) == client_pid
+      assert Process.whereis(Pulsar.Client.resource_supervisor(kind, client)) == branch
+    end
+  end
+
   defp start_resource(Pulsar.Consumer, callback, subscription) do
     Pulsar.Consumer.start(@topic, subscription, callback, subscription_options())
   end
