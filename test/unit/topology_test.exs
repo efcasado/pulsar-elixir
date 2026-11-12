@@ -5,6 +5,7 @@ defmodule Pulsar.TopologyTest do
 
   alias Pulsar.Backoff
   alias Pulsar.Client
+  alias Pulsar.Consumer.Worker
   alias Pulsar.Topology
   alias Pulsar.Topology.Controller
   alias Pulsar.Topology.Group
@@ -855,7 +856,7 @@ defmodule Pulsar.TopologyTest do
 
   # workers/1 answers only for the modules a topology is actually made of, so these declare
   # those rather than going through start_topology/1 and its stub worker.
-  defp worker_spec(id, module \\ Pulsar.Consumer.Worker) do
+  defp worker_spec(id, module \\ Worker) do
     %{id: id, start: {Agent, :start_link, [fn -> id end]}, type: :worker, modules: [module]}
   end
 
@@ -885,6 +886,14 @@ defmodule Pulsar.TopologyTest do
       root = start_supervisor([worker_spec("w-1"), worker_spec(Controller, Controller)])
 
       assert length(Topology.workers(root)) == 1
+    end
+
+    test "answers only the workers running a given module" do
+      root = start_supervisor([worker_spec("consumer"), worker_spec("producer", Pulsar.Producer.Worker)])
+
+      assert length(Topology.workers(root)) == 2
+      assert [consumer] = Topology.workers(root, Worker)
+      assert Agent.get(consumer, & &1) == "consumer"
     end
 
     test "leaves out a worker that is not currently running" do
