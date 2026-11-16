@@ -93,12 +93,6 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
     refute_receive {:consumer, ^consumer, _message}
   end
 
-  test "consumer count is no longer a consumer option" do
-    assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:consumer_count/, fn ->
-      Pulsar.Consumer.start(@topic, "removed-count", @consumer_callback, consumer_count: 2)
-    end
-  end
-
   test "a second consumer of an exclusive subscription stops rather than waiting for it", %{broker: broker} do
     subscription = "exclusive-contended"
     contender_client = Utils.start_isolated_client(:exclusive_contender, broker)

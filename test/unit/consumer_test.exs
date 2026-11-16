@@ -3,6 +3,20 @@ defmodule Pulsar.ConsumerTest do
 
   alias Pulsar.Consumer
 
+  describe "start/4" do
+    test "rejects the removed consumer count option before accessing a client" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:consumer_count/, fn ->
+        Consumer.start(
+          "persistent://public/default/removed-count",
+          "removed-count",
+          Pulsar.Test.Support.DummyConsumer,
+          client: :consumer_validation_missing_client,
+          consumer_count: 2
+        )
+      end
+    end
+  end
+
   describe "await_ready/2" do
     test "reports a missing named consumer after the wait" do
       assert Consumer.await_ready(:missing, client: :consumer_missing_client, timeout: 0) ==
