@@ -181,31 +181,14 @@ defmodule Pulsar.Topology do
     end
   end
 
-  # Controller is also an OTP :worker child, so traversal explicitly allows only resource workers.
-  @worker_modules [ConsumerWorker, ProducerWorker]
-
   @doc """
-  Returns the worker processes under `root`, across every partition it has.
+  Returns the running partition workers belonging to the logical topology `root`.
 
-  Only workers that are currently running are returned. Given a `worker_module`, only workers
-  running that module are, so a facade addresses its own kind of worker whatever root it is given.
+  Workers belonging to companion topologies are excluded. Other pids return an empty list.
   """
-  @spec workers(pid(), module() | nil) :: [pid()]
-  def workers(root, worker_module \\ nil) do
-    root
-    |> supervisor_children()
-    |> Enum.flat_map(fn
-      {_id, pid, :worker, [module]} when module in @worker_modules and worker_module in [nil, module] ->
-        if is_pid(pid), do: [pid], else: []
-
-      # A nested topology root owns its own workers, which are not this resource's. A consumer's
-      # dead letter producer is one, and its producer workers must not read as consumer workers.
-      {_id, pid, :supervisor, _modules} when is_pid(pid) ->
-        if kind(pid) == :root, do: [], else: workers(pid, worker_module)
-
-      _child ->
-        []
-    end)
+  @spec workers(pid()) :: [pid()]
+  def workers(root) do
+    for {_index, worker} <- partitions(root), is_pid(worker), do: worker
   end
 
   @doc """
