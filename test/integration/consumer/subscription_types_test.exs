@@ -130,21 +130,19 @@ defmodule Pulsar.Integration.Consumer.SubscriptionTypesTest do
   end
 
   defp start_consumers(subscription, type, count, options) do
-    roots =
-      for index <- 1..count do
-        {:ok, root} =
-          Pulsar.Consumer.start(
-            @topic,
-            subscription,
-            @consumer_callback,
-            [name: "#{subscription}-#{index}"] ++ options.(type)
-          )
+    for index <- 1..count do
+      {:ok, root} =
+        Pulsar.Consumer.start(
+          @topic,
+          subscription,
+          @consumer_callback,
+          [name: "#{subscription}-#{index}"] ++ options.(type)
+        )
 
-        :ok = Pulsar.Consumer.await_ready(root)
-        root
-      end
-
-    Enum.flat_map(roots, &Topology.workers/1)
+      :ok = Pulsar.Consumer.await_ready(root)
+      [worker] = Topology.workers(root)
+      worker
+    end
   end
 
   defp subscription_options(type) do
