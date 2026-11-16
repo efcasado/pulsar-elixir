@@ -11,9 +11,9 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   end
 
   test "producer recovers from broker crash" do
-    {:ok, group_pid} = Pulsar.Producer.start(@topic, producer_options())
+    {:ok, root} = Pulsar.Producer.start(@topic, producer_options())
 
-    assert_worker_restarts(Pulsar.Producer, group_pid, fn producer ->
+    assert_worker_restarts(Pulsar.Producer, root, fn producer ->
       Process.exit(broker(producer), :kill)
     end)
   end
@@ -24,17 +24,17 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
     # See: https://github.com/apache/pulsar/blob/master/pip/pip-307.md
     topic = "persistent://public/default/producer-unload-test"
 
-    {:ok, group_pid} = Pulsar.Producer.start(topic, producer_options())
+    {:ok, root} = Pulsar.Producer.start(topic, producer_options())
 
-    assert_worker_restarts(Pulsar.Producer, group_pid, fn _producer ->
+    assert_worker_restarts(Pulsar.Producer, root, fn _producer ->
       :ok = System.unload_topic(topic)
     end)
 
-    Pulsar.Producer.stop(group_pid)
+    Pulsar.Producer.stop(root)
   end
 
   test "consumer recovers from broker crash" do
-    {:ok, group_pid} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "broker-crash",
@@ -42,13 +42,13 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    assert_worker_restarts(Pulsar.Consumer, group_pid, fn consumer ->
+    assert_worker_restarts(Pulsar.Consumer, root, fn consumer ->
       Process.exit(broker(consumer), :kill)
     end)
   end
 
   test "consumer recovers from broker-initiated topic unload" do
-    {:ok, group_pid} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "topic-unload",
@@ -56,7 +56,7 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
         subscription_options()
       )
 
-    assert_worker_restarts(Pulsar.Consumer, group_pid, fn _consumer ->
+    assert_worker_restarts(Pulsar.Consumer, root, fn _consumer ->
       :ok = System.unload_topic(@topic)
     end)
   end
@@ -65,9 +65,9 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   # that signal is a message a worker has to answer rather than outlive.
   for {facade, callback} <- [{Pulsar.Consumer, DummyConsumer}, {Pulsar.Producer, nil}] do
     test "#{inspect(facade)} restarts a worker its broker exits to reconnect" do
-      {:ok, group} = start_resource(unquote(facade), unquote(callback), "reconnect-exit")
+      {:ok, root} = start_resource(unquote(facade), unquote(callback), "reconnect-exit")
 
-      assert_worker_restarts(unquote(facade), group, fn worker ->
+      assert_worker_restarts(unquote(facade), root, fn worker ->
         send(worker, {:EXIT, broker(worker), :broker_disconnected})
       end)
     end
@@ -117,19 +117,19 @@ defmodule Pulsar.Integration.Client.ReliabilityTest do
   end
 
   # A ready worker has already resolved its broker, which is what the restart below needs.
-  defp assert_worker_restarts(facade, group, restart) do
-    :ok = facade.await_ready(group)
-    [before] = Topology.workers(group)
+  defp assert_worker_restarts(facade, root, restart) do
+    :ok = facade.await_ready(root)
+    [before] = Topology.workers(root)
 
     ref = Process.monitor(before)
     restart.(before)
     assert_receive {:DOWN, ^ref, :process, ^before, _reason}
 
-    :ok = facade.await_ready(group)
-    [after_restart] = Topology.workers(group)
+    :ok = facade.await_ready(root)
+    [after_restart] = Topology.workers(root)
 
     refute Process.alive?(before)
-    assert Process.alive?(group)
+    assert Process.alive?(root)
     assert Process.alive?(after_restart)
     assert before != after_restart
   end

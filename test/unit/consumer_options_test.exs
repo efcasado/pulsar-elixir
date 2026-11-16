@@ -64,7 +64,7 @@ defmodule Pulsar.Consumer.OptionsTest do
     end
 
     test "accepts a name as either a string or an atom" do
-      assert validate!(name: "a-group")[:name] == "a-group"
+      assert validate!(name: "named-consumer")[:name] == "named-consumer"
       assert validate!(name: MyApp.Consumer)[:name] == MyApp.Consumer
     end
 

@@ -23,7 +23,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   test "a window of one is topped up on every message", %{
     expected_count: expected_count
   } do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "tiny-permits",
@@ -31,8 +31,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(1, 0, 1)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
@@ -47,7 +47,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   test "is topped up once the window falls to its threshold", %{
     expected_count: expected_count
   } do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "threshold-test",
@@ -55,8 +55,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(5, 3, 4)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
@@ -70,7 +70,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   end
 
   test "grants nothing until the caller asks, when it starts with no window", %{expected_count: expected_count} do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "manual-flow",
@@ -78,8 +78,8 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
         subscription_options(0, 0, 0)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     refute_receive {:consumer, ^consumer, _message}, 500
 
