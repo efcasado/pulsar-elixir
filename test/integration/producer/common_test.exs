@@ -15,6 +15,19 @@ defmodule Pulsar.Integration.Producer.CommonTest do
              Pulsar.Producer.send("non-existent-producer-group", "message", client: @client)
   end
 
+  test "refuses a consumer root instead of waiting on a reply that never comes" do
+    {:ok, consumer} =
+      Pulsar.Consumer.start(@topic, "producer-common-consumer", Pulsar.Test.Support.DummyConsumer, client: @client)
+
+    :ok = Pulsar.Consumer.await_ready(consumer)
+    workers = Topology.workers(consumer)
+
+    assert Pulsar.Producer.send(consumer, "message", timeout: 1_000) == {:error, :not_found}
+    assert Topology.workers(consumer) == workers
+
+    :ok = Pulsar.Consumer.stop(consumer)
+  end
+
   test "await_ready/2 waits for the producer to register, and honours its timeout" do
     {:ok, producer} =
       Pulsar.Producer.start(@topic,

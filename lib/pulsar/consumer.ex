@@ -345,7 +345,7 @@ defmodule Pulsar.Consumer do
       groups ->
         workers_by_group =
           Enum.map(groups, fn
-            {_index, group} when is_pid(group) -> Topology.workers(group)
+            {_index, group} when is_pid(group) -> Topology.workers(group, Worker)
             {_index, _not_running} -> []
           end)
 

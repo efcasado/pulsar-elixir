@@ -124,6 +124,9 @@ defmodule Pulsar.Producer do
   @doc """
   Publishes a message, given a producer's pid or name.
 
+  A name no producer is registered under returns `{:error, :not_found}`, as does a root that
+  belongs to a consumer.
+
   Returns `{:error, :not_ready}` until it can publish: while its topic topology is being
   discovered, while the partition it routed to is between lives, and while the worker it
   reached is still registering with its broker.
@@ -316,8 +319,9 @@ defmodule Pulsar.Producer do
         {:error, :not_found}
 
       :root ->
-        {groups, hashing_scheme} = Topology.routing(producer)
-        route(groups, hashing_scheme, opts)
+        with {:ok, groups, hashing_scheme} <- Topology.routing(producer) do
+          route(groups, hashing_scheme, opts)
+        end
     end
   end
 

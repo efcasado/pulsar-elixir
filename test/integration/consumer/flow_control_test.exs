@@ -113,6 +113,17 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     Pulsar.Consumer.stop(consumer_group)
   end
 
+  test "granting permits through a producer root grants none and leaves its workers alone" do
+    {:ok, producer} = Pulsar.Producer.start(@topic, name: "flow-producer", client: @client)
+    :ok = Pulsar.Producer.await_ready(producer)
+    workers = Topology.workers(producer)
+
+    assert Pulsar.Consumer.send_flow(producer, 1) == {:error, :no_consumers_available}
+    assert Topology.workers(producer) == workers
+
+    Pulsar.Producer.stop(producer)
+  end
+
   # Every test listening for this event is sent every consumer's, so the id picks out ours.
   defp assert_granted(consumer_id, permits) do
     assert_receive {:telemetry_event,
