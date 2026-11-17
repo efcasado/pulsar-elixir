@@ -91,6 +91,7 @@ defmodule Pulsar.Integration.Consumer.AckTest do
       Pulsar.Consumer.start(topic, "ack-by-name-nack", ManualAckConsumer,
         name: "ack-by-name-nack",
         client: @client,
+        initial_position: :earliest,
         redelivery_interval: 200,
         init_args: [notify_pid: self()]
       )
@@ -115,6 +116,7 @@ defmodule Pulsar.Integration.Consumer.AckTest do
       Pulsar.Consumer.start(topic, "ack-partitioned", ManualAckConsumer,
         name: "ack-partitioned",
         client: @client,
+        initial_position: :earliest,
         init_args: [notify_pid: self()]
       )
 
@@ -179,9 +181,9 @@ defmodule Pulsar.Integration.Consumer.AckTest do
   end
 
   defp partition_index(worker) do
-    case String.split(Pulsar.Consumer.topic(worker), "-partition-") do
-      [_base, index] -> String.to_integer(index)
-      _no_partition -> nil
+    case worker |> Pulsar.Consumer.topic() |> String.split("-partition-") do
+      [_base] -> nil
+      parts -> parts |> List.last() |> String.to_integer()
     end
   end
 end
