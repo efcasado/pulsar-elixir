@@ -70,10 +70,19 @@ defmodule Pulsar.Producer do
 
   defp start_topology(opts, registry) do
     topic = Keyword.fetch!(opts, :topic)
-    opts = Keyword.put_new_lazy(opts, :name, fn -> default_name(topic) end)
+
+    # A default name is the same on every node, so the broker-side name gets a suffix.
+    opts =
+      if Keyword.has_key?(opts, :name),
+        do: opts,
+        else: Keyword.merge(opts, name: default_name(topic), name_suffix: unique_suffix())
 
     Root.start_link(Worker, registry, :producers, opts)
   end
+
+  @doc false
+  @spec unique_suffix() :: String.t()
+  def unique_suffix, do: Base.encode16(:crypto.strong_rand_bytes(4), case: :lower)
 
   @doc """
   Adds a producer to a running client.

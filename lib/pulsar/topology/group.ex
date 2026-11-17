@@ -17,6 +17,7 @@ defmodule Pulsar.Topology.Group do
     name = Keyword.fetch!(opts, :name)
     client = Keyword.fetch!(opts, :client)
     {[_ | _] = connection_slots, worker_opts} = Keyword.pop!(opts, :connection_slots)
+    {name_suffix, worker_opts} = Keyword.pop(worker_opts, :name_suffix)
     count = length(connection_slots)
 
     Logger.debug(
@@ -28,7 +29,7 @@ defmodule Pulsar.Topology.Group do
       |> Enum.with_index(1)
       |> Enum.map(fn {connection_slot, i} ->
         # Workers need distinct names within a group; producer epochs are keyed by this identity.
-        worker_name = "#{name}-#{i}"
+        worker_name = worker_name(name, name_suffix, i)
 
         worker_opts =
           Keyword.merge(worker_opts, name: worker_name, connection_slot: connection_slot)
@@ -46,6 +47,9 @@ defmodule Pulsar.Topology.Group do
     # failures exhaust their way upward.
     Supervisor.init(children, [strategy: :one_for_one] ++ restart_intensity(client, count))
   end
+
+  defp worker_name(name, nil, i), do: "#{name}-#{i}"
+  defp worker_name(name, suffix, i), do: "#{name}-#{suffix}-#{i}"
 
   # Honour the worker module's lifecycle while retaining the explicit ids and names a group owns.
   # A module without child_spec/1 keeps the historical permanent default used by test and custom
