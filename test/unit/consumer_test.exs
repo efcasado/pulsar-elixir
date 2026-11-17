@@ -63,12 +63,12 @@ defmodule Pulsar.ConsumerTest do
       assert Consumer.ack(:missing, message_id(), opts) == {:error, :not_found}
     end
 
-    test "delivers through the one live worker a name resolves to" do
+    test "delivers through the live worker a name resolves to" do
       {client, name} = start_ack_topology(groups: 1, workers: 1)
       message_id = message_id()
 
       assert Consumer.ack(name, message_id, client: client) == :ok
-      assert_received {:ack_test_worker, {:ack, [^message_id]}}
+      assert_received {:ack_test_worker, 1, {:ack, [^message_id]}}
     end
 
     test "delivers through the one live worker behind a root pid" do
@@ -77,13 +77,16 @@ defmodule Pulsar.ConsumerTest do
       {:ok, root} = Client.lookup(:consumers, name, client)
 
       assert Consumer.ack(root, message_id) == :ok
-      assert_received {:ack_test_worker, {:ack, [^message_id]}}
+      assert_received {:ack_test_worker, 1, {:ack, [^message_id]}}
     end
 
-    test "reports several live workers behind one group as ambiguous" do
+    test "delivers through a live worker even when the group holds several" do
       {client, name} = start_ack_topology(groups: 1, workers: 2)
+      message_id = message_id()
 
-      assert Consumer.ack(name, message_id(), client: client) == {:error, :ambiguous_worker}
+      assert Consumer.ack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, _rank, {:ack, [^message_id]}}
+      refute_received {:ack_test_worker, _other_rank, {:ack, [^message_id]}}
     end
 
     test "reports several groups as ambiguous" do
@@ -121,18 +124,21 @@ defmodule Pulsar.ConsumerTest do
       assert Consumer.nack(:missing, message_id(), opts) == {:error, :not_found}
     end
 
-    test "delivers through the one live worker a name resolves to" do
+    test "delivers through the live worker a name resolves to" do
       {client, name} = start_ack_topology(groups: 1, workers: 1)
       message_id = message_id()
 
       assert Consumer.nack(name, message_id, client: client) == :ok
-      assert_received {:ack_test_worker, {:nack, [^message_id]}}
+      assert_received {:ack_test_worker, 1, {:nack, [^message_id]}}
     end
 
-    test "reports several live workers behind one group as ambiguous" do
+    test "delivers through a live worker even when the group holds several" do
       {client, name} = start_ack_topology(groups: 1, workers: 2)
+      message_id = message_id()
 
-      assert Consumer.nack(name, message_id(), client: client) == {:error, :ambiguous_worker}
+      assert Consumer.nack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, _rank, {:nack, [^message_id]}}
+      refute_received {:ack_test_worker, _other_rank, {:nack, [^message_id]}}
     end
 
     test "returns an error for a stale worker pid" do
@@ -185,7 +191,7 @@ defmodule Pulsar.ConsumerTest do
           for rank <- 1..max(config.workers, 0)//1 do
             %{
               id: {:worker, rank},
-              start: {Pulsar.ConsumerTest.AckTestWorker, :start_link, [config.report_to]},
+              start: {Pulsar.ConsumerTest.AckTestWorker, :start_link, [[report_to: config.report_to, rank: rank]]},
               modules: [Pulsar.Consumer.Worker]
             }
           end
@@ -212,15 +218,15 @@ defmodule Pulsar.ConsumerTest do
     @moduledoc false
     use GenServer
 
-    def start_link(report_to), do: GenServer.start_link(__MODULE__, report_to)
+    def start_link(report_to: report_to, rank: rank), do: GenServer.start_link(__MODULE__, {report_to, rank})
 
     @impl true
-    def init(report_to), do: {:ok, report_to}
+    def init({report_to, rank}), do: {:ok, {report_to, rank}}
 
     @impl true
-    def handle_call(call, _from, report_to) do
-      send(report_to, {:ack_test_worker, call})
-      {:reply, :ok, report_to}
+    def handle_call(call, _from, {report_to, rank}) do
+      send(report_to, {:ack_test_worker, rank, call})
+      {:reply, :ok, {report_to, rank}}
     end
   end
 

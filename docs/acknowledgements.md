@@ -110,10 +110,12 @@ defmodule AsyncBilling do
 end
 ```
 
-An acknowledgement carries the worker's broker-side consumer id, so another worker cannot
-answer for it. `ack/2` and `nack/2` also accept the consumer's name when exactly one worker
-stands behind it; with partitions or several workers per subscription they answer
-`{:error, :ambiguous_worker}`, and the worker pid is the only form that can.
+An acknowledgement carries the worker's broker-side consumer id, and the broker applies it to
+the worker's subscription, so any live worker of the same subscription can bring a message id
+back. `ack/2` and `nack/2` therefore also accept the consumer's name, resolving it to one of
+its live workers. The workers of a partitioned consumer hold subscriptions on different
+topics, so a name that cannot say which of those a message came from answers
+`{:error, :ambiguous_worker}`, and the worker pid is the form that says so.
 
 Do not call `Pulsar.Consumer.ack(self(), ...)` synchronously from inside the callback. The callback
 already runs in that GenServer, so it would call itself and exit with `:calling_self`. Capture the

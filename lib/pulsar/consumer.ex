@@ -177,14 +177,15 @@ defmodule Pulsar.Consumer do
   @doc """
   Acknowledges one or more messages, marking them as processed.
 
-  Takes the worker that delivered them: its pid, or the consumer's name when exactly one
-  worker stands behind it. An acknowledgement carries the consumer id of the worker the
-  broker sent the message to, so with several workers behind a name — partitions, or
-  `:consumer_count` above one — no single worker can answer for it, and the call fails with
-  `{:error, :ambiguous_worker}` rather than guess. A consumer still discovering its
-  partitions returns `{:error, :not_ready}`, and one whose only worker is between lives
-  returns `{:error, :no_consumers_available}`. A worker that exited since it delivered
-  returns `{:error, reason}` instead of exiting, as `send_flow/3` does.
+  Takes the worker that delivered them, or the consumer's name. A name — or the stable root it
+  identifies — resolves to a live worker of the subscription: the broker applies an
+  acknowledgement to the subscription that worker holds, not to the worker that happened to
+  deliver the message, so any live worker of one subscription can answer for it. Workers of a
+  partitioned consumer subscribe to different topics, though, so a name spanning several
+  groups is refused with `{:error, :ambiguous_worker}` rather than guessing which topic an
+  id came from. A consumer still initializing returns `{:error, :not_ready}` and one with no
+  live worker returns `{:error, :no_consumers_available}`, as `send_flow/3` does. A worker
+  that exited since it delivered returns `{:error, reason}` instead of exiting the caller.
 
   `:client` selects which client to resolve a name through, and is not needed for a pid.
 
@@ -249,9 +250,8 @@ defmodule Pulsar.Consumer do
   @doc """
   Negatively acknowledges one or more messages, asking the broker to redeliver them.
 
-  Takes the same worker forms as `ack/2`: the pid of the worker that delivered them, or the
-  consumer's name when exactly one worker stands behind it. Look there for what a
-  `{:error, reason}` answer covers.
+  Takes the same forms as `ack/2`: the pid of the worker that delivered them, or the
+  consumer's name. Look there for what a `{:error, reason}` answer covers.
 
   Redelivered messages that exceed `:max_redelivery` go to the dead letter topic when
   `:dead_letter_policy` is configured, whether they were acknowledged manually or not.
@@ -342,11 +342,12 @@ defmodule Pulsar.Consumer do
     :exit, reason -> {:error, reason}
   end
 
-  # An acknowledgement carries the consumer id of the worker the broker sent its messages to,
-  # so it is delivered through that worker and nothing else: a name or a root resolves to one
-  # only when exactly one live worker stands behind it.
+  # The broker applies an acknowledgement to the subscription the worker holds, so a name or
+  # a root resolves to whichever live worker stands behind it — unless the consumer spans
+  # several subscriptions of its own, as a partitioned one does, and no one worker holds all
+  # of its message ids.
   defp acknowledge(consumer, fun) do
-    case deliver_to(consumer) do
+    case delivering_worker(consumer) do
       {:ok, worker} -> fun.(worker)
       {:error, _reason} = error -> error
     end
@@ -356,7 +357,7 @@ defmodule Pulsar.Consumer do
     :exit, reason -> {:error, reason}
   end
 
-  defp deliver_to(consumer) do
+  defp delivering_worker(consumer) do
     case Topology.kind(consumer) do
       :worker ->
         {:ok, consumer}
@@ -374,20 +375,22 @@ defmodule Pulsar.Consumer do
       [] ->
         {:error, :not_ready}
 
-      [{_index, group}] when is_pid(group) ->
-        case Topology.workers(group, Worker) do
-          [worker] -> {:ok, worker}
-          [] -> {:error, :no_consumers_available}
-          [_surplus | _rest] -> {:error, :ambiguous_worker}
-        end
-
-      [{_index, _group_not_running}] ->
-        {:error, :no_consumers_available}
+      [{_index, group}] ->
+        group_worker(group)
 
       _groups ->
         {:error, :ambiguous_worker}
     end
   end
+
+  defp group_worker(group) when is_pid(group) do
+    case Topology.workers(group, Worker) do
+      [worker | _rest_of_the_subscription] -> {:ok, worker}
+      [] -> {:error, :no_consumers_available}
+    end
+  end
+
+  defp group_worker(_group_between_lives), do: {:error, :no_consumers_available}
 
   @doc """
   Returns the topic a consumer is subscribed to.
