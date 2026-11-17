@@ -58,10 +58,11 @@ starts, as documented by each function. The facades do not expose registry looku
 counts, groups, or worker enumeration. Those are topology details and can change while the
 logical resource remains the same.
 
-Acknowledgement is the exception. A message contains the broker-side id of the worker that
-received it, so `Pulsar.Consumer.ack/2` and `Pulsar.Consumer.nack/2` require that worker pid.
-A callback can capture `self()` and pass it, together with the message id, to asynchronous
-work.
+Acknowledgement is a narrower exception. A message contains the broker-side id of the worker
+that received it, so `Pulsar.Consumer.ack/2` and `Pulsar.Consumer.nack/2` deliver through
+that worker: a name or a root resolves to it only when exactly one live worker stands behind
+the resource, with `{:error, :ambiguous_worker}` when several do. A callback can capture
+`self()` and pass it, together with the message id, to asynchronous work.
 
 ## The Client Tree
 
