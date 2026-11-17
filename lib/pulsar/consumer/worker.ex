@@ -1299,7 +1299,7 @@ defmodule Pulsar.Consumer.Worker do
   defp parse_batch_messages(_trailing, 0, _acc), do: {:error, :batch_deserialization_failed}
 
   defp parse_batch_messages(<<metadata_size::32, metadata::bytes-size(metadata_size), data::binary>>, count, acc) do
-    single_metadata = Binary.SingleMessageMetadata.decode(metadata)
+    single_metadata = decode_single_metadata(metadata)
 
     payload_size = single_metadata.payload_size
 
@@ -1313,6 +1313,40 @@ defmodule Pulsar.Consumer.Worker do
   end
 
   defp parse_batch_messages(_payload, _count, _acc), do: {:error, :batch_deserialization_failed}
+
+  # What a batch entry carries is a payload size and a sequence id, five bytes of it, and the
+  # generated decoder spends around twenty times the cost of reading them on its own machinery.
+  # Read those two and hand everything else back to it, so a field this does not know about
+  # keeps whatever meaning the generated decoder gives it, unknown fields included.
+  defp decode_single_metadata(metadata) do
+    case scan_single_metadata(metadata, %Binary.SingleMessageMetadata{}) do
+      :fallback -> Binary.SingleMessageMetadata.decode(metadata)
+      decoded -> decoded
+    end
+  end
+
+  defp scan_single_metadata(<<>>, decoded), do: decoded
+
+  defp scan_single_metadata(<<0x18, rest::binary>>, decoded) do
+    with {value, tail} <- varint(rest) do
+      scan_single_metadata(tail, %{decoded | payload_size: value})
+    end
+  end
+
+  defp scan_single_metadata(<<0x40, rest::binary>>, decoded) do
+    with {value, tail} <- varint(rest) do
+      scan_single_metadata(tail, %{decoded | sequence_id: value})
+    end
+  end
+
+  defp scan_single_metadata(_metadata, _decoded), do: :fallback
+
+  defp varint(<<0::1, value::7, rest::binary>>), do: {value, rest}
+  defp varint(<<1::1, low::7, 0::1, high::7, rest::binary>>), do: {low + high * 128, rest}
+
+  defp varint(<<1::1, low::7, 1::1, mid::7, 0::1, high::7, rest::binary>>), do: {low + mid * 128 + high * 16_384, rest}
+
+  defp varint(_bytes), do: :fallback
 
   defp chunked_message?(%Binary.MessageMetadata{uuid: uuid, chunk_id: chunk_id})
        when is_binary(uuid) and is_integer(chunk_id) do
