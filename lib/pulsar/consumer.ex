@@ -177,9 +177,17 @@ defmodule Pulsar.Consumer do
   @doc """
   Acknowledges one or more messages, marking them as processed.
 
-  Takes the pid of the worker that delivered them. Not a group or a name: an acknowledgement
-  carries the consumer id of the worker the broker sent the message to, so no other worker
-  can answer for it.
+  Takes the worker that delivered them, or the consumer's name. A name — or the stable root it
+  identifies — resolves to a live worker of the subscription: the broker applies an
+  acknowledgement to the subscription that worker holds, not to the worker that happened to
+  deliver the message, so any live worker of one subscription can answer for it. Workers of a
+  partitioned consumer subscribe to different topics, though, so a name spanning several
+  groups is refused with `{:error, :ambiguous_worker}` rather than guessing which topic an
+  id came from. A consumer still initializing returns `{:error, :not_ready}` and one with no
+  live worker returns `{:error, :no_consumers_available}`, as `send_flow/3` does. A worker
+  that exited since it delivered returns `{:error, reason}` instead of exiting the caller.
+
+  `:client` selects which client to resolve a name through, and is not needed for a pid.
 
   Manual acknowledgement is for handing a message to whatever actually processes it and
   acknowledging once that work is done. Return `{:noreply, state}` from
@@ -224,19 +232,44 @@ defmodule Pulsar.Consumer do
   option for what it covers. The [acknowledgement and redelivery guide](acknowledgements.html)
   puts automatic and manual ACKs, NACKs, cumulative scope, batches, and retries together.
   """
-  @spec ack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
-  def ack(consumer, message_ids) when is_pid(consumer), do: Worker.ack(consumer, message_ids)
+  @spec ack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
+          :ok | {:error, term()}
+  def ack(consumer, message_ids, opts \\ [])
+
+  def ack(consumer, message_ids, _opts) when is_pid(consumer) do
+    acknowledge(consumer, &Worker.ack(&1, message_ids))
+  end
+
+  def ack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
+    case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
+      {:ok, consumer} -> acknowledge(consumer, &Worker.ack(&1, message_ids))
+      {:error, :not_found} = error -> error
+    end
+  end
 
   @doc """
   Negatively acknowledges one or more messages, asking the broker to redeliver them.
 
-  Takes the pid of the worker that delivered them, on the same terms as `ack/2`.
+  Takes the same forms as `ack/2`: the pid of the worker that delivered them, or the
+  consumer's name. Look there for what a `{:error, reason}` answer covers.
 
   Redelivered messages that exceed `:max_redelivery` go to the dead letter topic when
   `:dead_letter_policy` is configured, whether they were acknowledged manually or not.
   """
-  @spec nack(pid(), MessageIdData.t() | [MessageIdData.t()]) :: :ok | {:error, term()}
-  def nack(consumer, message_ids) when is_pid(consumer), do: Worker.nack(consumer, message_ids)
+  @spec nack(pid() | String.t() | atom(), MessageIdData.t() | [MessageIdData.t()], keyword()) ::
+          :ok | {:error, term()}
+  def nack(consumer, message_ids, opts \\ [])
+
+  def nack(consumer, message_ids, _opts) when is_pid(consumer) do
+    acknowledge(consumer, &Worker.nack(&1, message_ids))
+  end
+
+  def nack(name, message_ids, opts) when is_binary(name) or is_atom(name) do
+    case Client.lookup(:consumers, name, Keyword.get(opts, :client, :default)) do
+      {:ok, consumer} -> acknowledge(consumer, &Worker.nack(&1, message_ids))
+      {:error, :not_found} = error -> error
+    end
+  end
 
   @doc """
   Grants a consumer more flow permits.
@@ -308,6 +341,56 @@ defmodule Pulsar.Consumer do
   catch
     :exit, reason -> {:error, reason}
   end
+
+  # The broker applies an acknowledgement to the subscription the worker holds, so a name or
+  # a root resolves to whichever live worker stands behind it — unless the consumer spans
+  # several subscriptions of its own, as a partitioned one does, and no one worker holds all
+  # of its message ids.
+  defp acknowledge(consumer, fun) do
+    case delivering_worker(consumer) do
+      {:ok, worker} -> fun.(worker)
+      {:error, _reason} = error -> error
+    end
+  catch
+    # A worker found a moment ago can be gone by the time it is called, which exits rather
+    # than answering; that is a failure to deliver the call, not one to propagate.
+    :exit, reason -> {:error, reason}
+  end
+
+  defp delivering_worker(consumer) do
+    case Topology.kind(consumer) do
+      :worker ->
+        {:ok, consumer}
+
+      :group ->
+        {:error, :not_found}
+
+      :root ->
+        root_worker(consumer)
+    end
+  end
+
+  defp root_worker(root) do
+    case Topology.groups(root) do
+      [] ->
+        {:error, :not_ready}
+
+      [{_index, group}] ->
+        group_worker(group)
+
+      _groups ->
+        {:error, :ambiguous_worker}
+    end
+  end
+
+  defp group_worker(group) when is_pid(group) do
+    case Topology.workers(group, Worker) do
+      [worker | _rest_of_the_subscription] -> {:ok, worker}
+      [] -> {:error, :no_consumers_available}
+    end
+  end
+
+  defp group_worker(_group_between_lives), do: {:error, :no_consumers_available}
 
   @doc """
   Returns the topic a consumer is subscribed to.

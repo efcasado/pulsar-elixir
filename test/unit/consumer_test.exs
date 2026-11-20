@@ -1,6 +1,7 @@
 defmodule Pulsar.ConsumerTest do
   use ExUnit.Case, async: true
 
+  alias Pulsar.Client
   alias Pulsar.Consumer
   alias Pulsar.Topology.Group
 
@@ -55,6 +56,100 @@ defmodule Pulsar.ConsumerTest do
     end
   end
 
+  describe "ack/3" do
+    test "reports a missing name consistently with send_flow/3" do
+      opts = [client: :consumer_missing_client]
+
+      assert Consumer.ack(:missing, message_id(), opts) == {:error, :not_found}
+    end
+
+    test "delivers through the live worker a name resolves to" do
+      {client, name} = start_ack_topology(groups: 1, workers: 1)
+      message_id = message_id()
+
+      assert Consumer.ack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, 1, {:ack, [^message_id]}}
+    end
+
+    test "delivers through the one live worker behind a root pid" do
+      {client, name} = start_ack_topology(groups: 1, workers: 1)
+      message_id = message_id()
+      {:ok, root} = Client.lookup(:consumers, name, client)
+
+      assert Consumer.ack(root, message_id) == :ok
+      assert_received {:ack_test_worker, 1, {:ack, [^message_id]}}
+    end
+
+    test "delivers through a live worker even when the group holds several" do
+      {client, name} = start_ack_topology(groups: 1, workers: 2)
+      message_id = message_id()
+
+      assert Consumer.ack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, _rank, {:ack, [^message_id]}}
+      refute_received {:ack_test_worker, _other_rank, {:ack, [^message_id]}}
+    end
+
+    test "reports several groups as ambiguous" do
+      {client, name} = start_ack_topology(groups: 2, workers: 1)
+
+      assert Consumer.ack(name, message_id(), client: client) == {:error, :ambiguous_worker}
+    end
+
+    test "reports a group whose worker is between lives as without consumers" do
+      {client, name} = start_ack_topology(groups: 1, workers: 0)
+
+      assert Consumer.ack(name, message_id(), client: client) ==
+               {:error, :no_consumers_available}
+    end
+
+    test "reports a consumer that has not discovered its groups as not ready" do
+      {client, name} = start_ack_topology(groups: 0, workers: 1)
+
+      assert Consumer.ack(name, message_id(), client: client) == {:error, :not_ready}
+    end
+
+    test "returns an error for a stale worker pid" do
+      assert {:error, _reason} = Consumer.ack(dead_pid(), message_id())
+    end
+
+    test "rejects an internal group pid" do
+      assert Consumer.ack(group_pid(), message_id()) == {:error, :not_found}
+    end
+  end
+
+  describe "nack/3" do
+    test "reports a missing name consistently with send_flow/3" do
+      opts = [client: :consumer_missing_client]
+
+      assert Consumer.nack(:missing, message_id(), opts) == {:error, :not_found}
+    end
+
+    test "delivers through the live worker a name resolves to" do
+      {client, name} = start_ack_topology(groups: 1, workers: 1)
+      message_id = message_id()
+
+      assert Consumer.nack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, 1, {:nack, [^message_id]}}
+    end
+
+    test "delivers through a live worker even when the group holds several" do
+      {client, name} = start_ack_topology(groups: 1, workers: 2)
+      message_id = message_id()
+
+      assert Consumer.nack(name, message_id, client: client) == :ok
+      assert_received {:ack_test_worker, _rank, {:nack, [^message_id]}}
+      refute_received {:ack_test_worker, _other_rank, {:nack, [^message_id]}}
+    end
+
+    test "returns an error for a stale worker pid" do
+      assert {:error, _reason} = Consumer.nack(dead_pid(), message_id())
+    end
+
+    test "rejects an internal group pid" do
+      assert Consumer.nack(group_pid(), message_id()) == {:error, :not_found}
+    end
+  end
+
   describe "stop/2" do
     test "rejects a worker pid without stopping it" do
       worker = start_supervised!({Agent, fn -> :worker end})
@@ -73,6 +168,83 @@ defmodule Pulsar.ConsumerTest do
     ref = Process.monitor(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
     pid
+  end
+
+  defp message_id, do: %{ledgerId: 1, entryId: 2}
+
+  # A stand-in topology root: registered under a name in a client-shaped registry, reporting
+  # a group per :groups with the requested worker count behind it. Workers capture what they
+  # are asked so tests can watch the call go through the facade.
+  defmodule AckTestRoot do
+    @moduledoc false
+    use Supervisor
+
+    def start_link(config), do: Supervisor.start_link(__MODULE__, config)
+
+    @impl true
+    def init(config) do
+      Process.put(:"$initial_call", {:supervisor, Pulsar.Topology.Root, 1})
+      Registry.register(config.registry, config.name, nil)
+
+      group_spec = fn index ->
+        workers =
+          for rank <- 1..max(config.workers, 0)//1 do
+            %{
+              id: {:worker, rank},
+              start: {Pulsar.ConsumerTest.AckTestWorker, :start_link, [[report_to: config.report_to, rank: rank]]},
+              modules: [Pulsar.Consumer.Worker]
+            }
+          end
+
+        %{
+          id: {:partition, index},
+          start: {Supervisor, :start_link, [workers, [strategy: :one_for_all]]},
+          type: :supervisor
+        }
+      end
+
+      children =
+        if config.groups == 0 do
+          []
+        else
+          Enum.map(0..(config.groups - 1), group_spec)
+        end
+
+      Supervisor.init(children, strategy: :one_for_all)
+    end
+  end
+
+  defmodule AckTestWorker do
+    @moduledoc false
+    use GenServer
+
+    def start_link(report_to: report_to, rank: rank), do: GenServer.start_link(__MODULE__, {report_to, rank})
+
+    @impl true
+    def init({report_to, rank}), do: {:ok, {report_to, rank}}
+
+    @impl true
+    def handle_call(call, _from, {report_to, rank}) do
+      send(report_to, {:ack_test_worker, rank, call})
+      {:reply, :ok, {report_to, rank}}
+    end
+  end
+
+  defp start_ack_topology(groups: groups, workers: workers) do
+    client = :consumer_ack_client
+    name = :ack_consumer
+    registry = Client.registry(:consumers, client)
+    start_supervised!({Registry, keys: :unique, name: registry})
+
+    config = %{registry: registry, name: name, report_to: self(), groups: groups, workers: workers}
+
+    start_supervised!(%{
+      id: {:ack_test_root, System.unique_integer([:positive])},
+      start: {AckTestRoot, :start_link, [config]},
+      type: :supervisor
+    })
+
+    {client, name}
   end
 
   defp group_pid do
