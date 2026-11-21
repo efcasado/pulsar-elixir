@@ -76,8 +76,8 @@ defmodule Pulsar.Client do
               default: 1,
               doc: """
               Connections this client opens to each broker. Consumer and producer workers
-              are assigned slots round-robin and retain their slot across worker and group
-              restarts. Each slot adds one process and TCP connection per discovered broker.
+              are assigned slots round-robin and retain their slot across worker restarts. Each slot
+              adds one process and TCP connection per discovered broker.
               Defaults to one.
               """
             ],
@@ -102,10 +102,9 @@ defmodule Pulsar.Client do
               its partition gives up, as `[max_restarts: integer, max_seconds: integer]`. OTP's
               own intensity by default.
 
-              A group multiplies `:max_restarts` by its worker count, so a broker dropping every
-              worker registered with it at once counts as one round rather than as many. See
-              `docs/architecture.md` for what that trades and how the two numbers relate to
-              `Pulsar.Backoff`.
+              Each partition has its own budget, so a broker dropping every worker registered
+              with it at once costs each partition one restart. See `docs/architecture.md` for
+              how the two numbers relate to `Pulsar.Backoff`.
               """
             ],
             resource_restart_intensity: [
@@ -119,10 +118,6 @@ defmodule Pulsar.Client do
               How many times a partition may give up before the consumer or producer it belongs
               to does, and how many resources may do that before the client does. The failure
               then reaches whatever supervises the client.
-
-              Much smaller than `:worker_restart_intensity`, and deliberately so: a partition
-              only gives up when it genuinely cannot run, and tying this to the larger budget
-              would make escalation depend on how quickly the failure comes back.
               """
             ],
             producers: [
