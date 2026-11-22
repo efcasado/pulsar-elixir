@@ -174,9 +174,9 @@ consumer topology root (:orders-billing)
     └── consumer worker
 ```
 
-That supervisor is only a restart boundary: it gives the partition a restart budget of its own, so a
-partition that keeps failing, or every partition losing its broker at once, does not spend the
-root's. For a producer, one worker per partition preserves one ordered send lane and one
+That supervisor is only a restart boundary: it gives the partition a restart budget of its own, so
+worker restarts, even every partition losing its broker at once, are absorbed there, and only a
+partition that gives up reaches the root's. For a producer, one worker per partition preserves one ordered send lane and one
 sequence-id and batching domain. A consumer that needs several broker-side consumers on one
 shared, key-shared, or failover subscription starts separately named resources with that
 subscription; on an `:exclusive` one, the broker admits only the first. Adding partitions
@@ -374,6 +374,11 @@ Escalation reaches the client, and the client owns every consumer and producer o
 resource that cannot run takes its siblings with it. Where two things genuinely contend, as two
 deployments holding one `:exclusive` subscription do, give them separate clients so that only
 the one that cannot run comes down.
+
+The branch budget counts resources, not causes. Named consumers on one subscription that fail for
+one reason, such as all losing authorization on the topic, each spend a restart, so more of them
+than its `:max_restarts` restart the branch in a single cascade, and every consumer on the client
+with it. Put such a set on a client of its own when its siblings should not share its failures.
 
 Whether it travels past the client is the host's to decide, and worth deciding deliberately. A
 resource started at runtime is not put back once the branch is rebuilt, so nothing is left

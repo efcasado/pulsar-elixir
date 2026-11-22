@@ -126,6 +126,7 @@ defmodule Pulsar.Consumer do
 
   Takes the stable root returned by `start/1` or its registered name. A named consumer is
   resolved repeatedly, so the wait also tolerates its client or resource branch restarting.
+  A root that belongs to a producer returns `{:error, :not_found}` without waiting.
 
   Readiness means initial topic discovery and topology construction have completed, and every
   configured worker has subscribed and initialized its callback. A worker that repeatedly

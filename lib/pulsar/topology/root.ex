@@ -76,8 +76,8 @@ defmodule Pulsar.Topology.Root do
   end
 
   # On the child id rather than in the registry, so routing reads it from the same
-  # which_children the partitions come from and a send costs one call. Producer.send/3 takes a pid
-  # without consulting the registry, and start_link_unregistered/1 has no registry entry at all.
+  # which_children the partitions come from. Producer.send/3 takes a pid without consulting the
+  # registry, and start_link_unregistered/1 has no registry entry at all.
   defp hashing_scheme_for_config(%{kind: :producers, opts: opts}) do
     Keyword.get(opts, :hashing_scheme)
   end

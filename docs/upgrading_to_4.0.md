@@ -9,11 +9,13 @@ First, update the dependency:
 {:pulsar, "~> 4.0", hex: :pulsar_elixir}
 ```
 
-Leaving `:consumer_count` in configuration raises a startup error. Two changes need an explicit
+Leaving `:consumer_count` in configuration raises a startup error. Three changes need an explicit
 review even after the application starts:
 
 - Replacing a consumer with several named resources changes how you stop, wait for, and grant
   flow to those consumers.
+- Each replacement spends the client's restart budget on its own, so a failure they share
+  escalates sooner.
 - Reconciliation telemetry renames `:added_groups` to `:added_partitions`, which a handler
   matching the old key misses silently.
 
@@ -63,6 +65,15 @@ letter topic, which the default `:shared` access mode allows. Keep it that way: 
 `dead_letter_policy: [producer: [access_mode: :exclusive]]` the broker refuses the second
 producer, and that failure climbs through the consumer that owns it.
 
+Each replacement also counts separately against the consumer branch's restart budget,
+`:resource_restart_intensity` on `Pulsar.Client`. A failure they all hit, such as losing
+authorization on the topic or a dead letter topic that refuses writes, cost the branch one restart
+in 3.x and now costs one per resource. With the default of 3 restarts in 5 seconds, four
+replacements giving up together restart the branch: every consumer on the client restarts with
+them, and consumers started at runtime are not put back. To keep such a failure to the
+replacements, give them a client of their own. Raising `:resource_restart_intensity` also works,
+but it widens each resource's own budget as well.
+
 ## 2. Update consumer lifecycle operations
 
 Each named consumer has its own lifecycle. Stopping `:orders` no longer stops the additional
@@ -80,6 +91,10 @@ should receive them. Pass the same `:client` option used at startup when using a
 
 `Pulsar.Client.consumers/1` now lists each replacement resource separately. Callback state
 remains independent per worker.
+
+A root of the other kind is now refused. `Pulsar.Consumer.await_ready/2` and
+`Pulsar.Consumer.send_flow/3` given a producer's root, and `Pulsar.Producer.await_ready/2` given
+a consumer's, return `{:error, :not_found}` immediately.
 
 ## 3. Update reconciliation telemetry handlers
 
@@ -100,6 +115,7 @@ def handle_event([:pulsar, :topology, :reconciliation, :stop], _measurements, %{
 - Remove every `consumer_count` option, even when its value is `1`.
 - Replace higher counts with uniquely named consumers on the same subscription.
 - Leave dead letter producers of those consumers on the default `:shared` access mode.
+- Decide whether replacements that can fail together need a client of their own.
 - Update lifecycle and manual-flow operations to address the replacement resources.
 - Rename `:added_groups` to `:added_partitions` in reconciliation telemetry handlers.
 

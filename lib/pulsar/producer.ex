@@ -106,6 +106,7 @@ defmodule Pulsar.Producer do
 
   Takes the stable root returned by `start/1` or its registered name. A named producer is
   resolved repeatedly, so the wait also tolerates its client or resource branch restarting.
+  A root that belongs to a consumer returns `{:error, :not_found}` without waiting.
 
   Readiness means initial topic discovery and topology construction have completed, and every
   configured worker has registered with its broker. A worker that repeatedly fails registration
