@@ -10,7 +10,7 @@ defmodule Pulsar.Test.Support.System do
       web_port: 8080,
       service_port: 6650,
       admin_url: "http://broker1:8080",
-      service_url: "pulsar://broker1:6650",
+      service_url: "pulsar://127.0.0.1:6650",
       health_url: "http://broker1:8080/admin/v2/brokers/health"
     },
     %{
@@ -19,7 +19,7 @@ defmodule Pulsar.Test.Support.System do
       web_port: 8081,
       service_port: 6651,
       admin_url: "http://broker2:8081",
-      service_url: "pulsar://broker2:6651",
+      service_url: "pulsar://127.0.0.1:6651",
       health_url: "http://broker2:8081/admin/v2/brokers/health"
     }
   ]

@@ -89,8 +89,7 @@ services:
     hostname: broker1
     environment:
       <<: *broker-environment
-      advertisedAddress: broker1
-      advertisedListeners: external:pulsar://broker1:6650
+      advertisedListeners: internal:pulsar://broker1:6650,external:pulsar://127.0.0.1:6650
       brokerServicePort: 6650
       webServicePort: 8080
     ports:
@@ -107,8 +106,7 @@ services:
     hostname: broker2
     environment:
       <<: *broker-environment
-      advertisedAddress: broker2
-      advertisedListeners: external:pulsar://broker2:6651
+      advertisedListeners: internal:pulsar://broker2:6651,external:pulsar://127.0.0.1:6651
       brokerServicePort: 6651
       webServicePort: 8081
     ports:

@@ -136,10 +136,6 @@ jobs:
     - name: Compile
       run: mix compile
 
-    - name: Add broker hostnames to /etc/hosts
-      run: |
-        echo "127.0.0.1 broker1 broker2" | sudo tee -a /etc/hosts
-
     - name: Run ${{ matrix.suite }} tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
