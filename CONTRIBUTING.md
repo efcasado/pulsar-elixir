@@ -31,8 +31,7 @@ Keep each PR focused on one contribution that reviewers can evaluate on its own.
 tests, documentation, and supporting changes it needs. Open separate PRs for unrelated work.
 
 The [PR template](.github/pull_request_template.md) starts with `### Description`. In a few
-sentences, explain what prompted the change and what it does. Include any decisions or context
-reviewers need to understand it before opening the diff.
+sentences, explain what prompted the change and what it does.
 
 ```markdown
 ### Description
@@ -40,6 +39,10 @@ reviewers need to understand it before opening the diff.
 An idle reader can stay open past its configured timeout while it processes flow-control
 updates. This change makes the reader close when the timeout expires.
 ```
+
+When a subtle behavior change or design tradeoff deserves a closer look, add
+`#### Notes for reviewers` under `### Description`. Point to the relevant part of the diff and
+explain why it matters.
 
 If the PR resolves an issue in this repository, add a line like `Closes #123` to the description
 using the issue number. GitHub closes the linked issue when the PR merges into `main`.

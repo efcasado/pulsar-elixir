@@ -1,6 +1,7 @@
 ### Description
 
-<!-- Explain why the change is needed, what it does, and any context reviewers need.
+<!-- Explain why the change is needed and what it does.
+If a subtle behavior change or tradeoff deserves a closer look, add #### Notes for reviewers.
 If the PR resolves an issue in this repository, add Closes #<issue-number> below. -->
 
 ### Verification
