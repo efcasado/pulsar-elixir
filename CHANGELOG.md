@@ -1,5 +1,33 @@
 # Changelog
 
+## [3.3.1](https://github.com/efcasado/pulsar-elixir/compare/v3.3.0...v3.3.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* keep consumer and producer facades to their own workers ([#247](https://github.com/efcasado/pulsar-elixir/issues/247)) ([4be8eb0](https://github.com/efcasado/pulsar-elixir/commit/4be8eb086c818387cf4bf210594aefb0c0c866b8))
+
+
+### Dependencies
+
+* bump jdx/mise-action from 5.2.10 to 5.3.0 ([#252](https://github.com/efcasado/pulsar-elixir/issues/252)) ([e655e62](https://github.com/efcasado/pulsar-elixir/commit/e655e62be1b3ca8df617ef17689ddf4b8d6d0f04))
+* bump jdx/mise-action from 5.2.4 to 5.2.5 ([#242](https://github.com/efcasado/pulsar-elixir/issues/242)) ([3dbfd3e](https://github.com/efcasado/pulsar-elixir/commit/3dbfd3e5aa0cceeb70fb9e1b71f20f42deba47e6))
+* bump jdx/mise-action from 5.2.5 to 5.2.6 ([#244](https://github.com/efcasado/pulsar-elixir/issues/244)) ([55c44ad](https://github.com/efcasado/pulsar-elixir/commit/55c44adc95bfb0e1db586808777697ec06d48f5f))
+* bump jdx/mise-action from 5.2.6 to 5.2.7 ([#245](https://github.com/efcasado/pulsar-elixir/issues/245)) ([f842646](https://github.com/efcasado/pulsar-elixir/commit/f8426462b973163f6e64184e9d4c890e7a18945d))
+* bump jdx/mise-action from 5.2.7 to 5.2.8 ([#248](https://github.com/efcasado/pulsar-elixir/issues/248)) ([688a03e](https://github.com/efcasado/pulsar-elixir/commit/688a03e84677291ef5dcd1d51fb6218400f2cb38))
+* bump jdx/mise-action from 5.2.8 to 5.2.9 ([#250](https://github.com/efcasado/pulsar-elixir/issues/250)) ([4e666b1](https://github.com/efcasado/pulsar-elixir/commit/4e666b11282f0b6d15fcc7363f40937a18227ac5))
+* bump jdx/mise-action from 5.2.9 to 5.2.10 ([#251](https://github.com/efcasado/pulsar-elixir/issues/251)) ([5e09524](https://github.com/efcasado/pulsar-elixir/commit/5e095249da95563b0dae70e9dfd4c9f449609949))
+
+
+### Documentation
+
+* add contributor guide and pull request template ([#254](https://github.com/efcasado/pulsar-elixir/issues/254)) ([38878ce](https://github.com/efcasado/pulsar-elixir/commit/38878ce80c8cf4763a199fbc0663707efbfa86bb))
+
+
+### Miscellaneous Chores
+
+* simpler pulsar cluster setup ([#253](https://github.com/efcasado/pulsar-elixir/issues/253)) ([e07fae4](https://github.com/efcasado/pulsar-elixir/commit/e07fae400fdf969542de614613dad999366b4b20))
+
 ## [3.3.0](https://github.com/efcasado/pulsar-elixir/compare/v3.2.0...v3.3.0) (2026-11-01)
 
 
