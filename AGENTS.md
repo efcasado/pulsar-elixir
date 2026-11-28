@@ -123,11 +123,7 @@ Run unit tests with:
 mix test --exclude integration --warnings-as-errors
 ```
 
-Integration tests require Docker and this entry in `/etc/hosts`:
-
-```text
-127.0.0.1 broker1 broker2
-```
+Integration tests require Docker.
 
 The integration harness starts and stops the Docker Compose services automatically. Run all
 integration tests with:

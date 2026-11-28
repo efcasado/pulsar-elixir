@@ -171,13 +171,6 @@ auth: [
 
 ## Testing
 
-> [!IMPORTANT]
-> Do not forget to add the following line to your `/etc/hosts` file before running the tests:
->
-> ```
-> 127.0.0.1 broker1 broker2
-> ```
-
 To run the tests, run the following command:
 
 ```
