@@ -2,6 +2,14 @@
 
 This file contains guidance for coding agents working on `pulsar-elixir`.
 
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for commit messages, pull request descriptions, and the
+required `off_broadway_pulsar` compatibility check. When drafting a PR, use the
+[pull request template](.github/pull_request_template.md).
+
+Before submitting AI-generated code, run a separate adversarial review. Use the
+[CLI examples](CONTRIBUTING.md#run-a-review-from-the-cli) with an available reviewer and verify the
+findings yourself.
+
 For public API usage, start with `README.md` and the module documentation. Before changing clients,
 consumers, producers, readers, brokers, topology, or supervision, read `docs/architecture.md`. It is
 the source of truth for process ownership, topology lifecycle, recovery, and failure propagation.

@@ -195,3 +195,10 @@ For example:
 ```
 mix run examples/bingo.exs
 ```
+
+
+## Contributing
+
+See the [contributor guide](https://github.com/efcasado/pulsar-elixir/blob/main/CONTRIBUTING.md)
+for pull request guidelines, commit conventions, and how to verify compatibility with
+`off_broadway_pulsar`.
