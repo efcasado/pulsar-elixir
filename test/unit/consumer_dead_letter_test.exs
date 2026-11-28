@@ -71,7 +71,14 @@ defmodule Pulsar.Consumer.DeadLetterTest do
       assert {_opts, [%{start: {_module, _fun, [producer_opts]}}]} = attach(dead_letter_policy: policy)
       assert Keyword.fetch!(producer_opts, :topic) == @default_dlq
       assert Keyword.fetch!(producer_opts, :client) == :test
-      assert Keyword.fetch!(producer_opts, :name) == "#{@consumer_name}-dead-letter-producer"
+      assert Keyword.fetch!(producer_opts, :name) =~ "#{@consumer_name}-dead-letter-producer-"
+    end
+
+    test "names the producer differently each time it is attached" do
+      {_opts, [%{start: {_, _, [first]}}]} = attach()
+      {_opts, [%{start: {_, _, [second]}}]} = attach()
+
+      assert first[:name] != second[:name]
     end
 
     # Two subscriptions may be configured to divert into the same topic, and each still gets
