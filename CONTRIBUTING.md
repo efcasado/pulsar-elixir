@@ -4,6 +4,23 @@ Bug fixes, features, tests, and documentation improvements are welcome. Start wi
 [README](README.md) for public API usage. Read the [architecture guide](docs/architecture.md)
 before changing clients, consumers, producers, readers, brokers, topology, or supervision.
 
+## Issues
+
+Search existing issues before opening one and use a title that describes the problem or goal.
+Link relevant documentation, upstream issues, or example repositories and briefly explain how
+they relate. [GitHub Issues](https://github.com/efcasado/pulsar-elixir/issues)
+
+- **Questions.** Explain what you're trying to do, show the relevant code or configuration, and
+  describe what you've already tried and where you're stuck.
+- **Bug reports.** Describe what you expected and what happened. Include the shortest steps to
+  reproduce the problem and a minimal code example or reproduction repository when possible.
+  List the `pulsar_elixir`, Elixir, Erlang/OTP, and Pulsar broker versions, plus the
+  `off_broadway_pulsar` version if relevant. Include relevant client or broker logs and stack
+  traces from the failing run when available. Use fenced code blocks and redact credentials and
+  private data from anything you share.
+- **Feature requests.** Describe the use case, the behavior you'd like, and how it would help.
+  Include an example or an existing workaround if it clarifies the request.
+
 ## Pull requests
 
 Keep each PR focused on one contribution that reviewers can evaluate on its own. Include the
