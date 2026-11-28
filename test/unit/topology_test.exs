@@ -581,19 +581,20 @@ defmodule Pulsar.TopologyTest do
 
   describe "propagation" do
     test "restarts a worker that crashes, leaving its partition supervisor and root alone" do
-      {root, _registry} = start_topology(0)
+      {root, _registry} =
+        start_async_topology(fn _topic, _opts -> {:ok, 0} end, [report_starts_to: self()], worker: ReportingOptsWorker)
+
+      :ok = Topology.await_ready(root, 1_000)
+      assert_receive {:opts_worker_started, _opts}
 
       [{0, worker}] = Topology.partitions(root)
       supervisors = partition_supervisors(root)
-
-      worker_ref = Process.monitor(worker)
       root_ref = Process.monitor(root)
 
       Process.exit(worker, :kill)
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
+      assert_receive {:opts_worker_started, _opts}
 
-      refute_receive {:DOWN, ^root_ref, :process, _pid, _reason}, 200
-
+      refute_received {:DOWN, ^root_ref, :process, ^root, _reason}
       assert [{0, restarted}] = Topology.partitions(root)
       assert restarted != worker
       assert partition_supervisors(root) == supervisors
@@ -984,6 +985,20 @@ defmodule Pulsar.TopologyTest do
 
       :ok = Topology.stop(root)
       assert Topology.workers(root) == []
+    end
+  end
+
+  describe "partition_worker/1" do
+    test "answers a partition supervisor that disappears during the call as restarting" do
+      partition =
+        start_supervised!(%{
+          id: :disappearing_partition,
+          start: {DisappearingSupervisor, :start_link, [:shutdown]},
+          restart: :temporary,
+          type: :supervisor
+        })
+
+      assert Topology.partition_worker(partition) == :restarting
     end
   end
 end

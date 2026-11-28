@@ -70,8 +70,9 @@ defmodule Pulsar.Integration.Client.EscalationTest do
     root_ref = Process.monitor(root)
     client_ref = Process.monitor(client)
 
-    Process.exit(client, :kill)
-    assert_receive {:DOWN, ^client_ref, :process, ^client, :killed}
+    # Not :kill, which leaves the client's named children shutting down while the host restarts it.
+    :ok = Supervisor.stop(client, :crash)
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :crash}
     assert_receive {:DOWN, ^root_ref, :process, ^root, _reason}
     :ok = Pulsar.Consumer.await_ready(consumer_name, client: name, timeout: 15_000)
 

@@ -186,14 +186,13 @@ defmodule Pulsar.ProducerTest do
     worker = %{
       id: {:routing_worker, index},
       start: {RoutingWorker, :start_link, [index]},
-      type: :worker,
-      modules: [Pulsar.Producer.Worker]
+      type: :worker
     }
 
     %{
       id: {:partition, index},
       start: {Supervisor, :start_link, [[worker], [strategy: :one_for_one]]},
-      restart: :transient,
+      restart: :permanent,
       type: :supervisor
     }
   end

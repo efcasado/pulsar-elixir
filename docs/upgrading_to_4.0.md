@@ -58,6 +58,13 @@ Give every resource a unique name within its client. The same pattern works with
 and with `:failover` for standby consumers. An `:exclusive` subscription admits only one consumer
 per partition across all resources.
 
+The broker sees each replacement under its own `:name` with a `-1` suffix. In 3.x the consumers
+above registered as `orders-1` and `orders-2`; in 4.0 they register as `orders-1` and `orders_2-1`,
+with the partition before the suffix on a partitioned topic, as in `orders_2-partition-0-1`. Update
+broker-side stats, alerts, and tooling that key on consumer names. The broker also orders
+`:failover` consumers and places `:key_shared` keys by consumer name, so after the upgrade a
+different consumer may become active, or keys may move between consumers once.
+
 Each named consumer with a `:dead_letter_policy` starts its own dead letter producer, named after
 it. For the consumers above, that is `orders-dead-letter-producer` and
 `orders_2-dead-letter-producer`, where 3.x had only the first. They publish to the same dead
@@ -92,9 +99,8 @@ should receive them. Pass the same `:client` option used at startup when using a
 `Pulsar.Client.consumers/1` now lists each replacement resource separately. Callback state
 remains independent per worker.
 
-A root of the other kind is now refused. `Pulsar.Consumer.await_ready/2` and
-`Pulsar.Consumer.send_flow/3` given a producer's root, and `Pulsar.Producer.await_ready/2` given
-a consumer's, return `{:error, :not_found}` immediately.
+`Pulsar.Consumer.await_ready/2` and `Pulsar.Consumer.send_flow/3` now refuse a producer's root,
+and `Pulsar.Producer.await_ready/2` a consumer's, returning `{:error, :not_found}` immediately.
 
 ## 3. Update reconciliation telemetry handlers
 
@@ -114,6 +120,7 @@ def handle_event([:pulsar, :topology, :reconciliation, :stop], _measurements, %{
 
 - Remove every `consumer_count` option, even when its value is `1`.
 - Replace higher counts with uniquely named consumers on the same subscription.
+- Update broker-side tooling that keys on the replacements' consumer names.
 - Leave dead letter producers of those consumers on the default `:shared` access mode.
 - Decide whether replacements that can fail together need a client of their own.
 - Update lifecycle and manual-flow operations to address the replacement resources.
