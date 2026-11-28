@@ -21,14 +21,18 @@ they relate. [GitHub Issues](https://github.com/efcasado/pulsar-elixir/issues)
 - **Feature requests.** Describe the use case, the behavior you'd like, and how it would help.
   Include an example or an existing workaround if it clarifies the request.
 
+If you find an unrelated problem while working on a PR, check for an existing issue and share
+the finding with the contributor. When drafting an issue, use a short summary in the project's
+terminology and enough evidence for someone else to reproduce or assess the problem.
+
 ## Pull requests
 
 Keep each PR focused on one contribution that reviewers can evaluate on its own. Include the
 tests, documentation, and supporting changes it needs. Open separate PRs for unrelated work.
 
 The [PR template](.github/pull_request_template.md) starts with `### Description`. In a few
-sentences, explain what prompted the change and what it does. Give reviewers enough context to
-understand the change before opening the diff.
+sentences, explain what prompted the change and what it does. Include any decisions or context
+reviewers need to understand it before opening the diff.
 
 ```markdown
 ### Description
@@ -107,8 +111,9 @@ and stop Pulsar. To run all integration tests, use
 
 For changes to published documentation, run `mix docs` and check the generated pages and links.
 
-Under `### Verification`, briefly list the checks you ran and their results. Include the
-`off_broadway_pulsar` revision and test result, and mention any checks still pending and why.
+Under `### Verification`, include the `off_broadway_pulsar` revision and test result. Add other
+results that help reviewers assess the change, such as a manual reproduction or a benchmark.
+Mention any pending checks that affect review. GitHub shows routine CI results on the PR.
 
 ### Verify `off_broadway_pulsar` compatibility
 

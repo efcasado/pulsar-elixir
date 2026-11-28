@@ -2,8 +2,8 @@
 
 This file contains guidance for coding agents working on `pulsar-elixir`.
 
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) for commit messages, pull request descriptions, and the
-required `off_broadway_pulsar` compatibility check. When drafting a PR, use the
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for issues, commit messages, pull request descriptions,
+and the required `off_broadway_pulsar` compatibility check. When drafting a PR, use the
 [pull request template](.github/pull_request_template.md).
 
 Before submitting AI-generated code, run a separate adversarial review. Use the

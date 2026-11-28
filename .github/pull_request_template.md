@@ -1,11 +1,11 @@
 ### Description
 
-<!-- In a few sentences, explain what prompted the change and what it does. -->
+<!-- Explain why the change is needed, what it does, and any context reviewers need. -->
 
 ### Verification
 
-<!-- Briefly list the checks you ran and their results, including the off_broadway_pulsar
-revision and test result. Mention any separate AI review and explain any pending checks. -->
+<!-- Include the off_broadway_pulsar revision and test result, plus any other results or
+pending checks that matter to the reviewer. -->
 
 - [ ] New or existing tests cover any behavior changes.
 - [ ] I reviewed the documentation and updated it where needed.
