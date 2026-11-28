@@ -89,11 +89,13 @@ services:
     hostname: broker1
     environment:
       <<: *broker-environment
-      advertisedListeners: internal:pulsar://broker1:6650,external:pulsar://127.0.0.1:6650
+      advertisedAddress: broker1
       brokerServicePort: 6650
       webServicePort: 8080
+      advertisedListeners: external:pulsar://127.0.0.1:6650
+      bindAddresses: external:pulsar://0.0.0.0:16650
     ports:
-      - "6650:6650"
+      - "6650:16650"
       - "8080:8080"
     healthcheck:
       <<: *broker-healthcheck
@@ -106,11 +108,13 @@ services:
     hostname: broker2
     environment:
       <<: *broker-environment
-      advertisedListeners: internal:pulsar://broker2:6651,external:pulsar://127.0.0.1:6651
+      advertisedAddress: broker2
       brokerServicePort: 6651
       webServicePort: 8081
+      advertisedListeners: external:pulsar://127.0.0.1:6651
+      bindAddresses: external:pulsar://0.0.0.0:16651
     ports:
-      - "6651:6651"
+      - "6651:16651"
       - "8081:8081"
     healthcheck:
       <<: *broker-healthcheck
