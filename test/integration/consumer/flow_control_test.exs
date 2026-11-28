@@ -23,16 +23,16 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   test "a window of one is topped up on every message", %{
     expected_count: expected_count
   } do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "tiny-permits",
         @consumer_callback,
-        subscription_options(1, 1, 0, 1)
+        subscription_options(1, 0, 1)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
@@ -47,16 +47,16 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   test "is topped up once the window falls to its threshold", %{
     expected_count: expected_count
   } do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "threshold-test",
         @consumer_callback,
-        subscription_options(1, 5, 3, 4)
+        subscription_options(5, 3, 4)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     for _message <- 1..expected_count, do: assert_receive({:consumer, ^consumer, _message})
 
@@ -70,16 +70,16 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
   end
 
   test "grants nothing until the caller asks, when it starts with no window", %{expected_count: expected_count} do
-    {:ok, consumer_group} =
+    {:ok, root} =
       Pulsar.Consumer.start(
         @topic,
         "manual-flow",
         @consumer_callback,
-        subscription_options(1, 0, 0, 0)
+        subscription_options(0, 0, 0)
       )
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    [consumer] = Topology.workers(consumer_group)
+    :ok = Pulsar.Consumer.await_ready(root)
+    [consumer] = Topology.workers(root)
 
     refute_receive {:consumer, ^consumer, _message}, 500
 
@@ -93,24 +93,22 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     for _message <- 1..(expected_count - 3), do: assert_receive({:consumer, ^consumer, _message})
   end
 
-  test "granting permits through the group pid reaches its workers" do
-    {:ok, consumer_group} =
-      Pulsar.Consumer.start(@topic, "group-flow", @consumer_callback, subscription_options(2, 0, 0, 0))
+  test "granting permits through the root pid reaches its worker" do
+    {:ok, consumer_root} =
+      Pulsar.Consumer.start(@topic, "root-flow", @consumer_callback, subscription_options(0, 0, 0))
 
-    :ok = Pulsar.Consumer.await_ready(consumer_group)
-    workers = Topology.workers(consumer_group)
-    assert length(workers) == 2
+    :ok = Pulsar.Consumer.await_ready(consumer_root)
+    [worker] = Topology.workers(consumer_root)
 
     # The pid start/1 returns is a supervisor, which cannot answer the worker's call.
-    assert :ok = Pulsar.Consumer.send_flow(consumer_group, 2)
+    assert :ok = Pulsar.Consumer.send_flow(consumer_root, 2)
 
-    assert Process.alive?(consumer_group)
-    assert Enum.all?(workers, &Process.alive?/1)
+    assert Process.alive?(consumer_root)
+    assert Process.alive?(worker)
 
-    assert_receive {:consumer, worker, _message}
-    assert worker in workers
+    assert_receive {:consumer, ^worker, _message}
 
-    Pulsar.Consumer.stop(consumer_group)
+    Pulsar.Consumer.stop(consumer_root)
   end
 
   test "granting permits through a producer root grants none and leaves its workers alone" do
@@ -118,7 +116,7 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     :ok = Pulsar.Producer.await_ready(producer)
     workers = Topology.workers(producer)
 
-    assert Pulsar.Consumer.send_flow(producer, 1) == {:error, :no_consumers_available}
+    assert Pulsar.Consumer.send_flow(producer, 1) == {:error, :not_found}
     assert Topology.workers(producer) == workers
 
     Pulsar.Producer.stop(producer)
@@ -137,11 +135,10 @@ defmodule Pulsar.Integration.Consumer.FlowControlTest do
     refute_receive {:telemetry_event, %{event: @flow_control, metadata: %{consumer_id: ^consumer_id}}}
   end
 
-  defp subscription_options(count, initial, threshold, refill) do
+  defp subscription_options(initial, threshold, refill) do
     [
       client: @client,
       initial_position: :earliest,
-      consumer_count: count,
       flow_policy: if(initial == 0, do: {Pulsar.Test.Support.Flow, :never, []}, else: :auto),
       flow_initial: initial,
       flow_threshold: threshold,

@@ -2,7 +2,20 @@ defmodule Pulsar.ConsumerTest do
   use ExUnit.Case, async: true
 
   alias Pulsar.Consumer
-  alias Pulsar.Topology.Group
+
+  describe "start/4" do
+    test "rejects the removed consumer count option before accessing a client" do
+      assert_raise NimbleOptions.ValidationError, ~r/unknown options.*:consumer_count/, fn ->
+        Consumer.start(
+          "persistent://public/default/removed-count",
+          "removed-count",
+          Pulsar.Test.Support.DummyConsumer,
+          client: :consumer_validation_missing_client,
+          consumer_count: 2
+        )
+      end
+    end
+  end
 
   describe "await_ready/2" do
     test "reports a missing named consumer after the wait" do
@@ -28,8 +41,11 @@ defmodule Pulsar.ConsumerTest do
       assert Consumer.topic(consumer) == {:error, :not_found}
     end
 
-    test "rejects an internal group pid" do
-      assert Consumer.topic(group_pid()) == {:error, :not_found}
+    test "rejects a supervisor pid without calling it" do
+      supervisor = supervisor_pid()
+
+      assert Consumer.topic(supervisor) == {:error, :not_found}
+      assert Process.alive?(supervisor)
     end
   end
 
@@ -50,8 +66,11 @@ defmodule Pulsar.ConsumerTest do
       assert {:error, _reason} = Consumer.send_flow(dead_pid(), 1)
     end
 
-    test "rejects an internal group pid" do
-      assert Consumer.send_flow(group_pid(), 1) == {:error, :not_found}
+    test "rejects a supervisor pid without calling it" do
+      supervisor = supervisor_pid()
+
+      assert Consumer.send_flow(supervisor, 1) == {:error, :not_found}
+      assert Process.alive?(supervisor)
     end
   end
 
@@ -75,21 +94,11 @@ defmodule Pulsar.ConsumerTest do
     pid
   end
 
-  defp group_pid do
-    caller = self()
-
-    pid =
-      spawn(fn ->
-        caller_ref = Process.monitor(caller)
-        Process.put(:"$initial_call", {:supervisor, Group, 1})
-        send(caller, {:ready, self()})
-
-        receive do
-          {:DOWN, ^caller_ref, :process, ^caller, _reason} -> :ok
-        end
-      end)
-
-    assert_receive {:ready, ^pid}
-    pid
+  defp supervisor_pid do
+    start_supervised!(%{
+      id: :supervisor,
+      start: {Supervisor, :start_link, [[], [strategy: :one_for_one]]},
+      type: :supervisor
+    })
   end
 end

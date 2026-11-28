@@ -25,23 +25,15 @@ defmodule Pulsar.Consumer.Options do
     name: [
       type: {:or, [:string, :atom]},
       doc: """
-      Name the consumer group is registered under. Defaults to
-      `"<topic>-<subscription_name>"`. Consumers within it are named after the group
-      and their index on the broker.
+      Name the logical consumer is registered under. Defaults to
+      `"<topic>-<subscription_name>"`. Its worker keeps the broker-visible `-1` suffix;
+      partition workers put their partition suffix before it.
       """
     ],
     subscription_type: [
       type: {:in, [:exclusive, :shared, :failover, :key_shared]},
       default: :shared,
       doc: "How the subscription is shared between consumers."
-    ],
-    consumer_count: [
-      type: :pos_integer,
-      default: 1,
-      doc: """
-      Number of consumer processes to start for the topic, or for each partition. Must be `1`
-      for an `:exclusive` subscription, which admits a single consumer.
-      """
     ],
     init_args: [
       type: :any,
@@ -259,19 +251,7 @@ defmodule Pulsar.Consumer.Options do
     opts
     |> NimbleOptions.validate!(@schema)
     |> validate_flow!()
-    |> validate_consumer_count!()
     |> validate_ack_type!()
-  end
-
-  defp validate_consumer_count!(opts) do
-    if Keyword.fetch!(opts, :subscription_type) == :exclusive and Keyword.fetch!(opts, :consumer_count) > 1 do
-      raise ArgumentError,
-            "subscription_type: :exclusive admits a single consumer, so the ones past the first " <>
-              "are refused the subscription and stop on arrival. Set consumer_count: 1, or use " <>
-              "subscription_type: :failover to keep the rest standing by."
-    end
-
-    opts
   end
 
   defp validate_flow!(opts) do
