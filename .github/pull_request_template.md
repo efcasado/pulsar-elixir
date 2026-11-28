@@ -1,6 +1,7 @@
 ### Description
 
-<!-- Explain why the change is needed, what it does, and any context reviewers need. -->
+<!-- Explain why the change is needed, what it does, and any context reviewers need.
+If the PR resolves an issue in this repository, add Closes #<issue-number> below. -->
 
 ### Verification
 

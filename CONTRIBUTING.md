@@ -41,8 +41,11 @@ An idle reader can stay open past its configured timeout while it processes flow
 updates. This change makes the reader close when the timeout expires.
 ```
 
-Add a related issue, reproduction steps, or upgrade instructions when they help explain the
-change.
+If the PR resolves an issue in this repository, add a line like `Closes #123` to the description
+using the issue number. GitHub closes the linked issue when the PR merges into `main`.
+
+Link related issues for context and include reproduction steps or upgrade instructions when they
+help explain the change.
 
 Make sure new or existing tests cover behavior changes. Review the documentation and examples,
 and update them where needed.
