@@ -123,9 +123,7 @@ Run unit tests with:
 mix test --exclude integration --warnings-as-errors
 ```
 
-Integration tests require Docker. Each broker in the Docker Compose setup advertises an
-`external` listener on `127.0.0.1`, published on the host ports, so no `/etc/hosts`
-changes are needed.
+Integration tests require Docker.
 
 The integration harness starts and stops the Docker Compose services automatically. Run all
 integration tests with:

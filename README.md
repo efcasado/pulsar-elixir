@@ -171,11 +171,6 @@ auth: [
 
 ## Testing
 
-> [!NOTE]
-> The Docker Compose setup in `docker-compose.yml` gives each broker an `external`
-> advertised listener on `127.0.0.1`, published on the host ports `6650` and `6651`,
-> so no changes to your `/etc/hosts` file are needed.
-
 To run the tests, run the following command:
 
 ```
